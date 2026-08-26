@@ -1,0 +1,37 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/shared/log-event.sh\"" }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/shared/log-event.sh\"" },
+          { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/shared/sail-guard.sh\"", "timeout": 5 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/shared/log-event.sh\"" }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/shared/log-event.sh\"" },
+          { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/codex/pint-and-test.sh\"", "timeout": 300 },
+          { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/codex/log-tokens.sh\"" }
+        ]
+      }
+    ]
+  }
+}

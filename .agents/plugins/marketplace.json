@@ -1,0 +1,23 @@
+{
+  "name": "mktux-harness",
+  "owner": {
+    "name": "Marcos Vinicius",
+    "url": "https://github.com/markintux"
+  },
+  "interface": {
+    "displayName": "mktux Harness"
+  },
+  "plugins": [
+    {
+      "name": "mktux",
+      "source": {
+        "source": "local",
+        "path": "./plugins/mktux-harness"
+      },
+      "policy": {
+        "installation": "AVAILABLE"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
