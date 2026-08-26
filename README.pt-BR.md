@@ -674,7 +674,7 @@ natural — a skill de mesmo nome carrega.
 | `/mktux:plan-project-phases <slug>` | `plan-project-phases` | passo 4 |
 | `/mktux:ralph` | `ralph` | referência operacional e diagnóstico |
 | `/mktux:review-phases N` | `review-phases` | revisa o commit da fase N |
-| `/mktux:setup` | `mktux-setup` | instala `ralph` no PATH, prepara o projeto |
+| `/mktux:setup` | `setup` | instala `ralph` no PATH, prepara o projeto |
 
 Subagents (Claude Code): `test-runner` e `security-auditor`.
 
@@ -719,8 +719,7 @@ mktux-harness/
     │   ├── plan-project-phases/        o contrato do ralph
     │   ├── ralph/                      operação e diagnóstico
     │   ├── review-phases/
-    │   └── mktux-setup/
-    ├── commands/                       só Claude: wrappers finos → skills
+    │   └── setup/
     ├── agents/                         só Claude: test-runner, security-auditor
     ├── hooks/
     │   ├── hooks.json                  Claude   (${CLAUDE_PLUGIN_ROOT})

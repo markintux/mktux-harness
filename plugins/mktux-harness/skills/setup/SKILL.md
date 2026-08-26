@@ -1,5 +1,5 @@
 ---
-name: mktux-setup
+name: setup
 description: Instala os comandos ralph e ralph-watch no PATH e prepara um projeto para o harness mktux. Use quando o usuario instalar o plugin pela primeira vez, quando ralph nao for encontrado no terminal, ou quando pedir para configurar o harness em um projeto novo.
 ---
 
