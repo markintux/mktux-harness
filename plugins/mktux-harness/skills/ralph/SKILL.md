@@ -164,3 +164,4 @@ Depois de fechar uma fase, revise com a skill `review-phases`.
 
 A mecanica que o plano precisa respeitar esta na skill `plan-project-phases`.
 Carregue ela antes de escrever ou corrigir um `project-phases.md`.
+<!-- marcador-de-teste-sem-bump -->
