@@ -4,20 +4,16 @@
     "name": "Marcos Vinicius",
     "url": "https://github.com/markintux"
   },
-  "interface": {
-    "displayName": "mktux Harness"
+  "metadata": {
+    "description": "mktux harness marketplace — spec, planejamento em fases e execucao autonoma com quatro gates mecanicos.",
+    "version": "0.1.0"
   },
   "plugins": [
     {
       "name": "mktux",
-      "source": {
-        "source": "local",
-        "path": "./plugins/mktux-harness"
-      },
-      "policy": {
-        "installation": "AVAILABLE"
-      },
-      "category": "Productivity"
+      "source": "./plugins/mktux-harness",
+      "description": "Da ideia ao codigo rodando: especificacao em quatro artefatos, planejamento em fases e execucao autonoma com quatro gates mecanicos. Laravel/Sail em primeiro lugar.",
+      "version": "0.1.0"
     }
   ]
 }
