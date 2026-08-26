@@ -675,8 +675,10 @@ natural language — the skill of the same name loads.
 | `/mktux:ralph` | `ralph` | operational reference and troubleshooting |
 | `/mktux:review-phases N` | `review-phases` | review the phase N commit |
 | `/mktux:setup` | `setup` | install `ralph` on PATH, prepare the project |
+| `/mktux:ai-context [path] [+id] [-id] [--adopt]` | `ai-context` | generate/refresh `AGENTS.md` + `docs/agents/*.md` from the implemented code |
 
-Subagents (Claude Code): `test-runner` and `security-auditor`.
+Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspector`,
+`ai-context-core`, `ai-context-docs`.
 
 ---
 
@@ -719,8 +721,10 @@ mktux-harness/
     │   ├── plan-project-phases/        ralph's contract
     │   ├── ralph/                      operation and troubleshooting
     │   ├── review-phases/
-    │   └── setup/
-    ├── agents/                         Claude only: test-runner, security-auditor
+    │   ├── setup/
+    │   └── ai-context/               AGENTS tree from the implemented code
+    ├── agents/                         Claude only: test-runner, security-auditor,
+    │                                   ai-context-{inspector,core,docs}
     ├── hooks/
     │   ├── hooks.json                  Claude  (${CLAUDE_PLUGIN_ROOT})
     │   ├── codex-hooks.json            Codex   (${PLUGIN_ROOT})
@@ -745,8 +749,10 @@ mktux-harness/
 
 `ralph.sh`, `ralph-watch.sh` and `sail-guard.sh` descend from the
 [**Beer and Code Harness**](https://github.com/beerandcodeteam/beer-and-code-harness)
-(MIT © Beer and Code). The `/init` chain with freshness stamps, and the pipeline
-router idea, also come from there.
+(MIT © Beer and Code). The `/init` chain with freshness stamps, the pipeline
+router idea, and `/ai-context` also come from there — `/mktux:ai-context` is that
+command ported and adapted so `CLAUDE.md` stays owned by Laravel Boost and
+`.ai/rules` stays the team's convention layer.
 
 Thanks to the Beer and Code team for the mentorship and the original work.
 
