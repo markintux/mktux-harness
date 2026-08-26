@@ -1,6 +1,6 @@
 {
   "name": "mktux",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Da ideia ao codigo rodando: especificacao em quatro artefatos, planejamento em fases e execucao autonoma com quatro gates mecanicos. Laravel/Sail em primeiro lugar.",
   "author": {
     "name": "Marcos Vinicius",
