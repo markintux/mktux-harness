@@ -12,8 +12,8 @@ BIN_DIR="${MKTUX_BIN_DIR:-$HOME/.local/bin}"
 
 # O resolvedor abaixo e embutido em cada wrapper. Ordem de busca:
 #   1. MKTUX_HARNESS_ROOT (escape hatch: clone proprio, fork, dev local)
-#   2. plugin do Claude Code
-#   3. cache de plugin do Codex (caminho versionado — pega o mtime mais novo)
+#   2. plugin do Claude Code (cache versionado e clone do marketplace)
+#   3. plugin do Codex (idem). Entre candidatos, ganha o de mtime mais novo.
 read -r -d '' RESOLVER <<'RESOLVER_EOF' || true
 resolve_script() {
   local name="$1" c
@@ -22,9 +22,12 @@ resolve_script() {
     printf '%s\n' "$MKTUX_HARNESS_ROOT/scripts/$name"; return 0
   fi
 
+  # Caminhos reais, verificados nas duas CLIs. Os dois usam dois layouts cada:
+  # o cache versionado (<root>/cache/<marketplace>/<plugin>/<versao>/) e o clone
+  # do marketplace (<root>/marketplaces/<marketplace>/plugins/<plugin>/).
   c=$(ls -dt \
-        "$HOME"/.claude/plugins/*/mktux*/scripts/"$name" \
-        "$HOME"/.claude/plugins/*/*/mktux*/scripts/"$name" \
+        "$HOME"/.claude/plugins/cache/*/mktux*/*/scripts/"$name" \
+        "$HOME"/.claude/plugins/marketplaces/*/plugins/mktux*/scripts/"$name" \
         "$HOME"/.codex/plugins/cache/*/mktux*/*/scripts/"$name" \
         "$HOME"/.codex/.tmp/marketplaces/*/plugins/mktux*/scripts/"$name" \
         2>/dev/null | head -1)
