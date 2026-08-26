@@ -15,7 +15,9 @@ Slug vem do argumento. Diretorio: `${MKTUX_SPEC_DIR:-docs/features}/<slug>/`.
 Leia:
 
 - `<dir>/feature-brief.md` — **a fonte primaria de intencao**. Sem ele, pare e
-  peca ao humano para preencher o template.
+  invoque `plan-feature-brief` (passo 0), repassando o slug e qualquer ideia que
+  o dev tenha dado. Ela entrevista e escreve o brief; depois disso voce volta.
+  Nunca escreva o brief voce mesmo, e nunca siga sem ele.
 - O `CLAUDE.md` / `AGENTS.md` do projeto — convencoes, arquitetura, stack.
 - `docs/project-description.md`, se existir.
 

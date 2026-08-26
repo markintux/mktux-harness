@@ -53,11 +53,10 @@ O mktux Harness ataca isso com duas ideias:
 ## Como funciona
 
 ```
-  feature-brief.md          você escreve, na mão, em português
-        │                   ← o campo "o que NÃO pode mudar" é o mais importante
-        ▼
-  /mktux:plan <slug>        roteador: mostra o estado e avança UM passo
+  /mktux:plan <slug> "<ideia>"      roteador: mostra o estado e avança UM passo
         │
+        ├──▶ 0. feature-brief.md          entrevista → sua intenção, em português
+        │                                 ← o campo "o que NÃO pode mudar" é o mais importante
         ├──▶ 1. feature-description.md    escopo, regras, o que é reusado
         ├──▶ 2. user-stories.md           critérios testáveis, ids US-N.N
         ├──▶ 3. database-schema.md        DBML, ou "esta feature não tem migration"
@@ -216,20 +215,21 @@ num SaaS Laravel multi-tenant, com o export limitado ao plano Business.
 
 ### Passo 0 — o brief
 
-Nenhuma skill escreve esse arquivo. Você escreve, em português, com suas palavras.
-
-```bash
-mkdir -p docs/features/customer-export
-```
-
-Peça o template ao harness:
+Descreva a feature no próprio comando. Você não redige esse documento.
 
 ```
-/mktux:plan customer-export
+/mktux:plan customer-export "exportar a lista de clientes em CSV, só no plano Business"
 ```
 
-Como o brief não existe, o roteador copia o template e para. Abra
-`docs/features/customer-export/feature-brief.md` e preencha:
+O brief não existe, então o roteador entrega pro `plan-feature-brief`. Ele lê o
+codebase **antes** de perguntar qualquer coisa — seu enum de papel, seu gating de
+plano, as telas vizinhas à que você citou — e aí entrevista em bloco só sobre o
+que não deu pra detectar. Ele insiste numa pergunta em especial: *o que não pode
+mudar de comportamento?* Responder "nada" não é aceito enquanto ele não te levar
+pelas telas vizinhas que encontrou.
+
+Sai `docs/features/customer-export/feature-brief.md`, em português, preenchido —
+sem colchete, sem checkbox por marcar:
 
 ```markdown
 # Feature Brief — Exportar clientes
@@ -266,18 +266,25 @@ O dono do bar pede a lista pro contador todo mês e hoje copia da tela na mão.
 
 ## Quem usa essa feature?
 
-- [x] admin (dono)
-- [ ] atendente
+- admin (dono) — exporta
+- atendente — deliberadamente de fora; não vê o botão
 
 ## Mexe em dado pessoal?
 
-- [x] Sim — nome, e-mail, telefone
-- Sai do sistema em arquivo? sim
+Sim — nome, e-mail, telefone. Sai do sistema em arquivo: sim.
 ```
 
 > A seção **"O que NÃO pode mudar de comportamento"** é a que mais trabalha.
 > Ela vira o bloco `Do not touch` que o harness repete dentro de cada fase — é o
 > que impede uma sessão cega de reescrever a listagem que já funciona.
+
+Prefere escrever na mão? Continua valendo, mesmo arquivo e mesma forma — o
+template mora ao lado da skill `plan-feature-brief`. A entrevista é conveniência,
+não obrigação.
+
+Mudou de ideia depois? Rode `/mktux:plan-feature-brief customer-export "<o que
+mudou>"`. Ele relê o que já existe e pergunta só o delta; aí o carimbo fica
+desatualizado e o `/mktux:plan` te manda regenerar o passo 1.
 
 ### Passo 1 — a descrição da feature
 
@@ -290,7 +297,7 @@ Agora o roteador mostra o estado e avança um passo:
 ```
 | Artefato                 | Estado                    |
 |--------------------------|---------------------------|
-| feature-brief.md         | presente (manual)         |
+| feature-brief.md         | presente                  |
 | feature-description.md   | ausente                   |
 | user-stories.md          | ausente                   |
 | database-schema.md       | ausente                   |
@@ -667,7 +674,8 @@ natural — a skill de mesmo nome carrega.
 
 | Comando | Skill | O que faz |
 |---|---|---|
-| `/mktux:plan <slug>` | `plan` | roteador: estado da cadeia + avança um passo |
+| `/mktux:plan <slug> "<ideia>"` | `plan` | roteador: estado da cadeia + avança um passo |
+| `/mktux:plan-feature-brief <slug> "<ideia>"` | `plan-feature-brief` | passo 0: entrevista → `feature-brief.md` |
 | `/mktux:plan-feature-description <slug>` | `plan-feature-description` | passo 1 |
 | `/mktux:plan-user-stories <slug>` | `plan-user-stories` | passo 2 |
 | `/mktux:plan-database-schema <slug>` | `plan-database-schema` | passo 3 |
@@ -714,7 +722,8 @@ mktux-harness/
     ├── .claude-plugin/plugin.json
     ├── .codex-plugin/plugin.json       skills + hooks
     ├── skills/                         ← FONTE ÚNICA, os dois engines leem
-    │   ├── plan/                       roteador + template do brief
+    │   ├── plan/                       roteador
+    │   ├── plan-feature-brief/          passo 0: entrevista + template do brief
     │   ├── plan-feature-description/
     │   ├── plan-user-stories/
     │   ├── plan-database-schema/

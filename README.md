@@ -54,11 +54,10 @@ The mktux Harness attacks that with two ideas:
 ## How it works
 
 ```
-  feature-brief.md          you write this by hand, in your own words
-        │                   ← the "what must NOT change" field matters most
-        ▼
-  /mktux:plan <slug>        router: reports state, advances ONE step
+  /mktux:plan <slug> "<idea>"       router: reports state, advances ONE step
         │
+        ├──▶ 0. feature-brief.md          interview → your intent, in your words
+        │                                 ← the "must NOT change" field matters most
         ├──▶ 1. feature-description.md    scope, rules, what is reused
         ├──▶ 2. user-stories.md           testable criteria, US-N.N ids
         ├──▶ 3. database-schema.md        DBML, or "this feature has no migration"
@@ -216,70 +215,81 @@ Laravel SaaS, with the export gated to the Business plan.
 
 ### Step 0 — the brief
 
-No skill writes this file. You do, in your own words.
-
-```bash
-mkdir -p docs/features/customer-export
-```
-
-Ask the harness for the template:
+Describe the feature in the command itself. You never author this document.
 
 ```
-/mktux:plan customer-export
+/mktux:plan customer-export "export the customer list as CSV, gated to the Business plan"
 ```
 
-Since the brief does not exist, the router copies the template and stops. Open
-`docs/features/customer-export/feature-brief.md` and fill it in:
+The brief does not exist, so the router hands off to `plan-feature-brief`. It
+reads the codebase **before** asking anything — your role enum, your plan gating,
+the screens next to the one you named — then interviews you in batches about only
+what it could not detect. It pushes hardest on one question: *what must not change
+behavior?* Answering "nothing" is not accepted until it has walked you through the
+neighbouring screens it found.
+
+The result is `docs/features/customer-export/feature-brief.md`, in your language,
+filled in — no placeholders, no unticked checkboxes:
 
 ```markdown
 # Feature Brief — Customer export
 
-## What is this feature?
+## O que é essa feature?
 
 A button on the customer list that downloads a CSV of that tenant's customers,
 respecting the filters already applied on screen.
 
-## Why are we building it?
+## Por que estamos construindo isso?
 
 The owner sends the list to their accountant every month and copies it off the
 screen by hand today.
 
-## What MUST be in this feature?
+## O que DEVE entrar nessa feature?
 
 - An "Export CSV" button on the customer list
 - The CSV respects the search and period filters already applied on screen
 - Columns: name, email, phone, signup date, total spent
 
-## What is NOT in this feature (for now)?
+## O que NÃO entra nessa feature (por hora)?
 
 - Excel/xlsx export
 - Scheduled export by email
 
-## What must NOT change behavior?
+## O que NÃO pode mudar de comportamento?
 
 - The customer list itself: pagination, search and ordering stay identical
 - The "total spent" calculation — it already exists and the dashboard uses it
 
-## Business rules you already know?
+## Regras de negócio que você já sabe?
 
 - Only the Business plan exports. Starter and Pro see a disabled button with an
   upgrade hint.
 - The national ID number never leaves in the file.
 
-## Who uses this feature?
+## Quem usa essa feature?
 
-- [x] admin (owner)
-- [ ] staff
+- admin (owner) — exports
+- staff — deliberately out; does not see the button
 
-## Does it touch personal data?
+## Mexe em dado pessoal?
 
-- [x] Yes — name, email, phone
-- Does the data leave the system in a file? yes
+Yes — name, email, phone. The data leaves the system in a file: yes.
 ```
 
-> The **"What must NOT change behavior"** section does the heaviest lifting. It
+> Section titles stay in Portuguese even when you write the content in English —
+> they are addresses, and step 1 reads the brief by them.
+
+> The **"O que NÃO pode mudar de comportamento"** section does the heaviest lifting. It
 > becomes the `Do not touch` block the harness repeats inside every phase — the
 > thing that stops a blind session from rewriting a list that already works.
+
+Prefer to write it by hand? Still supported, same file and same shape — the
+template ships next to the `plan-feature-brief` skill. The interview is a
+convenience, not a requirement.
+
+Changed your mind later? Re-run `/mktux:plan-feature-brief customer-export "<what
+changed>"`. It re-reads what is there and asks only about the delta, then the
+stamp goes stale and `/mktux:plan` tells you to regenerate step 1.
 
 ### Step 1 — the feature description
 
@@ -292,7 +302,7 @@ The router now reports state and advances one step:
 ```
 | Artifact                 | State                     |
 |--------------------------|---------------------------|
-| feature-brief.md         | present (manual)          |
+| feature-brief.md         | present                   |
 | feature-description.md   | absent                    |
 | user-stories.md          | absent                    |
 | database-schema.md       | absent                    |
@@ -667,7 +677,8 @@ natural language — the skill of the same name loads.
 
 | Command | Skill | What it does |
 |---|---|---|
-| `/mktux:plan <slug>` | `plan` | router: chain state + advance one step |
+| `/mktux:plan <slug> "<idea>"` | `plan` | router: chain state + advance one step |
+| `/mktux:plan-feature-brief <slug> "<idea>"` | `plan-feature-brief` | step 0: interview → `feature-brief.md` |
 | `/mktux:plan-feature-description <slug>` | `plan-feature-description` | step 1 |
 | `/mktux:plan-user-stories <slug>` | `plan-user-stories` | step 2 |
 | `/mktux:plan-database-schema <slug>` | `plan-database-schema` | step 3 |
@@ -714,7 +725,8 @@ mktux-harness/
     ├── .claude-plugin/plugin.json
     ├── .codex-plugin/plugin.json       skills + hooks
     ├── skills/                         ← SINGLE SOURCE, both engines read it
-    │   ├── plan/                       router + brief template
+    │   ├── plan/                       router
+    │   ├── plan-feature-brief/          step 0: interview + brief template
     │   ├── plan-feature-description/
     │   ├── plan-user-stories/
     │   ├── plan-database-schema/

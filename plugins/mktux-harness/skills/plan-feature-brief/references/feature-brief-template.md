@@ -1,8 +1,13 @@
 # Feature Brief — [Nome da Feature]
 
-> Preencha este arquivo com suas palavras antes de rodar `/mktux:plan`.
-> Não precisa ser formal. Escreva como falaria para um dev do time.
+> Esta é a forma do brief. Duas maneiras de chegar nela, o arquivo é o mesmo:
+>
+> - **Entrevista** — `/mktux:plan <slug> "<sua ideia>"`. A skill pergunta e preenche.
+> - **Na mão** — copie este arquivo, preencha com suas palavras. Não precisa ser
+>   formal; escreva como falaria para um dev do time.
+>
 > Salve em: `docs/features/<slug>/feature-brief.md`
+> Os **títulos de seção são fixos** — o passo 1 lê o brief por eles.
 
 ---
 
