@@ -195,6 +195,33 @@ de verificador pra confirmar `0/N` tasks em codigo. Uma fase de fechamento mistu
 afirmacoes legiveis (nenhuma migration perdida, nenhum identificador residual,
 nenhum codigo proibido em arquivo protegido) com os poucos procedimentos reais.
 
+### Fase com task procedural deve se declarar operacional
+
+Toda fase que carrega task `NOT-CODE` MUST trazer, logo abaixo do heading, numa
+linha sozinha:
+
+```markdown
+## Phase 12: Close out — format, build, and prove nothing else moved
+
+**Operational phase**
+```
+
+O ralph le esse marcador e faz o gate 3 **reportar sem reprovar** naquela fase. O
+gate 2 continua rodando a suite de verdade, fora do agente: a corretude nao fica
+sem guarda.
+
+Sem o marcador, o destino da fase passa a depender de o verificador classificar
+`NOT-CODE` corretamente todas as vezes — e ele nao classifica. Num run real, uma
+fase de fechamento com 7 tasks (4 de estado, 3 procedurais) reprovou duas vezes
+seguidas: no primeiro ciclo o verificador marcou 3 tasks como `NOT-CODE` e uma
+quarta como `INCOMPLETE` por nao conseguir confirmar; no segundo, com o codigo
+byte-identico, marcou duas daquelas como `DONE` e uma como `INCOMPLETE` dizendo
+que estava "aguardando o resultado da suite" — numa sessao onde a ferramenta de
+shell esta bloqueada. Nao havia nada errado com o codigo.
+
+O marcador nao dispensa nada do resto desta secao: continue preferindo a forma de
+estado, e continue sem escrever fase 100% procedural.
+
 ## 1.7 Ambiguidade e loop infinito
 
 O verificador recebe a instrucao: na duvida entre DONE e INCOMPLETE, escolha

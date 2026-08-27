@@ -52,6 +52,8 @@
 #   - nenhum heading `## Phase ...` fora desse formato
 #   - sub-fases em `### Phase N.M:` (nao viram sessao propria)
 #   - qualquer outro `## ` encerra a captura da fase anterior
+#   - `**Operational phase**` numa linha sozinha marca fase de close out: o
+#     gate 3 reporta mas nao reprova (as tasks nao sao afirmacoes sobre codigo)
 #
 # Gates por fase (todos verdes -> commit; qualquer vermelho -> ciclo de correcao):
 #   0. engine terminou de verdade (claude: is_error no JSON; codex: exit code)
@@ -1127,6 +1129,40 @@ engine_tail() {
   fi
 }
 
+# "try again at 8:25 PM" -> epoch da proxima ocorrencia de 20:25.
+# Ecoa vazio quando nao acha horario nenhum, para o chamador cair no fallback.
+parse_wallclock_reset() {
+  local txt="$1" hhmm h m ampm today_epoch now
+
+  hhmm=$(grep -oiE 'try again at [0-9]{1,2}:[0-9]{2} ?(am|pm)?' <<< "$txt" | tail -1 || true)
+  [ -n "$hhmm" ] || return 0
+
+  h=$(grep -oE '[0-9]{1,2}:[0-9]{2}' <<< "$hhmm" | cut -d: -f1)
+  m=$(grep -oE '[0-9]{1,2}:[0-9]{2}' <<< "$hhmm" | cut -d: -f2)
+  ampm=$(grep -oiE '(am|pm)$' <<< "$hhmm" | tr '[:upper:]' '[:lower:]' || true)
+
+  # 12h -> 24h. "12 AM" e meia-noite e "12 PM" e meio-dia: os dois quebram a
+  # regra de somar 12, por isso o 12 e zerado antes.
+  h=$((10#$h)); m=$((10#$m))
+  if [ "$ampm" = "pm" ] || [ "$ampm" = "am" ]; then
+    [ "$h" -eq 12 ] && h=0
+    [ "$ampm" = "pm" ] && h=$((h + 12))
+  fi
+  [ "$h" -lt 24 ] && [ "$m" -lt 60 ] || return 0
+
+  today_epoch=$(date -j -f '%Y-%m-%d %H:%M:%S' "$(date '+%Y-%m-%d') $(printf '%02d:%02d:00' "$h" "$m")" '+%s' 2>/dev/null \
+    || date -d "$(date '+%Y-%m-%d') $(printf '%02d:%02d:00' "$h" "$m")" '+%s' 2>/dev/null || true)
+  [ -n "$today_epoch" ] || return 0
+
+  # Horario ja passado hoje significa o reset de amanha.
+  now=$(date '+%s')
+  if [ "$today_epoch" -le "$now" ]; then
+    today_epoch=$((today_epoch + 86400))
+  fi
+
+  echo "$today_epoch"
+}
+
 detect_usage_limit() {
   local log_file="$1"
   local tail_txt pattern epoch
@@ -1143,10 +1179,17 @@ detect_usage_limit() {
   # de teste do projeto ("429", "Too Many Requests") disparar espera de 30min.
   tail_txt=$(engine_tail "$log_file" 20)
 
+  # Os provedores nao escrevem a mesma frase duas vezes. O codex ja saiu com
+  # "You've hit your usage limit. (...) try again at 8:25 PM", que nao casa com
+  # nenhuma variante de "<algo> limit reached" — o invariante 4 nao disparou, a
+  # fase queimou um ciclo de correcao e o relatorio culpou as tasks. Casar o
+  # NUCLEO da frase ("usage limit", "rate limit") em vez da frase inteira.
+  # Alargar so e seguro porque isto le o tail, nao o log todo: um "429" no meio
+  # da saida de teste do projeto nao chega aqui.
   if [[ "$ENGINE" == "claude" ]]; then
-    pattern='usage limit reached'
+    pattern='usage limit|rate limit'
   else
-    pattern='rate limit reached|quota exceeded|usage limit reached'
+    pattern='usage limit|rate limit|quota exceeded|too many requests|insufficient_quota'
   fi
 
   grep -qiE "$pattern" <<< "$tail_txt" || return 1
@@ -1157,6 +1200,14 @@ detect_usage_limit() {
   if [ -z "$epoch" ]; then
     epoch=$(grep -oiE 'reset[a-z ]*[0-9]{10,13}' <<< "$tail_txt" \
       | grep -oE '[0-9]{10,13}' | tail -1 || true)
+  fi
+
+  # Nem todo provedor da o reset em epoch. O codex responde "try again at
+  # 8:25 PM" — relogio de parede. Sem isto o epoch fica vazio e a espera cai no
+  # fallback cego de 30min, que tanto pode acordar cedo demais (e queimar outra
+  # tentativa) quanto tarde demais.
+  if [ -z "$epoch" ]; then
+    epoch=$(parse_wallclock_reset "$tail_txt")
   fi
 
   echo "${epoch:-0}"
@@ -1403,7 +1454,7 @@ gate2_tests_pass() {
 # GATE3_RAN diz ao caminho "ja implementada" quais gates de fato validaram HEAD.
 GATE3_RAN=0
 
-gate3_independent_verify() {
+gate3_verify_uncached() {
   local phase_file="$1" cycle="$2" session_wrote="$3"
   local verify_log="$LOG_DIR/${phase_file%.md}.verify-${cycle}.log"
 
@@ -1499,21 +1550,20 @@ gate3_independent_verify() {
         printf '%s\n' "$task_lines" | grep -m1 -E "^TASK $task_num: INCOMPLETE" || true
       done)
 
+  # NOT-CODE nao reprova, mas tambem nao e um "confirmado": e trabalho que
+  # continua pendente do lado de fora do repositorio. Sai no relatorio para que
+  # quem abre o PR saiba o que ainda lhe cabe.
+  local not_code n_not_code=0
+  not_code=$(printf '%s\n' "$verdicts" | awk '/NOT-CODE/ { n = $1; sub(":", "", n); print n }')
+  [ -n "$not_code" ] && n_not_code=$(printf '%s\n' "$not_code" | grep -c .)
+
   if [ -n "$incomplete" ]; then
     GATE_CAUSE="O verificador independente encontrou tasks incompletas:"$'\n'"$incomplete"
     state_gate 3 fail
     return 1
   fi
 
-  # NOT-CODE nao reprova, mas tambem nao e um "confirmado": e trabalho que
-  # continua pendente do lado de fora do repositorio. Sai no relatorio para que
-  # quem abre o PR saiba o que ainda lhe cabe.
-  local not_code
-  not_code=$(printf '%s\n' "$verdicts" | awk '/NOT-CODE/ { n = $1; sub(":", "", n); print n }')
-
   if [ -n "$not_code" ]; then
-    local n_not_code
-    n_not_code=$(printf '%s\n' "$not_code" | grep -c .)
     success "Gate 3 — $((parsed - n_not_code))/$expected tasks confirmadas no codigo"
     warn "Gate 3 — $n_not_code task(s) fora do codigo, pendentes de quem conduz:"
     local task_num
@@ -1527,6 +1577,79 @@ gate3_independent_verify() {
 
   state_gate 3 pass
   return 0
+}
+
+# Memo do gate 3, por assinatura de arvore. Invalidado a cada fase em run_phase:
+# uma fase que fecha sem commitar deixa HEAD e arvore intactos, e sem o reset a
+# fase seguinte herdaria o veredito da anterior.
+GATE3_MEMO_SIG=""
+GATE3_MEMO_RC=0
+GATE3_MEMO_CAUSE=""
+GATE3_MEMO_RAN=0
+
+gate3_memo_reset() {
+  GATE3_MEMO_SIG=""
+  GATE3_MEMO_RC=0
+  GATE3_MEMO_CAUSE=""
+  GATE3_MEMO_RAN=0
+}
+
+# Fase operacional: a propria fase se declara com `**Operational phase**` numa
+# linha sozinha. Sao as fases de close out — rodar formatador, build, a suite —
+# em que quase nada e afirmacao sobre o codigo. Ali o gate 3 nao tem o que
+# julgar, e reprovar abre um ciclo de correcao sem nada a corrigir: o veredito
+# passaria a depender de o verificador classificar certo N vezes seguidas.
+#
+# Declarado, nao inferido: contar quantas tasks vieram NOT-CODE faria o destino
+# da fase depender do mesmo verificador que ja se mostrou instavel. Quem escreve
+# o plano sabe se a fase e operacional; o ralph so le a declaracao.
+#
+# O gate 3 continua rodando e reportando — perde o poder de reprovar, nao a voz.
+# Quem garante corretude nessa fase e o gate 2, que roda a suite fora do agente.
+phase_is_operational() {
+  grep -qE '^[[:space:]]*\*\*Operational phase\*\*' "$PHASES_DIR/$1" 2>/dev/null
+}
+
+# O gate 3 e uma funcao do codigo: bytes identicos tem que dar o mesmo veredito.
+# Sem memo, um ciclo de correcao que nao escreveu nada paga OUTRA sessao de
+# verificacao para julgar exatamente os mesmos bytes — e verificador fraco muda
+# de ideia. Na fase 12 de admin-area-users tres NOT-CODE viraram dois DONE e um
+# INCOMPLETE sem uma linha mudar, e esse INCOMPLETE reprovou a fase.
+gate3_independent_verify() {
+  local phase_file="$1" cycle="$2" session_wrote="$3"
+  local tree_sig rc=0
+
+  tree_sig=$(tree_signature)
+
+  if [ -n "$GATE3_MEMO_SIG" ] && [ "$tree_sig" = "$GATE3_MEMO_SIG" ]; then
+    GATE_CAUSE="$GATE3_MEMO_CAUSE"
+    GATE3_RAN="$GATE3_MEMO_RAN"
+    if [ "$GATE3_MEMO_RC" -eq 0 ]; then
+      success "Gate 3 — codigo identico ao do ciclo anterior; veredito mantido (aprovado)"
+      state_gate 3 pass
+    else
+      warn "Gate 3 — codigo identico ao do ciclo anterior; veredito mantido (reprovado), sem re-julgar"
+      state_gate 3 fail
+    fi
+    return "$GATE3_MEMO_RC"
+  fi
+
+  gate3_verify_uncached "$phase_file" "$cycle" "$session_wrote" || rc=$?
+
+  if [ "$rc" -ne 0 ] && phase_is_operational "$phase_file"; then
+    warn "Gate 3 — fase declarada operacional (**Operational phase**); reporta, nao reprova"
+    warn "Gate 3 — corretude desta fase fica por conta do gate 2 (suite do projeto). Pendente:"
+    printf '%s\n' "$GATE_CAUSE" | sed 's/^/    /'
+    GATE_CAUSE=""
+    rc=0
+    state_gate 3 pass
+  fi
+
+  GATE3_MEMO_SIG="$tree_sig"
+  GATE3_MEMO_RC="$rc"
+  GATE3_MEMO_CAUSE="$GATE_CAUSE"
+  GATE3_MEMO_RAN="$GATE3_RAN"
+  return "$rc"
 }
 
 # ---------------------------------------------------------------------------
@@ -1613,6 +1736,7 @@ run_phase() {
 
   LIMIT_WAITS=0
   GATE_CAUSE=""
+  gate3_memo_reset
   CUR_SEQ="$seq"
   state_phase "$seq" running
 
@@ -1706,7 +1830,18 @@ run_phase() {
     # HEAD; por isso a condicao so vale da segunda tentativa em diante.)
     if [ "$cycle" -gt 1 ] && [ "$session_wrote" -eq 0 ]; then
       warn "Ciclo $cycle nao alterou nenhum arquivo — parando em vez de repetir"
-      GATE_CAUSE="A sessao de correcao terminou sem alterar nenhum arquivo. Repetir daria o mesmo codigo e o mesmo prompt: a fase esta travada, nao incompleta. Revise as tasks abaixo — podem ser impossiveis, contraditorias ou nao ser sobre codigo."$'\n'"$GATE_CAUSE"
+      # Sessao que nao escreveu porque JULGOU e sessao que nao escreveu porque
+      # MORREU pedem investigacao em lugares opostos. Culpar as tasks quando a
+      # engine caiu por cota manda quem le auditar um plano que estava correto —
+      # foi o que aconteceu na fase 9 de admin-area-users.
+      case "$LAST_GATE" in
+        "gate 0"*)
+          GATE_CAUSE="A engine nao concluiu e nao deixou veredito nenhum. Isso quase sempre e falha de infra — cota estourada, rede, crash ou timeout — e nao um problema das tasks. Leia o fim do log da engine abaixo ANTES de suspeitar do plano."$'\n'"$GATE_CAUSE"
+          ;;
+        *)
+          GATE_CAUSE="A sessao de correcao terminou sem alterar nenhum arquivo. Repetir daria o mesmo codigo e o mesmo prompt: a fase esta travada, nao incompleta. Revise as tasks abaixo — podem ser impossiveis, contraditorias ou nao ser sobre codigo."$'\n'"$GATE_CAUSE"
+          ;;
+      esac
       break
     fi
 
