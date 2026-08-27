@@ -86,6 +86,16 @@ Para cada task ele emite exatamente uma linha:
 `RALPH_VERIFY=auto` economiza: so roda quando o veredito do gate 2 nao basta.
 `--no-verify` / `RALPH_VERIFY=off` desliga.
 
+**O veredito e memoizado por assinatura de arvore.** Ciclo de correcao que nao
+alterou nenhum arquivo nao paga outra sessao de verificacao: o gate 3 e funcao do
+codigo, e os mesmos bytes tem que dar o mesmo veredito. Sem isso um verificador
+barato muda de ideia entre ciclos sobre codigo identico.
+
+**Fase declarada `**Operational phase**` nao e reprovada pelo gate 3.** Ele roda e
+reporta, mas perde o poder de reprovar — as tasks de uma fase de fechamento sao
+acoes, nao afirmacoes sobre o codigo, e o ciclo de correcao nao teria o que
+corrigir. Quem garante corretude ali e o gate 2, que roda a suite fora do agente.
+
 ## Comando de teste (gate 2)
 
 Primeira regra que resolver vence:
@@ -148,7 +158,9 @@ no `.gitignore` do projeto.
 |---|---|
 | `Contrato de formato violado` no preflight | heading `## Phase` fora de `## Phase N: <titulo>`. Uma fase com heading torto **some silenciosamente** do run |
 | fase reprova com todos os vereditos `DONE` | contagem de tasks divergente. A fase precisa da linha `**This phase has exactly N tasks.**` |
-| task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do codigo |
+| task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do codigo, ou declare a fase com `**Operational phase**` se ela for mesmo de fechamento |
+| fase de fechamento reprova sem nada de errado no codigo | falta o marcador `**Operational phase**`. Sem ele o gate 3 reprova por task procedural que nao tem como julgar |
+| `gate 0 vermelho` e o relatorio manda revisar as tasks | leia o FIM do `phase-NN.cycle-M.log` antes de mexer no plano: engine que morre por cota, rede ou crash cai no mesmo lugar. Task correta nao e a causa mais provavel |
 | fase reprova em todo ciclo ate esgotar | task com escape condicional (*"faca X, mas se ficar estranho, deixe"*). O verificador escolhe INCOMPLETE na duvida |
 | gate 2 sempre vermelho no primeiro run | Sail parado, ou `.env.testing` ausente |
 | o run reinicia da fase 1 depois de voce editar o plano | editar o `project-phases.md` invalida o stamp e zera `.progress`. Use `--from N` |
