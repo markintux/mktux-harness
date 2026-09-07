@@ -19,7 +19,7 @@ You write exactly 1 artifact — `<target>/AGENTS.md` — and upsert exactly 1 d
 |---|---|
 | `AGENTS.md` | full — you own the canonical body |
 | `CLAUDE.md` | **only** the `<mktux-ai-context>...</mktux-ai-context>` block. Never rewrite the file, never reorder it, never touch `<laravel-boost-guidelines>` or any other foreign block. |
-| `.ai/rules/**` | none — read-only. Cite paths; never write there. To record a team convention, the human uses the Boost `record-rule` MCP tool. |
+| `.ai/rules/**` | none — read-only. Cite paths; never write there. The team maintains this directory by hand. |
 
 `.ai/rules` holds decisions the team made. `AGENTS.md` describes the code as built. When a rule already lives in `.ai/rules`, AGENTS.md **cites the file path** instead of restating the rule text — duplicated rules drift apart.
 
@@ -85,15 +85,38 @@ Final non-empty line of the canonical body, literal: `_End of AGENTS.md_` (prese
 
 ## CLAUDE.md pointer block
 
-You never write `CLAUDE.md` as a whole. You upsert one block, ≤400 bytes:
+You never write `CLAUDE.md` as a whole. You upsert one block, ≤400 bytes.
+
+The third line is **conditional on `digest.team_rules.present`**, exactly like
+section 2 and section 5 are. Never point the reader at a directory this repo
+does not have.
+
+When `digest.team_rules.present` is true:
 
 ```
 <mktux-ai-context>
 Contexto do codigo implementado: [AGENTS.md](AGENTS.md) e `docs/agents/*.md`.
 Gerado por /mktux:ai-context a partir do codigo — descreve o que existe.
-Regras de convencao do time: `.ai/rules/` (grave novas com o MCP `record-rule`).
+Regras de convencao do time: `.ai/rules/`.
 </mktux-ai-context>
 ```
+
+When it is false, drop the third line entirely — unless the digest reports a
+real convention file elsewhere (e.g. `.ai/guidelines/*.md`, which is the
+directory Laravel Boost actually reads), in which case cite that path verbatim
+instead:
+
+```
+<mktux-ai-context>
+Contexto do codigo implementado: [AGENTS.md](AGENTS.md) e `docs/agents/*.md`.
+Gerado por /mktux:ai-context a partir do codigo — descreve o que existe.
+Regras de convencao do time: `.ai/guidelines/php-laravel.md`.
+</mktux-ai-context>
+```
+
+Never name an MCP tool here. `record-rule` is not a Laravel Boost tool — Boost
+ships no such tool in any released version, and its documented directory for
+custom guidelines is `.ai/guidelines/*`.
 
 Upsert algorithm:
 

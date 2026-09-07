@@ -56,7 +56,24 @@ done
 [ -z "$SAIL_ROOT" ] && exit 0
 
 # --- quebra o comando em segmentos (&&, ||, |, ; e quebras de linha)
-SEGMENTS=$(printf '%s' "$CMD" | tr '\n' ';' | sed 's/&&/;/g; s/||/;/g; s/|/;/g')
+# Separador dentro de aspas NAO separa. Um padrao de regex com alternancia, por
+# exemplo `grep -E "foo|artisan bar"`, e um comando so; quebrar no separador
+# inventava um segmento comecando por "artisan " e disparava falso positivo.
+SEGMENTS=$(printf '%s' "$CMD" | awk '
+  BEGIN { sq = 0; dq = 0 }
+  {
+    if (NR > 1) { printf ";" }
+    n = length($0)
+    for (i = 1; i <= n; i++) {
+      c = substr($0, i, 1)
+      if (c == "\\" && dq && i < n) { printf "%s%s", c, substr($0, ++i, 1); continue }
+      if (c == "\047" && !dq) { sq = !sq; printf "%s", c; continue }
+      if (c == "\042" && !sq) { dq = !dq; printf "%s", c; continue }
+      if (!sq && !dq && (c == ";" || c == "\174" || c == "&")) { printf ";"; continue }
+      printf "%s", c
+    }
+  }
+')
 
 OFFENDER=""
 SUGGESTION=""

@@ -27,7 +27,7 @@ Este harness convive com o Laravel Boost. Cada um manda no seu arquivo:
 | Arquivo | Dono | Esta skill |
 |---|---|---|
 | `CLAUDE.md` | Laravel Boost (`boost:install`) | **nunca reescreve**; so faz upsert de 1 bloco ponteiro delimitado |
-| `.ai/rules/**` | time, via MCP `record-rule` | **nunca escreve**; le e cita como referencia |
+| `.ai/rules/**` | time, na mao | **nunca escreve**; le e cita como referencia |
 | `AGENTS.md` | esta skill | gera / atualiza |
 | `docs/agents/*.md` | esta skill | gera / atualiza |
 
@@ -176,7 +176,10 @@ Depois da tabela:
 - **Nunca invente** — vale transitivamente; subagent cita evidencia ou emite a forma N/A.
 - **Nunca sobrescreva arquivo escrito a mao** sem `--adopt`.
 - **`CLAUDE.md` e do Boost** — so o bloco `<mktux-ai-context>` e seu. Nunca reescreva o arquivo, nunca mexa no bloco `<laravel-boost-guidelines>`.
-- **`.ai/rules` e read-only aqui** — para gravar regra de convencao, use o MCP `record-rule`, nunca esta skill.
+- **`.ai/rules` e read-only aqui** — regra de convencao o time grava na mao, nunca esta skill.
+  Nem todo projeto tem esse diretorio: quando `team_rules.present` e falso, cite o
+  caminho real de convencao que o digest achou (`.ai/guidelines/*.md` e o que o
+  Laravel Boost le) em vez de apontar para `.ai/rules/`.
 - **Preserve bloco de marcador estrangeiro** — regiao `<tag>...</tag>` de terceiro em arquivo owned volta verbatim na regeneracao, nunca reescrita, nunca semeada; checagem de tamanho ignora ela.
 - **Sem escrita git** — nunca faca stage, commit ou reset; o dev commita na mao.
 - **Sem segredo** — `.env` nunca e lido; nome de variavel vem so de `.env.example`.
