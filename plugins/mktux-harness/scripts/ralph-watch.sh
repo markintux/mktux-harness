@@ -882,8 +882,14 @@ draw() {
   [ "$SCROLL" -gt "$max_scroll" ] && SCROLL=$max_scroll
   [ "$SCROLL" -lt 0 ] && SCROLL=0
 
+  # O \033[K vai ANTES do conteudo, nao depois. Com o autowrap desligado o
+  # cursor ESTACIONA na ultima coluna em vez de avancar, e o EL apaga da posicao
+  # do cursor INCLUSIVE: um \033[K no fim de uma linha de largura cheia comia o
+  # ultimo glifo dela — a borda direita da tabela, dos boxes e das barras. No
+  # inicio da linha o cursor esta na coluna 1, o EL limpa a linha toda e o
+  # conteudo escreve por cima.
   local out="" i idx edge hl bodytxt
-  for ((i = 1; i <= TOP_N; i++)); do out="${out}${TOP[$i]}${eol}"$'\n'; done
+  for ((i = 1; i <= TOP_N; i++)); do out="${out}${eol}${TOP[$i]}"$'\n'; done
 
   for ((i = 0; i < body; i++)); do
     idx=$((SCROLL + i + 1))
@@ -897,13 +903,13 @@ draw() {
         bodytxt="${bodytxt//"$C_RESET"/$C_RESET$hl}"
         edge="${edge//"$C_RESET"/$C_RESET$hl}"
       fi
-      out="${out}${hl}${bodytxt} ${edge}${C_RESET}${eol}"$'\n'
+      out="${out}${eol}${hl}${bodytxt} ${edge}${C_RESET}"$'\n'
     else
-      out="${out}${ROW_EMPTY} ${C_CYAN}│${C_RESET}${eol}"$'\n'
+      out="${out}${eol}${ROW_EMPTY} ${C_CYAN}│${C_RESET}"$'\n'
     fi
   done
 
-  for ((i = 1; i <= BOT_N; i++)); do out="${out}${BOT[$i]}${eol}"$'\n'; done
+  for ((i = 1; i <= BOT_N; i++)); do out="${out}${eol}${BOT[$i]}"$'\n'; done
 
   # Rodape de rolagem: depende do recorte, entao so da para montar aqui. No
   # --once (dump) nao ha rolagem nem teclado, entao o rodape nao diz nada.
@@ -920,7 +926,7 @@ draw() {
     local foot
     printf -v foot '  ▲ %s acima · ▼ %s abaixo · %s%s' "$above" "$below" "$mode" "$help"
     cell_v foot "${C_GREY}${foot}${C_RESET}" "$foot" "$COLS"
-    out="${out}${foot}${C_RESET}${eol}"$'\n'
+    out="${out}${eol}${foot}${C_RESET}"$'\n'
   fi
 
   if [ "$ONCE" -eq 1 ]; then
@@ -929,7 +935,15 @@ draw() {
     # Sem \n na ultima linha: com o quadro ocupando a tela inteira, ele rolaria
     # o terminal em uma linha e o \033[H seguinte escreveria fora do lugar.
     clamp_lines out "$out" "$LINES_N"
-    printf '\033[H%s\033[J' "$out"
+    # O \033[J tinha o mesmo defeito do \033[K: no fim do quadro o cursor esta
+    # parado na ultima coluna e o ED apaga essa celula junto. Agora ele so roda
+    # quando sobra tela DEBAIXO do quadro, posicionado na primeira linha vaga.
+    # Contagem analitica: varrer o texto com ${out//[!\n]/} custa segundos no
+    # bash 3.2 e o quadro nem chegava a ser impresso.
+    local nl=$((TOP_N + body + BOT_N + 1))
+    [ "$nl" -gt "$LINES_N" ] && nl=$LINES_N
+    printf '\033[H%s' "$out"
+    [ "$nl" -lt "$LINES_N" ] && printf '\033[%d;1H\033[J' $((nl + 1))
   fi
 }
 
