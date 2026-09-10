@@ -9,10 +9,12 @@
 
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Os scripts sob teste sao IRMAOS deste arquivo. Com ".." o caminho apontava
+# para a raiz do plugin, onde nao ha ralph.sh: toda a suite saia 127.
+SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
 # RALPH_BIN permite apontar para uma copia patchada (prova red dos testes).
-RALPH="${RALPH_BIN:-$ROOT/ralph.sh}"
-WATCH="${WATCH_BIN:-$ROOT/ralph-watch.sh}"
+RALPH="${RALPH_BIN:-$SCRIPTS/ralph.sh}"
+WATCH="${WATCH_BIN:-$SCRIPTS/ralph-watch.sh}"
 ONLY="${1:-}"
 
 TMP=$(mktemp -d)

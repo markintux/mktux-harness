@@ -426,12 +426,14 @@ SCROLL=0
 FOLLOW=1
 TAIL_ON=1
 
-# Colunas fixas: 14 cabe "▶ Em execução", 19 cabe "G0 ✓ G1 ✓ G2 ✓ G3 ✓" inteiro,
-# 9 cabe o cabecalho "Tentativa". Encolher qualquer um corta informacao.
+# Larguras cheias das colunas: 14 cabe "▶ Em execução", 19 cabe
+# "G0 ✓ G1 ✓ G2 ✓ G3 ✓" inteiro, 9 cabe o cabecalho "Tentativa". Sao o alvo,
+# nao um contrato: numa tela estreita o build_table_head encolhe as menos
+# informativas para a tabela fechar na largura do terminal.
 COL_ID=4; COL_STATUS=14; COL_TRY=9; COL_TIME=7; COL_GATES=19; COL_NAME=20
 
 build_header() {
-  local now elapsed col c1 c2 c3 st_c st_p line
+  local now elapsed col c1 c2 c3 st_c st_p line plain
   now=$(date +%s)
   elapsed=$((now - M_START))
   [ "$M_START" -eq 0 ] && elapsed=0
@@ -453,12 +455,19 @@ build_header() {
   pad_v c2 "$engine" $((col - 9))
   printf -v line '%sProjeto:%s %s  %sEngine:%s %s  %sStatus:%s %s' \
     "$C_CYAN" "$C_RESET" "$c1" "$C_CYAN" "$C_RESET" "$c2" "$C_CYAN" "$C_RESET" "$st_c"
+  # O status ("⚠ Órfão (pid … sumiu)") nao tem largura fixa: sem cortar em COLS
+  # a linha estoura a tela estreita e, num terminal que ignore o autowrap-off,
+  # empurra o quadro inteiro para baixo.
+  printf -v plain 'Projeto: %s  Engine: %s  Status: %s' "$c1" "$c2" "$st_p"
+  cell_v line "$line" "$plain" "$COLS"
   add_top "$line"
 
   pad_v c1 "$(fmt_duration "$elapsed")" $((col - 10))
   pad_v c2 "${M_BRANCH:-?}" $((col - 9))
   printf -v line '%sDuração:%s %s  %sBranch:%s %s  %sPID:%s %s' \
     "$C_CYAN" "$C_RESET" "$c1" "$C_CYAN" "$C_RESET" "$c2" "$C_CYAN" "$C_RESET" "${M_PID:-?}"
+  printf -v plain 'Duração: %s  Branch: %s  PID: %s' "$c1" "$c2" "${M_PID:-?}"
+  cell_v line "$line" "$plain" "$COLS"
   add_top "$line"
   add_top ""
 }
@@ -583,8 +592,30 @@ build_panels() {
 }
 
 build_table_head() {
+  # A tabela tem que fechar EXATAMENTE em COLS: 19 sao as bordas e os espacos
+  # das celulas, o resto se divide entre as colunas. Deixar a soma passar de
+  # COLS nao "extende" a tabela — o autowrap esta desligado, entao o terminal
+  # corta a borda direita e a caixa fica sem fim do lado direito.
+  COL_STATUS=14; COL_TRY=9; COL_TIME=7; COL_GATES=19
   COL_NAME=$((COLS - 19 - COL_ID - COL_STATUS - COL_TRY - COL_TIME - COL_GATES))
-  [ "$COL_NAME" -lt 12 ] && COL_NAME=12
+
+  if [ "$COL_NAME" -lt 12 ]; then
+    # Tela estreita (retrato, painel dividido): encolhe as colunas menos
+    # informativas primeiro — gates e tentativa truncam com "…" e continuam
+    # legiveis, o nome da fase nao.
+    local need=$((12 - COL_NAME)) take
+    COL_NAME=12
+    take=$((COL_GATES - 5));  [ "$take" -gt "$need" ] && take=$need
+    if [ "$take" -gt 0 ]; then COL_GATES=$((COL_GATES - take)); need=$((need - take)); fi
+    take=$((COL_TRY - 3));    [ "$take" -gt "$need" ] && take=$need
+    if [ "$take" -gt 0 ]; then COL_TRY=$((COL_TRY - take)); need=$((need - take)); fi
+    take=$((COL_TIME - 5));   [ "$take" -gt "$need" ] && take=$need
+    if [ "$take" -gt 0 ]; then COL_TIME=$((COL_TIME - take)); need=$((need - take)); fi
+    take=$((COL_STATUS - 8)); [ "$take" -gt "$need" ] && take=$need
+    if [ "$take" -gt 0 ]; then COL_STATUS=$((COL_STATUS - take)); need=$((need - take)); fi
+    if [ "$need" -gt 0 ]; then COL_NAME=$((COL_NAME - need)); fi
+    [ "$COL_NAME" -lt 4 ] && COL_NAME=4
+  fi
 
   local r_id r_name r_st r_try r_time r_gates sep_t sep_m
   repeat_v r_id    '─' $((COL_ID + 2))
@@ -609,6 +640,20 @@ build_table_head() {
   pad_v h_try   'Tentativa'   "$COL_TRY"
   pad_v h_time  'Tempo'       "$COL_TIME"
   pad_v h_gates 'Gates'       "$COL_GATES"
+
+  # Linha vazia com as mesmas divisorias. O corpo da tabela quase sempre sobra
+  # espaco (poucas fases numa tela alta), e preencher a sobra com linha em
+  # branco partia a caixa ao meio: as bordas sumiam e o `└──┴──┘` reaparecia la
+  # embaixo, solto. Com a linha vazia a tabela desce inteira ate o rodape.
+  local e_id e_name e_st e_try e_time e_gates
+  pad_v e_id    '' "$COL_ID"
+  pad_v e_name  '' "$COL_NAME"
+  pad_v e_st    '' "$COL_STATUS"
+  pad_v e_try   '' "$COL_TRY"
+  pad_v e_time  '' "$COL_TIME"
+  pad_v e_gates '' "$COL_GATES"
+  printf -v ROW_EMPTY '%s %s %s %s %s %s %s %s %s %s %s %s' "$V" \
+    "$e_id" "$V" "$e_name" "$V" "$e_st" "$V" "$e_try" "$V" "$e_time" "$V" "$e_gates"
 
   add_top "$sep_t"
   printf -v line '%s %s%s%s %s %s%s%s %s %s%s%s %s %s%s%s %s %s%s%s %s %s%s%s %s' \
@@ -729,6 +774,7 @@ build_log_box() {
 }
 
 SEP_B=""
+ROW_EMPTY=""
 
 build_frame() {
   TOP=(); TOP_N=0; BOT=(); BOT_N=0
@@ -822,8 +868,10 @@ draw() {
 
   build_frame
 
-  # -2: a linha do rodape de rolagem e a folga que o terminal usaria para rolar.
-  local body=$((LINES_N - TOP_N - BOT_N - 2))
+  # -1: a linha do rodape de rolagem. Nao ha folga a reservar contra o scroll —
+  # o autowrap esta desligado (\033[?7l) e o quadro nao termina em \n, entao
+  # escrever ate a ultima linha da tela nao rola nada.
+  local body=$((LINES_N - TOP_N - BOT_N - 1))
   [ "$body" -lt 3 ] && body=3
   [ "$ONCE" -eq 1 ] && body=$ROW_N
 
@@ -851,7 +899,7 @@ draw() {
       fi
       out="${out}${hl}${bodytxt} ${edge}${C_RESET}${eol}"$'\n'
     else
-      out="${out}${eol}"$'\n'
+      out="${out}${ROW_EMPTY} ${C_CYAN}│${C_RESET}${eol}"$'\n'
     fi
   done
 
@@ -869,7 +917,10 @@ draw() {
     else
       help="${help} · q sai (o run continua)"
     fi
-    out="${out}${C_GREY}  ▲ ${above} acima · ▼ ${below} abaixo · ${mode}${help}${C_RESET}${eol}"$'\n'
+    local foot
+    printf -v foot '  ▲ %s acima · ▼ %s abaixo · %s%s' "$above" "$below" "$mode" "$help"
+    cell_v foot "${C_GREY}${foot}${C_RESET}" "$foot" "$COLS"
+    out="${out}${foot}${C_RESET}${eol}"$'\n'
   fi
 
   if [ "$ONCE" -eq 1 ]; then
