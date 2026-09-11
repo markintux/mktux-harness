@@ -987,6 +987,129 @@ if case_enabled false-limit-json; then
   assert_eq 3 "$(commits "$d")" "as 2 fases commitadas"
 fi
 
+# ---------------------------------------------------------------------------
+# 35. geometria do quadro vivo do painel
+#
+# O --once (caso 28) nao serve para isto: ele nao rola, nao preenche a altura e
+# nao emite \033[K nenhum. E o quadro vivo que tem geometria.
+#
+# O que esta sendo travado aqui ja quebrou de tres jeitos diferentes, e nenhum
+# deles aparece lendo o texto da saida — so o DESENHO:
+#   1. \033[K depois do conteudo comia o ultimo glifo da linha (a borda direita
+#      inteira do painel sumia), porque com o autowrap desligado o cursor
+#      ESTACIONA na ultima coluna e o EL apaga da posicao dele INCLUSIVE.
+#   2. a sobra do corpo da tabela vinha como linha em branco, partindo a caixa
+#      ao meio numa tela alta.
+#   3. numa tela estreita a soma das colunas passava de COLS e o terminal
+#      cortava a borda direita.
+#
+# Precisa de pty: sem TTY no stdout o painel cai em --once. O `script` do BSD
+# exige tty no stdin (nao serve em pipe nem CI), entao o pty vem do python3.
+# ---------------------------------------------------------------------------
+if case_enabled watch-frame; then
+  header "35. painel desenha o quadro na geometria da tela"
+  d=$(new_case watch-frame)
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0 (setup)"
+
+  if ! command -v python3 > /dev/null 2>&1; then
+    echo "  (pulado: sem python3 para abrir um pty)"
+  else
+    # NAO pode se chamar pty.py: sombrearia o modulo pty da stdlib.
+    cat > "$d/frame-probe.py" <<'PTY_EOF'
+import fcntl, os, pty, re, select, signal, struct, sys, termios, time
+
+rows, cols, out_path, script, repo = (
+    int(sys.argv[1]), int(sys.argv[2]), sys.argv[3], sys.argv[4], sys.argv[5])
+
+pid, fd = pty.fork()
+if pid == 0:
+    env = dict(os.environ, RALPH_WATCH_LINES=str(rows), RALPH_WATCH_COLS=str(cols))
+    os.execvpe("bash", ["bash", script, repo], env)
+
+fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+buf, deadline = b"", time.time() + 3
+while time.time() < deadline:
+    r, _, _ = select.select([fd], [], [], 0.2)
+    if not r:
+        continue
+    try:
+        chunk = os.read(fd, 65536)
+    except OSError:
+        break
+    if not chunk:
+        break
+    buf += chunk
+try:
+    os.kill(pid, signal.SIGKILL)
+    os.waitpid(pid, 0)
+except OSError:
+    pass
+
+# O pty devolve CRLF. Sem normalizar, "\033[K\n" nunca casa e a contagem que
+# distingue o EL depois do conteudo do EL antes dele da sempre zero.
+data = buf.decode("utf-8", "replace").replace("\r\n", "\n")
+# O quadro inteiro sai num printf so, comecando em \033[H.
+frames = data.split("\033[H")
+frame = frames[-1].split("\033[J")[0] if len(frames) > 1 else ""
+# O pty devolve CRLF: sem tirar o \r toda linha mede uma coluna a mais e
+# nenhuma delas "termina" na borda.
+lines = frame.split("\n")
+plain = [re.sub(r"\033\[[0-9;?]*[A-Za-z]", "", ln).replace("\r", "") for ln in lines]
+
+# Borda direita: a ultima coluna de toda linha de caixa tem que sobreviver ao
+# desenho. Linha de caixa e a que comeca com um glifo de moldura.
+box = [ln for ln in plain if ln[:1] in "┌├└│"]
+no_right_edge = [ln for ln in box if ln[-1:] not in "┐┤┘│█"]
+
+with open(out_path, "w") as fh:
+    fh.write("frame_lines=%d\n" % len(lines))
+    fh.write("max_width=%d\n" % max([len(ln) for ln in plain] or [0]))
+    # A invariante do EL: toda linha do quadro COMECA limpando a si mesma. Com o
+    # \033[K no fim em vez do inicio, o cursor parado na ultima coluna faz o EL
+    # apagar o glifo que acabou de ser escrito — a borda direita inteira. Contar
+    # "\033[K\n" nao serve: uma linha em branco com o EL no inicio produz
+    # exatamente a mesma sequencia.
+    fh.write("linhas_com_el_no_inicio=%d\n" % len([ln for ln in lines if ln.startswith("\033[K")]))
+    fh.write("linhas_sem_el_no_inicio=%d\n" % len([ln for ln in lines if not ln.startswith("\033[K")]))
+    fh.write("box_lines=%d\n" % len(box))
+    fh.write("sem_borda_direita=%d\n" % len(no_right_edge))
+PTY_EOF
+
+    # Duas geometrias: 90 colunas com a tabela folgada, e 78 — abaixo das 84 em
+    # que COL_NAME bate no piso e a soma das colunas passava de COLS.
+    probe_frame() { # <linhas> <colunas>
+      local r="$1" c="$2" tag="${1}x${2}"
+      frame_lines=0; max_width=0; box_lines=0; sem_borda_direita=1
+      linhas_com_el_no_inicio=0; linhas_sem_el_no_inicio=1
+      python3 "$d/frame-probe.py" "$r" "$c" "$d/frame-$tag.txt" "$WATCH" "$d/repo" \
+        > "$d/probe-$tag.log" 2>&1 || true
+      if [ ! -s "$d/frame-$tag.txt" ]; then
+        bad "$tag: painel desenhou um quadro no pty (ver $d/probe-$tag.log)"
+        return 0
+      fi
+      # shellcheck disable=SC1090
+      . "$d/frame-$tag.txt"
+      assert_eq "$r" "$frame_lines"       "$tag: o quadro ocupa as $r linhas da tela"
+      assert_eq "$c" "$max_width"         "$tag: nenhuma linha passa das $c colunas"
+      assert_eq 0   "$linhas_sem_el_no_inicio" "$tag: toda linha comeca limpando a si mesma"
+      assert_eq 0   "$sem_borda_direita"  "$tag: toda linha de caixa fecha na borda direita"
+      if [ "$linhas_com_el_no_inicio" -eq "$r" ]; then
+        ok "$tag: as $r linhas do quadro levam o \\033[K no inicio"
+      else
+        bad "$tag: as $r linhas do quadro levam o \\033[K no inicio (veio $linhas_com_el_no_inicio)"
+      fi
+      if [ "$box_lines" -ge 10 ]; then
+        ok "$tag: o quadro tem caixas desenhadas ($box_lines linhas)"
+      else
+        bad "$tag: o quadro tem caixas desenhadas (veio $box_lines)"
+      fi
+    }
+    probe_frame 30 90
+    probe_frame 30 78
+  fi
+fi
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then
   echo -e "${GREEN}TODOS VERDES: $PASS asserts${NC}"
