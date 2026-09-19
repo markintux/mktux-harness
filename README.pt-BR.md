@@ -567,23 +567,32 @@ Vence a primeira regra que resolver:
 
 1. `--test-cmd "<cmd>"`
 2. `RALPH_TEST_CMD`
-3. detecção por manifest:
+3. o **perfil de stack** do diretório de onde o ralph roda
+   (`profiles/<nome>/profile.sh`; não sobe diretórios):
+
+| Perfil | Detectado por | Comando |
+|---|---|---|
+| Laravel | `artisan` | `vendor/bin/sail artisan test --compact` com Sail; senão `composer test` se houver `scripts.test`; senão `php artisan test` |
+
+4. detecção por manifest:
 
 | Detectado | Comando |
 |---|---|
-| Laravel Sail (`artisan` + `vendor/bin/sail`) | `vendor/bin/sail test` |
 | `composer.json` com `scripts.test` | `composer test` |
-| `artisan` | `php artisan test` |
 | `package.json` com `scripts.test` | `npm test` |
 | `pytest.ini` / `pyproject [tool.pytest]` | `pytest` |
 | `go.mod` | `go test ./...` |
 | `Cargo.toml` | `cargo test` |
 
-4. nada resolvido → aviso alto e portão 2 pulado (o portão 3 segura sozinho)
+5. nada resolvido → aviso alto e portão 2 pulado (o portão 3 segura sozinho)
 
-Sail tem precedência sobre `composer test`, porque a suite roda no container.
-Containers parados → abort no preflight: todo portão 2 falharia e queimaria os
-ciclos de correção à toa.
+O perfil também valida o ambiente no preflight — Laravel com Sail e containers
+parados → abort, porque a suite roda no container e todo portão 2 falharia
+queimando os ciclos de correção à toa — e acrescenta notas ao prompt de
+implementação. O comando resolvido chega a toda sessão como `RALPH_TEST_CMD`,
+então o subagent `test-runner` roda exatamente o que o portão 2 roda. Para ver o
+que o ralph vai resolver num projeto sem rodar nada:
+`bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd`.
 
 ### Variáveis de ambiente
 
@@ -632,10 +641,16 @@ Os hooks vêm do plugin. Não há nada para configurar por projeto.
 
 | Hook | Quando | O que faz |
 |---|---|---|
-| `sail-guard` | antes de todo Bash | bloqueia comando que rodaria PHP/DB no host quando o projeto usa Sail, e devolve ao agente a forma correta |
+| `profile-hook` | antes de todo Bash · Claude: após Edit/Write · Codex: no fim do turno | acha o perfil de stack subindo do diretório do evento e repassa o evento ao script do perfil; sem perfil, não faz nada |
 | `log-event` | todo evento | grava em `.harness/events.jsonl` com timestamp e branch |
-| `pint-and-test` | Claude: após Edit/Write · Codex: no fim do turno | roda Pint e os testes afetados |
 | `log-tokens` | fim da sessão | grava consumo por modelo em `.harness/tokens.jsonl`, com campo `vendor` para comparar Claude e Codex no mesmo gráfico |
+
+Scripts do perfil Laravel (`profiles/laravel/hooks/`), chamados pelo `profile-hook`:
+
+| Script | Evento | O que faz |
+|---|---|---|
+| `sail-guard` | `pre-bash` | bloqueia comando que rodaria PHP/DB no host quando o projeto usa Sail, e devolve ao agente a forma correta |
+| `pint-and-test` | `claude-post-edit` · `codex-stop` | roda Pint e os testes afetados |
 
 `pint-and-test` e `log-tokens` existem em **duas versões, uma por engine**, e isso
 é proposital: o Codex não tem hook de `Edit`, então roda no `Stop` com detecção
@@ -816,7 +831,7 @@ mktux-harness/
     │   ├── plan-database-schema/      references/laravel.md: convenções de banco
     │   ├── plan-project-phases/        o contrato do ralph + references/laravel.md
     │   ├── ralph/                      operação e diagnóstico
-    │   ├── review-phases/
+    │   ├── review-phases/              references/laravel.md: auditoria de segurança
     │   ├── setup/
     │   └── ai-context/               arvore AGENTS a partir do codigo
     ├── agents/                         só Claude: test-runner, security-auditor,
@@ -824,17 +839,21 @@ mktux-harness/
     ├── hooks/
     │   ├── hooks.json                  Claude   (${CLAUDE_PLUGIN_ROOT})
     │   ├── codex-hooks.json            Codex    (${PLUGIN_ROOT})
-    │   ├── shared/                     log-event
+    │   ├── shared/                     profile-hook (dispatcher), log-event
     │   ├── claude/                     log-tokens
     │   └── codex/                      log-tokens
     ├── profiles/laravel/               o que só projeto Laravel usa
+    │   ├── profile.sh                  detecção, comando de teste, preflight, mapa de hooks
+    │   ├── agents/                     notas do test-runner
     │   └── hooks/                      sail-guard (shared/), pint-and-test
     │                                   (claude/, codex/)
     └── scripts/
+        ├── lib/profile.sh              contrato do perfil, detecção, fallback por manifest
+        ├── mktux-profile.sh            o perfil, para os agents: name, test-cmd, notes
         ├── ralph.sh                    o orquestrador
         ├── ralph-watch.sh              painel ao vivo, read-only
         ├── test-ralph.sh               suite do próprio ralph
-        ├── test-layout.sh              caminhos de hook, references das skills, hooks Laravel
+        ├── test-layout.sh              manifests, perfis, references, hooks, mktux-profile
         └── mktux-setup.sh              instala os wrappers no PATH
 ```
 
