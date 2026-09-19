@@ -16,6 +16,15 @@
 #                            de hook (pre-bash | claude-post-edit | codex-stop);
 #                            vazio = o perfil nao age nesse evento
 #
+# Texto do perfil, fora do profile.sh:
+#   profiles/<nome>/agents/<agent>.md      notas que so um agent le (Claude; o
+#                                          Codex nao carrega agents), via
+#                                          `mktux-profile.sh notes <agent>`
+#   skills/<skill>/references/<nome>.md    convencoes que uma skill carrega; mora
+#                                          ao lado dela porque e o unico caminho
+#                                          que os dois engines resolvem. Um agent
+#                                          que precisa do mesmo texto le dali.
+#
 # O core (ralph.sh, hooks.json, agents) nunca nomeia um stack: pergunta ao perfil.
 
 MKTUX_PLUGIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
