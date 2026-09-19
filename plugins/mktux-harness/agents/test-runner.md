@@ -32,11 +32,11 @@ You run the project's test suite and return a compact summary. Never write, edit
 4. If RED, return at most 20 lines, grouping failures by file:
    ```text
    RED: <total> failures
-   tests/Feature/Admin/PlanTest.php (2 failures):
+   <test file> (2 failures):
      - it_creates_plan:42 — Expected 302, got 422
      - it_validates_required_name:67 — Missing required field
-   tests/Unit/MoneyTest.php (1 failure):
-     - it_formats_money:18 — Failed asserting that two strings are identical
+   <test file> (1 failure):
+     - it_formats_money:18 — Expected "1,000.00", got "1000"
    ```
 
 ## Restrictions

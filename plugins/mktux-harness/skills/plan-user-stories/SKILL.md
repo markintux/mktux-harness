@@ -30,7 +30,7 @@ escrever as stories.
 Todo teste listado no `project-phases.md` cita as stories que cobre, por id:
 
 ```
-- `tests/Feature/Report/ExportProductsReportTest.php` — … (US-1.1, US-5.1)
+- `<arquivo de teste>` — … (US-1.1, US-5.1)
 ```
 
 Os ids sao **interface publica**. Tem que ser estaveis, unicos, e presos a
