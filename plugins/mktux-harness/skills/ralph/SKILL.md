@@ -130,7 +130,9 @@ container.
 | `RALPH_MAX_CYCLES` | ciclos de correcao por fase (default: 3) |
 | `RALPH_MAX_LIMIT_WAITS` | esperas consecutivas por limite, por fase (default: 20) |
 | `RALPH_SMOKE` | `0` desliga o smoke test da engine |
-| `RALPH_MEM0` / `RALPH_MEM0_USER` | resumo por fase no mem0; **desligado** enquanto `RALPH_MEM0_USER` nao for definida |
+| `RALPH_MEMORY` | pagina por fase no ai-memory (`ralph/<feature>/phase-NN.md`, pos-commit, sem LLM); `0` desliga. Sem o binario ou com o servidor fora do ar, desliga sozinha |
+| `RALPH_MEMORY_BIN` | binario do ai-memory (default `ai-memory` no PATH) |
+| `RALPH_HOOK_ISOLATION` | `0` deixa os hooks do ai-memory rodarem nas sessoes do ralph. Default `1`: isola, porque o SessionStart deles consome handoffs e contamina a sessao fria e o gate 3 |
 | `RALPH_VERBOSE` | `1` espelha a saida da engine na tela |
 | `RALPH_DASHBOARD` | `1` liga o painel embutido |
 
@@ -146,7 +148,8 @@ container.
     ├── run.log                 log linear do run inteiro
     ├── phase-NN.cycle-M.log    sessao de implementacao
     ├── phase-NN.test-M.log     saida do gate 2
-    └── phase-NN.verify-M.log   veredito task a task do gate 3
+    ├── phase-NN.verify-M.log   veredito task a task do gate 3
+    └── phase-NN.memory.log     saida do `ai-memory write-page`
 ```
 
 `.phases/` e registrado em `.git/info/exclude` automaticamente — o ralph nao mexe
@@ -164,6 +167,8 @@ no `.gitignore` do projeto.
 | fase reprova em todo ciclo ate esgotar | task com escape condicional (*"faca X, mas se ficar estranho, deixe"*). O verificador escolhe INCOMPLETE na duvida |
 | gate 2 sempre vermelho no primeiro run | Sail parado, ou `.env.testing` ausente |
 | o run reinicia da fase 1 depois de voce editar o plano | editar o `project-phases.md` invalida o stamp e zera `.progress`. Use `--from N` |
+| preflight aborta com `Hooks do ai-memory em ... sem jq` | os hooks do ai-memory estao na config de usuario e o isolamento precisa do `jq`. Instale o `jq`; `RALPH_HOOK_ISOLATION=0` so se aceitar que as sessoes consumam handoffs |
+| `Falha ao gravar no ai-memory` | leia `.phases/logs/phase-NN.memory.log`. Servidor caiu no meio do run: `ai-memory status`; no macOS, `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. A fase continua valida |
 
 Quando uma fase falhar, leia nesta ordem:
 `.phases/logs/phase-NN.verify-M.log` (o que o verificador reprovou) →

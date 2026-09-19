@@ -36,12 +36,12 @@ assert_eq() {
 
 assert_contains() {
   local haystack_file="$1" needle="$2" msg="$3"
-  if grep -qF "$needle" "$haystack_file"; then ok "$msg"; else bad "$msg (nao achou '$needle')"; fi
+  if grep -qF -- "$needle" "$haystack_file"; then ok "$msg"; else bad "$msg (nao achou '$needle')"; fi
 }
 
 assert_not_contains() {
   local haystack_file="$1" needle="$2" msg="$3"
-  if grep -qF "$needle" "$haystack_file"; then bad "$msg (achou '$needle')"; else ok "$msg"; fi
+  if grep -qF -- "$needle" "$haystack_file"; then bad "$msg (achou '$needle')"; else ok "$msg"; fi
 }
 
 # ---------------------------------------------------------------------------
@@ -88,6 +88,17 @@ if [ "$name" = "claude" ]; then
       --model) model="$2"; shift 2 ;;
       --effort) effort="$2"; shift 2 ;;
       --output-format) shift 2 ;;
+      # Isolamento dos hooks do ai-memory: uma linha por sessao que o recebeu.
+      --setting-sources) echo "$2" >> "$state/setting_sources"; shift 2 ;;
+      --settings)
+        echo "$2" > "$state/settings_path"
+        if [ -f "$2" ]; then
+          cat "$2" > "$state/settings_json"
+          ls -l "$2" | cut -c1-10 > "$state/settings_perm"
+        else
+          printf '%s\n' "$2" > "$state/settings_json"
+        fi
+        shift 2 ;;
       *) shift ;;
     esac
   done
@@ -96,7 +107,12 @@ else
     case "$1" in
       --sandbox) [ "$2" = "read-only" ] && verify=1; shift 2 ;;
       --model) model="$2"; shift 2 ;;
-      -c) case "$2" in model_reasoning_effort=*) effort="${2#*=}" ;; esac; shift 2 ;;
+      -c)
+        case "$2" in
+          model_reasoning_effort=*) effort="${2#*=}" ;;
+          hooks.state=*) echo "$2" >> "$state/hook_overrides" ;;
+        esac
+        shift 2 ;;
       *) shift ;;
     esac
   done
@@ -104,18 +120,6 @@ else
 fi
 
 grep -q '^RALPH_VERIFY' <<< "$prompt" && verify=1
-
-# --- sessao de memoria (mem0) ------------------------------------------------
-# Sessao propria, uma tool call so: nao e implementacao e nao pode contar como
-# tal. O nome da tool e o gatilho — se o ralph pedir uma tool que nao existe,
-# este ramo nao dispara e o teste fica vermelho.
-if grep -q 'mcp__mem0__add_memory' <<< "$prompt"; then
-  echo "$model" > "$state/mem0_model"
-  echo "$disallowed" > "$state/mem0_disallowed"
-  bump mem0_calls > /dev/null
-  echo "DONE"
-  exit 0
-fi
 
 # Grava o modelo pedido para a sessao verificadora (assert do teste de modelo).
 if [ "$verify" -eq 1 ] && [ -n "$model" ]; then
@@ -229,6 +233,30 @@ MOCK
   chmod +x "$bin/mock-engine"
   cp "$bin/mock-engine" "$bin/claude"
   cp "$bin/mock-engine" "$bin/codex"
+
+  # ai-memory fake: `status` responde conforme MOCK_MEMORY_STATUS; `write-page`
+  # guarda args e corpo por chamada e sai conforme MOCK_MEMORY_WRITE. Grava o
+  # HEAD no momento da chamada para provar que a pagina e escrita pos-commit.
+  cat > "$bin/ai-memory" <<'MEMMOCK'
+#!/usr/bin/env bash
+set -uo pipefail
+state="${MOCK_STATE:?}"
+case "${1:-}" in
+  status) exit "${MOCK_MEMORY_STATUS:-0}" ;;
+  write-page)
+    f="$state/memory_calls"; n=0
+    [ -f "$f" ] && n=$(cat "$f")
+    n=$((n + 1)); echo "$n" > "$f"
+    shift
+    printf '%s\n' "$*" > "$state/memory_args-$n"
+    cat > "$state/memory_body-$n"
+    git rev-parse --short HEAD > "$state/memory_head-$n"
+    exit "${MOCK_MEMORY_WRITE:-0}"
+    ;;
+esac
+exit 0
+MEMMOCK
+  chmod +x "$bin/ai-memory"
 }
 
 make_testcmd() {
@@ -320,7 +348,9 @@ SAILMOCK
 new_case() {
   local name="$1"
   local dir="$TMP/$name"
-  mkdir -p "$dir/repo" "$dir/state" "$dir/bin"
+  # claude-home / codex-home: config de usuario da engine. Vazias, a suite nao
+  # depende dos hooks instalados na maquina de quem roda os testes.
+  mkdir -p "$dir/repo" "$dir/state" "$dir/bin" "$dir/claude-home" "$dir/codex-home"
   make_mocks "$dir/bin"
   make_testcmd "$dir/test.sh"
 
@@ -353,7 +383,15 @@ run_ralph() {
     RALPH_VERIFY_MODEL="${CASE_VERIFY_MODEL:-}" \
     RALPH_VERIFY_EFFORT="${CASE_VERIFY_EFFORT:-}" \
     RALPH_SMOKE="${CASE_SMOKE:-0}" \
-    RALPH_MEM0="${CASE_MEM0:-0}" \
+    RALPH_MEMORY="${CASE_MEMORY:-0}" \
+    RALPH_MEMORY_BIN="${CASE_MEMORY_BIN:-ai-memory}" \
+    RALPH_HOOK_ISOLATION="${CASE_HOOK_ISOLATION:-1}" \
+    RALPH_MEM0="" \
+    RALPH_MEM0_USER="${CASE_MEM0_USER:-}" \
+    MOCK_MEMORY_STATUS="${CASE_MEMORY_STATUS:-0}" \
+    MOCK_MEMORY_WRITE="${CASE_MEMORY_WRITE:-0}" \
+    CLAUDE_CONFIG_DIR="$dir/claude-home" \
+    CODEX_HOME="$dir/codex-home" \
       bash "$RALPH" "$@" > "$dir/out.log" 2>&1
   ) || rc=$?
   echo "$rc"
@@ -362,6 +400,9 @@ run_ralph() {
 commits() { git -C "$1/repo" rev-list --count HEAD; }
 
 case_enabled() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
+
+# count_lines <arquivo> -> numero de linhas; 0 quando o arquivo nao existe
+count_lines() { if [ -f "$1" ]; then wc -l < "$1" | tr -d ' '; else echo 0; fi; }
 
 header() { CURRENT="$1"; echo -e "\n${YELLOW}== $1${NC}"; }
 
@@ -716,18 +757,18 @@ fi
 echo ""
 
 # ---------------------------------------------------------------------------
-# 22. Patches locais: smoke test da engine + memoria no mem0 por fase
+# 22. Patches locais: smoke test da engine + pagina por fase no ai-memory
 # ---------------------------------------------------------------------------
 if case_enabled local-patches; then
-  header "22. smoke test + mem0 (patches locais)"
+  header "22. smoke test + ai-memory (patches locais)"
 
   CASE_SMOKE=1
-  CASE_MEM0=1
+  CASE_MEMORY=1
   d=$(new_case local-patches)
   rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
-  assert_eq 0 "$rc" "exit 0 com smoke e mem0 ligados"
+  assert_eq 0 "$rc" "exit 0 com smoke e memoria ligados"
   assert_contains "$d/out.log" "Smoke test OK" "smoke test rodou no preflight"
-  assert_contains "$d/out.log" "Memoria gravada no mem0" "mem0 gravou a fase"
+  assert_contains "$d/out.log" "Memoria gravada no ai-memory" "ai-memory gravou a fase"
   assert_eq 3 "$(commits "$d")" "fases commitadas normalmente (1 fixture + 2 fases)"
 
   d=$(new_case local-patches-nosmoke)
@@ -737,7 +778,7 @@ if case_enabled local-patches; then
   assert_not_contains "$d/out.log" "Smoke test OK" "nenhuma sessao gasta no smoke"
 
   CASE_SMOKE=0
-  CASE_MEM0=0
+  CASE_MEMORY=0
 fi
 
 # ---------------------------------------------------------------------------
@@ -910,20 +951,35 @@ if case_enabled verify-readonly; then
 fi
 
 # ---------------------------------------------------------------------------
-# 31. Sessao de memoria: tool que existe, no modelo barato
-#     O ramo mem0 do mock so dispara com o nome exato da tool. Modelo tem de
-#     ser o do verificador: gravar 2 frases nao vale o modelo de implementacao.
+# 31. Memoria por fase: pagina no ai-memory, sem sessao de engine
+#     `ai-memory write-page` e deterministico: nenhuma sessao a mais (impl_calls
+#     nao muda), vale nas duas engines, e roda DEPOIS do commit — o SHA da
+#     pagina e o da fase fechada.
 # ---------------------------------------------------------------------------
-if case_enabled mem0-session; then
-  header "31. mem0 usa tool existente e modelo do verificador"
-  d=$(new_case mem0-session)
-  rc=$(CASE_MEM0=1 CASE_VERIFY_MODEL=modelo-barato \
-       run_ralph "$d" ok --engine claude --model modelo-caro --test-cmd "$d/test.sh")
+if case_enabled memory-page; then
+  header "31. pagina por fase no ai-memory, pos-commit, sem sessao extra"
+  d=$(new_case memory-page)
+  rc=$(CASE_MEMORY=1 run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "exit 0"
-  assert_eq 2 "$(cat "$d/state/mem0_calls" 2>/dev/null || echo 0)" "1 sessao de mem0 por fase (2 fases)"
-  assert_eq "modelo-barato" "$(cat "$d/state/mem0_model" 2>/dev/null || echo VAZIO)" "mem0 no modelo do verificador, nao no de implementacao"
-  assert_eq 2 "$(cat "$d/state/impl_calls")" "sessao de mem0 nao conta como implementacao"
+  assert_eq 2 "$(cat "$d/state/memory_calls" 2>/dev/null || echo 0)" "1 write-page por fase (2 fases)"
+  assert_eq 2 "$(cat "$d/state/impl_calls")" "memoria nao abre sessao de engine"
   assert_eq 3 "$(commits "$d")" "as 2 fases seguem commitadas"
+  assert_contains "$d/state/memory_args-1" "--path ralph/init/phase-01.md" "pagina da fase 1 em ralph/<feature>/"
+  assert_contains "$d/state/memory_args-2" "--path ralph/init/phase-02.md" "pagina da fase 2 em ralph/<feature>/"
+  assert_contains "$d/state/memory_args-1" "--tier episodic" "tier episodic"
+  assert_contains "$d/state/memory_args-1" "--tag ralph --tag init" "tags ralph + feature"
+  assert_contains "$d/state/memory_args-1" "--body -" "corpo via stdin"
+  assert_contains "$d/state/memory_body-1" "# init — Phase 1: Foundation" "titulo da pagina"
+  assert_contains "$d/state/memory_body-1" "cria o arquivo A" "plano da fase no corpo"
+  phase1=$(git -C "$d/repo" log --format=%h --grep='feat(phase-1)')
+  assert_eq "$phase1" "$(cat "$d/state/memory_head-1" 2>/dev/null)" "gravada com a fase 1 ja commitada"
+  assert_contains "$d/state/memory_body-1" "Commit: \`$phase1\`" "SHA da fase no corpo"
+  assert_contains "$d/state/memory_body-1" "src/impl-1.txt" "arquivos da fase no corpo"
+
+  d=$(new_case memory-page-codex)
+  rc=$(CASE_MEMORY=1 run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "codex: exit 0"
+  assert_eq 2 "$(cat "$d/state/memory_calls" 2>/dev/null || echo 0)" "codex tambem grava 1 pagina por fase"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1108,6 +1164,140 @@ PTY_EOF
     probe_frame 30 90
     probe_frame 30 78
   fi
+fi
+
+# ---------------------------------------------------------------------------
+# 36. Memoria falha aberta: sem binario, servidor fora ou escrita recusada, o
+#     run segue verde e as fases sao commitadas. Memoria e registro, nao gate.
+# ---------------------------------------------------------------------------
+if case_enabled memory-fail-open; then
+  header "36. ai-memory ausente ou fora do ar nao derruba o run"
+  d=$(new_case memory-missing)
+  rc=$(CASE_MEMORY=1 CASE_MEMORY_BIN=/nao/existe/ai-memory \
+       run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "sem binario: exit 0"
+  assert_contains "$d/out.log" "ai-memory nao encontrado" "sem binario: memoria desligada no preflight"
+  assert_eq 3 "$(commits "$d")" "sem binario: fases commitadas"
+
+  d=$(new_case memory-down)
+  rc=$(CASE_MEMORY=1 CASE_MEMORY_STATUS=1 run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "servidor fora: exit 0"
+  assert_contains "$d/out.log" "Servidor do ai-memory fora do ar" "servidor fora: aviso no preflight"
+  assert_eq 0 "$(cat "$d/state/memory_calls" 2>/dev/null || echo 0)" "servidor fora: nenhuma escrita tentada"
+
+  d=$(new_case memory-write-fails)
+  rc=$(CASE_MEMORY=1 CASE_MEMORY_WRITE=1 run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "escrita recusada: exit 0"
+  assert_contains "$d/out.log" "Falha ao gravar no ai-memory" "escrita recusada: aviso por fase"
+  assert_eq 3 "$(commits "$d")" "escrita recusada: fases commitadas"
+
+  d=$(new_case memory-legacy-env)
+  rc=$(CASE_MEM0_USER=alguem run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "variavel antiga: exit 0"
+  assert_contains "$d/out.log" "RALPH_MEM0/RALPH_MEM0_USER foram removidas" "variavel antiga do mem0 avisa"
+fi
+
+# ---------------------------------------------------------------------------
+# 37. Isolamento dos hooks do ai-memory no claude
+#     O SessionStart do ai-memory consome handoffs (GET destrutivo) e injeta
+#     contexto. Toda sessao do ralph — smoke, impl, gate 3 — roda sem a config
+#     de usuario e recebe de volta essa mesma config MENOS os hooks do ai-memory:
+#     model, plugins e os demais hooks do usuario continuam.
+# ---------------------------------------------------------------------------
+if case_enabled hook-isolation-claude; then
+  header "37. claude: sessoes do ralph sem os hooks do ai-memory"
+  d=$(new_case hook-isolation-claude)
+  cat > "$d/claude-home/settings.json" <<'JSON'
+{
+  "model": "opus",
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "rtk hook claude" } ] },
+      { "matcher": "", "hooks": [ { "type": "command", "command": "/bin/ai-memory hook --event pre-tool-use --agent claude-code" } ] }
+    ],
+    "SessionStart": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "/bin/ai-memory hook --event session-start --agent claude-code" } ] }
+    ]
+  },
+  "enabledPlugins": { "mktux@mktux-harness": true }
+}
+JSON
+  rc=$(CASE_SMOKE=1 run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  assert_contains "$d/out.log" "Hooks do ai-memory isolados" "preflight anuncia o isolamento"
+  sessions=$(( $(cat "$d/state/impl_calls") + $(cat "$d/state/verify_calls" 2>/dev/null || echo 0) ))
+  assert_eq "$sessions" "$(count_lines "$d/state/setting_sources")" "toda sessao (smoke, impl, gate 3) isolada"
+  assert_eq "project,local" "$(sort -u "$d/state/setting_sources" 2>/dev/null)" "sem a camada user de settings"
+  assert_not_contains "$d/state/settings_json" "ai-memory" "config devolvida sem os hooks do ai-memory"
+  assert_not_contains "$d/state/settings_json" "SessionStart" "evento que so tinha ai-memory some"
+  assert_contains "$d/state/settings_json" "rtk hook claude" "demais hooks do usuario continuam"
+  assert_contains "$d/state/settings_json" '"model":"opus"' "model do usuario continua"
+  assert_contains "$d/state/settings_json" "mktux@mktux-harness" "plugins do usuario continuam"
+  settings_path=$(cat "$d/state/settings_path" 2>/dev/null)
+  assert_eq "-rw-------" "$(cat "$d/state/settings_perm" 2>/dev/null)" "settings vai por arquivo 0600, nao por argv"
+  case "$settings_path" in
+    "$d/repo"/*) bad "settings fora do repo (veio $settings_path)" ;;
+    *) ok "settings fora do repo" ;;
+  esac
+  if [ -n "$settings_path" ] && [ ! -e "$settings_path" ]; then
+    ok "settings temporario apagado no fim do run"
+  else
+    bad "settings temporario apagado no fim do run (sobrou $settings_path)"
+  fi
+
+  d=$(new_case hook-isolation-claude-off)
+  cp "$TMP/hook-isolation-claude/claude-home/settings.json" "$d/claude-home/"
+  rc=$(CASE_HOOK_ISOLATION=0 run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "RALPH_HOOK_ISOLATION=0: exit 0"
+  assert_eq 0 "$(count_lines "$d/state/setting_sources")" "RALPH_HOOK_ISOLATION=0 desliga"
+
+  d=$(new_case hook-isolation-claude-none)
+  echo '{ "model": "opus", "statusLine": { "command": "echo ai-memory" } }' > "$d/claude-home/settings.json"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "sem hooks do ai-memory: exit 0"
+  assert_eq 0 "$(count_lines "$d/state/setting_sources")" "nome fora dos hooks nao isola nada"
+fi
+
+# ---------------------------------------------------------------------------
+# 38. Isolamento dos hooks do ai-memory no codex
+#     Desliga por hooks.state so os handlers do ai-memory, com a chave que o
+#     codex usa: <hooks.json>:<evento snake_case>:<grupo>:<handler>. Os outros
+#     handlers do mesmo grupo continuam.
+# ---------------------------------------------------------------------------
+if case_enabled hook-isolation-codex; then
+  header "38. codex: sessoes do ralph sem os hooks do ai-memory"
+  d=$(new_case hook-isolation-codex)
+  cat > "$d/codex-home/hooks.json" <<'JSON'
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "/bin/ai-memory hook --event session-start --agent codex" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "echo meu-hook" },
+        { "type": "command", "command": "/bin/ai-memory hook --event pre-tool-use --agent codex" }
+      ] }
+    ],
+    "UserPromptSubmit": [
+      { "matcher": "", "hooks": [ { "type": "command", "command": "/bin/ai-memory hook --event user-prompt-submit --agent codex" } ] }
+    ]
+  }
+}
+JSON
+  rc=$(run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  hooks_json="$d/codex-home/hooks.json"
+  assert_eq 0 "$rc" "exit 0"
+  sessions=$(( $(cat "$d/state/impl_calls") + $(cat "$d/state/verify_calls" 2>/dev/null || echo 0) ))
+  assert_eq "$sessions" "$(count_lines "$d/state/hook_overrides")" "toda sessao (impl, gate 3) isolada"
+  expected="hooks.state={\"$hooks_json:session_start:0:0\"={enabled=false},\"$hooks_json:pre_tool_use:0:1\"={enabled=false},\"$hooks_json:user_prompt_submit:0:0\"={enabled=false}}"
+  assert_eq "$expected" "$(sort -u "$d/state/hook_overrides" 2>/dev/null)" "desliga so os handlers do ai-memory, chave no formato do codex"
+
+  d=$(new_case hook-isolation-codex-off)
+  cp "$TMP/hook-isolation-codex/codex-home/hooks.json" "$d/codex-home/"
+  rc=$(CASE_HOOK_ISOLATION=0 run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "RALPH_HOOK_ISOLATION=0: exit 0"
+  assert_eq 0 "$(count_lines "$d/state/hook_overrides")" "RALPH_HOOK_ISOLATION=0 desliga"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

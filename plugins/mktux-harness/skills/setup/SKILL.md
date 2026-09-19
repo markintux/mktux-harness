@@ -76,6 +76,34 @@ tail -3 .harness/events.jsonl
 Se o arquivo nao existir depois de um turno completo, o plugin nao esta carregado
 naquela engine. Confira com `/plugin` (Claude) ou `codex plugin list` (Codex).
 
+## 4. Memoria de longo prazo — ai-memory (opcional, uma vez por maquina)
+
+A memoria do harness e o [ai-memory](https://github.com/akitaonrails/ai-memory):
+servidor local em `127.0.0.1:49374`, wiki markdown versionada em git, hooks no
+Claude Code e no Codex. Sem ele o ralph roda igual. O passo a passo completo
+(binario, launchd, hooks, MCP) esta na secao "Memoria de longo prazo" do README.
+
+Depois de instalar, confira:
+
+```bash
+ai-memory status                  # servidor responde
+command -v jq                     # o ralph precisa dele para isolar os hooks
+grep -c ai-memory ~/.claude/settings.json ~/.codex/hooks.json
+```
+
+- **Codex:** hook novo so roda depois de confiado. Abra o `codex` uma vez e
+  escolha *Trust all* em `/hooks`.
+- **Instale os hooks na config de usuario**, nao na de projeto. O ralph so
+  detecta os hooks na config de usuario, e so os que detecta ele isola das
+  sessoes frias.
+- `ai-memory install-instructions` grava um bloco `<!-- ai-memory:start -->`
+  no `CLAUDE.md`/`AGENTS.md`. O `/mktux:ai-context` preserva esse bloco.
+
+O que o ralph faz com o ai-memory: grava uma pagina `ralph/<feature>/phase-NN.md`
+por fase, depois do commit, sem LLM. Todas as sessoes rodam isoladas dos hooks
+do ai-memory, porque o SessionStart deles consome handoffs. Detalhes na skill
+`ralph`.
+
 ## O que cada hook faz
 
 | Hook | Quando | O que faz |

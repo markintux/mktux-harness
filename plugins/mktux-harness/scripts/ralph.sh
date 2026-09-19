@@ -93,7 +93,7 @@
 # Variaveis de ambiente:
 #   RALPH_TEST_CMD           comando de teste (gate 2); --test-cmd tem prioridade
 #   RALPH_VERIFY             gate 3: always (default) | auto | off
-#   RALPH_VERIFY_MODEL       modelo das sessoes auxiliares — gate 3 e mem0
+#   RALPH_VERIFY_MODEL       modelo das sessoes auxiliares (gate 3)
 #                            (default: haiku no claude, gpt-5.6-luna no codex)
 #   RALPH_VERIFY_EFFORT      esforco dessas sessoes (default: low no codex; no
 #                            claude fica com o default do modelo)
@@ -102,10 +102,13 @@
 #   RALPH_LIMIT_WAIT_DEFAULT fallback de espera em segundos (default: 1800)
 #   RALPH_LIMIT_BUFFER       segundos extras apos o reset (default: 60)
 #   RALPH_SMOKE              0 desliga o smoke test da engine (default: 1)
-#   RALPH_MEM0               0 desliga a gravacao de memoria no mem0 (default: 1)
-#   RALPH_MEM0_USER          userId do mem0. SEM default: nao definida, a gravacao
-#                            no mem0 fica desligada (o plugin mem0, quando instalado,
-#                            ja captura por hooks — isto aqui e so o resumo por fase)
+#   RALPH_MEMORY             0 desliga a pagina por fase no ai-memory (default: 1;
+#                            sem o binario ou com o servidor fora do ar, desliga
+#                            sozinha com aviso no preflight)
+#   RALPH_MEMORY_BIN         binario do ai-memory (default: ai-memory no PATH)
+#   RALPH_HOOK_ISOLATION     0 deixa os hooks do ai-memory rodarem nas sessoes do
+#                            ralph (default: 1 — isola quando os detecta na config
+#                            de usuario do claude ou do codex)
 #   RALPH_VERBOSE            1 espelha a saida da engine na tela (default: 0)
 #   RALPH_DASHBOARD          1 liga o painel embutido (igual a --dashboard)
 #
@@ -135,6 +138,7 @@
 #   - Codex: npm install -g @openai/codex + OPENAI_API_KEY
 #   - Claude: npm install -g @anthropic-ai/claude-code + ANTHROPIC_API_KEY
 #   - Raiz de um repo git, com a arvore de trabalho limpa
+#   - Opcional: ai-memory (pagina por fase) — github.com/akitaonrails/ai-memory
 
 set -euo pipefail
 
@@ -151,8 +155,9 @@ MODEL=""
 EFFORT=""
 SKIP_SMOKE=0
 if [ "${RALPH_SMOKE:-1}" = "0" ]; then SKIP_SMOKE=1; fi
-MEM0_ENABLED="${RALPH_MEM0:-1}"
-MEM0_USER_ID="${RALPH_MEM0_USER:-}"
+MEMORY_ENABLED="${RALPH_MEMORY:-1}"
+MEMORY_BIN="${RALPH_MEMORY_BIN:-ai-memory}"
+HOOK_ISOLATION="${RALPH_HOOK_ISOLATION:-1}"
 VERBOSE=0
 if [ "${RALPH_VERBOSE:-0}" = "1" ]; then VERBOSE=1; fi
 DASHBOARD=0
@@ -177,7 +182,7 @@ while [[ $# -gt 0 ]]; do
     --no-smoke)    SKIP_SMOKE=1; shift ;;
     --verbose)     VERBOSE=1; shift ;;
     --dashboard)   DASHBOARD=1; shift ;;
-    -h|--help)     sed -n '2,135p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,142p' "$0"; exit 0 ;;
     *)             INPUT_FILE="$1"; shift ;;
   esac
 done
@@ -201,9 +206,15 @@ LIMIT_WAITS=0
 # Flags de modelo/effort montadas uma vez: o smoke test e o loop usam as MESMAS,
 # entao o que passa no smoke e literalmente o que roda em cada fase.
 ENGINE_IMPL_ARGS=()
-# Flags das sessoes auxiliares (gate 3 e mem0): modelo barato, nunca o de
-# implementacao. Sao leitura + uma tool call, nao valem opus/xhigh por fase.
+# Flags das sessoes auxiliares (gate 3): modelo barato, nunca o de
+# implementacao. Sao leitura + checklist, nao valem opus/xhigh por fase.
 ENGINE_VERIFY_ARGS=()
+# Flags que tiram os hooks do ai-memory de TODA sessao do ralph (smoke, impl,
+# gate 3). Montadas no preflight por resolve_hook_isolation.
+ENGINE_ISOLATION_ARGS=()
+# Settings filtrado do claude. Arquivo 0600 fora do repo, nao argv: o
+# settings.json pode ter segredo no bloco env, e argv aparece no `ps`.
+ISOLATION_SETTINGS_FILE=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -401,6 +412,119 @@ resolve_test_cmd() {
   fi
 }
 
+# Tira os hooks do ai-memory das sessoes do ralph. O SessionStart deles faz um
+# GET destrutivo em /handoff e injeta o resultado como contexto: sem isto a fase
+# 1 consome o handoff que o humano deixou, cada sessao recebe o "onde parou" da
+# anterior (quebra a sessao fria e contamina o juiz do gate 3 — o
+# --strict-mcp-config nao ajuda, hook nao e MCP) e o fim do run deixa como
+# handoff a sessao do verificador. O registro do run vai por save_memory.
+#
+# Os hooks ficam na config de USUARIO e o ai-memory nao tem variavel de ambiente
+# que os desligue, entao a engine recebe a config sem eles:
+#   claude: --setting-sources project,local + --settings com o settings.json do
+#           usuario MENOS os hooks do ai-memory. Sem o --settings a sessao perde
+#           model, effortLevel, plugins e os demais hooks do usuario.
+#   codex:  -c hooks.state={"<hooks.json>:<evento>:<grupo>:<handler>"={enabled=false}}
+#           so para os handlers do ai-memory. O -c faz merge em hooks.state: a
+#           confianca gravada dos outros hooks (inclusive os do mktux) continua.
+resolve_hook_isolation() {
+  ENGINE_ISOLATION_ARGS=()
+  [ "$HOOK_ISOLATION" = "0" ] && return 0
+
+  local hooks_file
+  if [[ "$ENGINE" == "claude" ]]; then
+    hooks_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+  else
+    hooks_file="${CODEX_HOME:-$HOME/.codex}/hooks.json"
+  fi
+  grep -qs 'ai-memory' "$hooks_file" || return 0
+
+  if ! command -v jq &> /dev/null; then
+    fail "Hooks do ai-memory em $hooks_file, mas sem jq nao da para isola-los das sessoes."
+    fail "Instale o jq, ou rode com RALPH_HOOK_ISOLATION=0 (a fase 1 consome seus handoffs)."
+    exit 1
+  fi
+
+  local out rc=0
+  if [[ "$ENGINE" == "claude" ]]; then
+    # O nome pode estar fora dos hooks (statusLine, env...): so isola se algum
+    # handler de hook e do ai-memory.
+    out=$(jq -r '[(.hooks // {})[][] | .hooks[]? | .command // "" | select(contains("ai-memory"))]
+      | length' "$hooks_file") || rc=$?
+    if [ "$rc" -eq 0 ] && [ "$out" != "0" ]; then
+      out=$(jq -c '.hooks |= (with_entries(.value |= (
+          map(.hooks |= map(select((.command // "") | contains("ai-memory") | not)))
+          | map(select(.hooks | length > 0))))
+        | with_entries(select(.value | length > 0)))' "$hooks_file") || rc=$?
+    else
+      out=""
+    fi
+  else
+    out=$(jq -r --arg src "$hooks_file" '
+      [ (.hooks // {}) | to_entries[] | .key as $ev
+        | ($ev | gsub("(?<a>[a-z0-9])(?<b>[A-Z])"; "\(.a)_\(.b)") | ascii_downcase) as $event
+        | .value | to_entries[] | .key as $group
+        | .value.hooks // [] | to_entries[]
+        | select((.value.command // "") | contains("ai-memory"))
+        | "\"\($src):\($event):\($group):\(.key)\"={enabled=false}" ]
+      | if length == 0 then "" else "hooks.state={" + join(",") + "}" end' "$hooks_file") || rc=$?
+  fi
+
+  if [ "$rc" -ne 0 ]; then
+    fail "Nao consegui ler $hooks_file para isolar os hooks do ai-memory."
+    fail "Corrija o arquivo, ou rode com RALPH_HOOK_ISOLATION=0."
+    exit 1
+  fi
+  # O nome aparece no arquivo, mas em nenhum handler de hook: nada a isolar.
+  [ -n "$out" ] || return 0
+
+  if [[ "$ENGINE" == "claude" ]]; then
+    ISOLATION_SETTINGS_FILE=$(mktemp "${TMPDIR:-/tmp}/ralph-settings.XXXXXX")
+    trap 'cleanup_run' EXIT
+    printf '%s\n' "$out" > "$ISOLATION_SETTINGS_FILE"
+    ENGINE_ISOLATION_ARGS=(--setting-sources project,local --settings "$ISOLATION_SETTINGS_FILE")
+  else
+    ENGINE_ISOLATION_ARGS=(-c "$out")
+  fi
+  log "Hooks do ai-memory isolados das sessoes do ralph ($hooks_file)"
+}
+
+cleanup_run() {
+  [ -z "$ISOLATION_SETTINGS_FILE" ] || rm -f "$ISOLATION_SETTINGS_FILE"
+}
+
+# Pagina da wiki por fase: ralph/<feature>/phase-NN.md. A feature e a pasta do
+# input (docs/features/<slug>/project-phases.md -> <slug>).
+memory_feature_slug() {
+  local slug
+  slug=$(basename "$(cd "$(dirname "$INPUT_FILE")" && pwd)" | tr '[:upper:]' '[:lower:]' \
+    | tr -cs 'a-z0-9-' '-' | sed 's/^-*//; s/-*$//')
+  printf '%s\n' "${slug:-projeto}"
+}
+
+# Decide UMA vez se o run grava memoria. Sem o binario e silencioso (quem nao usa
+# ai-memory nao precisa de aviso a cada run); binario presente com o servidor
+# fora do ar e aviso alto — cada fase falharia a gravacao em silencio.
+resolve_memory() {
+  if [ -n "${RALPH_MEM0:-}${RALPH_MEM0_USER:-}" ]; then
+    warn "RALPH_MEM0/RALPH_MEM0_USER foram removidas: a memoria agora e o ai-memory (RALPH_MEMORY)."
+  fi
+
+  [ "$MEMORY_ENABLED" = "1" ] || return 0
+
+  if ! command -v "$MEMORY_BIN" &> /dev/null; then
+    log "ai-memory nao encontrado — pagina por fase desligada (fora do PATH? defina RALPH_MEMORY_BIN)"
+    MEMORY_ENABLED=0
+    return 0
+  fi
+  if ! "$MEMORY_BIN" status < /dev/null > /dev/null 2>&1; then
+    warn "Servidor do ai-memory fora do ar ('$MEMORY_BIN status' falhou) — pagina por fase desligada neste run."
+    MEMORY_ENABLED=0
+    return 0
+  fi
+  log "Memoria por fase: ai-memory, paginas ralph/$(memory_feature_slug)/phase-NN.md"
+}
+
 # Chama a engine uma vez com as flags reais e um prompt trivial, antes do loop.
 # Pega o que a validacao estatica nao pega: modelo inexistente, effort nao
 # suportado POR AQUELE modelo, auth expirada, quota zerada. Sem isso o erro so
@@ -412,9 +536,11 @@ engine_smoke_test() {
 
   if [[ "$ENGINE" == "codex" ]]; then
     out=$(echo 'Responda apenas: OK' | codex exec ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} \
+      ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
       --color never --sandbox read-only - 2>&1) || rc=$?
   else
     out=$(env -u CLAUDECODE claude ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} \
+      ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
       -p 'Responda apenas: OK' --output-format text < /dev/null 2>&1) || rc=$?
   fi
 
@@ -552,6 +678,8 @@ preflight_checks() {
   fi
 
   resolve_test_cmd
+  resolve_hook_isolation
+  resolve_memory
 
   success "Pre-checks OK (engine: $ENGINE, input: $INPUT_FILE, model: ${MODEL:-default}, effort: ${EFFORT:-default})"
 
@@ -912,7 +1040,7 @@ start_dashboard() {
   bash "$watch" --embedded "$PWD" < /dev/tty > /dev/tty 2>&1 &
   DASHBOARD_PID=$!
 
-  trap 'stop_dashboard' EXIT
+  trap 'stop_dashboard; cleanup_run' EXIT
   trap 'stop_dashboard; exit 130' INT
   trap 'stop_dashboard; exit 143' TERM
 }
@@ -1303,9 +1431,11 @@ run_engine() {
     if [[ "$ENGINE" == "codex" ]]; then
       if [[ "$mode" == "verify" ]]; then
         run_logged "$log_file" codex exec --color never --sandbox read-only \
+          ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${model_args[@]+"${model_args[@]}"} - < "$prompt_file" || rc=$?
       else
         run_logged "$log_file" codex exec --color never --sandbox danger-full-access \
+          ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} - < "$prompt_file" || rc=$?
       fi
     else
@@ -1321,6 +1451,7 @@ run_engine() {
         # nenhum MCP server; carregar os schemas custa ~4k tokens por fase.
         run_logged "$log_file" env -u CLAUDECODE claude --dangerously-skip-permissions \
           --strict-mcp-config \
+          ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${model_args[@]+"${model_args[@]}"} \
           -p "$(cat "$prompt_file")" \
           --disallowedTools "Write,Edit,NotebookEdit,Bash" \
@@ -1328,6 +1459,7 @@ run_engine() {
       else
         # JSON: o exit code do CLI e sinal fraco; o gate 0 le is_error.
         run_logged "$log_file" env -u CLAUDECODE claude --dangerously-skip-permissions \
+          ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} \
           -p "$(cat "$prompt_file")" \
           --output-format json < /dev/null || rc=$?
@@ -1656,52 +1788,48 @@ gate3_independent_verify() {
 # Execucao de fase
 # ---------------------------------------------------------------------------
 
-# Grava a memoria da fase no mem0 de forma deterministica, FORA do run agentico.
-# No run grande o agente passa nos testes e encerra sem chamar o mem0, por mais
-# que o prompt peca. Aqui e uma sessao dedicada, escopo de uma tool so — padrao
-# ja testado e confiavel.
+# Grava a fase como pagina da wiki do projeto no ai-memory, FORA do run agentico
+# e sem LLM: `ai-memory write-page` e um POST deterministico, sem sessao extra
+# nem tool call que o agente pode esquecer de fazer. A pagina e upsert por
+# caminho (ralph/<feature>/phase-NN.md): re-rodar com --from atualiza, nao
+# duplica. Vale para as duas engines — as sessoes rodam isoladas dos hooks do
+# ai-memory (resolve_hook_isolation), entao esta pagina e o registro do run.
 #
-# SOMENTE no engine claude: no codex o plugin oficial do mem0 (config.toml) ja
-# auto-captura via hooks, e duplicar geraria memoria redundante e custo extra.
+# Chamada DEPOIS do commit: o SHA e o `git show --stat` sao da fase fechada.
 save_memory() {
-  local phase_file="$1" phase_title="$2"
+  local phase_file="$1" phase_num="$2" phase_title="$3" cycles="$4" duration="$5"
 
-  [ "$MEM0_ENABLED" = "1" ] || return 0
-  [ -n "$MEM0_USER_ID" ] || return 0
-  [[ "$ENGINE" == "claude" ]] || return 0
+  [ "$MEMORY_ENABLED" = "1" ] || return 0
 
-  log "Gravando resumo da fase no mem0..."
+  local feature page mem_log
+  feature=$(memory_feature_slug)
+  page="ralph/$feature/$phase_file"
+  mem_log="$LOG_DIR/${phase_file%.md}.memory.log"
 
-  local changed_files
-  changed_files=$(git diff HEAD --name-only 2>/dev/null | head -40)
-  [ -z "$changed_files" ] && changed_files="(sem diff disponivel)"
+  local body
+  body="# $feature — Phase $phase_num: $phase_title
 
-  local mem_prompt
-  mem_prompt="You have one job: call the MCP tool \`mcp__mem0__add_memory\` exactly once. Do nothing else.
+- Feature: \`$feature\` (plano: \`$INPUT_FILE\`)
+- Commit: \`$(git rev-parse --short HEAD)\` em \`$(git rev-parse --abbrev-ref HEAD)\`
+- Engine: $ENGINE (model: ${MODEL:-default}, effort: ${EFFORT:-default})
+- Ciclos: $cycles de $MAX_CYCLES, $(format_duration "$duration")
+- Registrado pelo ralph em $(date '+%Y-%m-%d %H:%M')
 
-Params:
-- userId: \"$MEM0_USER_ID\"
-- content: a 2-3 sentence summary of the phase below, including non-obvious technical decisions.
+## Arquivos alterados
 
-Phase: $phase_title
+\`\`\`
+$(git show --stat --format= HEAD | tail -n 41)
+\`\`\`
 
-Files changed in this phase:
-$changed_files
+## Plano da fase
 
-After the tool call returns, reply with only the word DONE."
+$(cat "$PHASES_DIR/$phase_file")"
 
-  # Modelo do verificador, nunca o de implementacao: isto e uma tool call e duas
-  # frases. Com ENGINE_IMPL_ARGS a memoria de cada fase saia num opus/xhigh.
-  # --disallowedTools porque sob --dangerously-skip-permissions a allowlist nao
-  # restringe; sem MCP nao da, o mem0 E um MCP server.
-  local mem_log="$LOG_DIR/${phase_file%.md}.mem0.log"
-  if env -u CLAUDECODE claude ${ENGINE_VERIFY_ARGS[@]+"${ENGINE_VERIFY_ARGS[@]}"} \
-       --dangerously-skip-permissions -p "$mem_prompt" \
-       --disallowedTools "Write,Edit,NotebookEdit,Bash" \
-       --output-format text < /dev/null > "$mem_log" 2>&1; then
-    success "Memoria gravada no mem0 (log: $mem_log)"
+  if printf '%s\n' "$body" | "$MEMORY_BIN" write-page --path "$page" --tier episodic \
+       --tag ralph --tag "$feature" --body - > "$mem_log" 2>&1; then
+    success "Memoria gravada no ai-memory: $page"
   else
-    warn "Falha ao gravar memoria no mem0 (log: $mem_log) — fase segue valida"
+    warn "Falha ao gravar no ai-memory (log: $mem_log) — fase segue valida"
   fi
 }
 
@@ -1809,14 +1937,12 @@ run_phase() {
 
       success "Phase $phase_num: $phase_title — COMPLETA ($(format_duration "$phase_duration"))"
 
-      # Antes do commit: `git diff HEAD` ainda mostra os arquivos da fase.
-      save_memory "$phase_file" "$phase_title"
-
       if ! commit_phase "$phase_num" "$phase_title"; then
         LAST_GATE="commit"
         state_phase "$seq" failed
         return 1
       fi
+      save_memory "$phase_file" "$phase_num" "$phase_title" "$cycles_run" "$phase_duration"
       mark_phase_done "$phase_file"
       state_tasks_all "$seq" done
       state_phase "$seq" done

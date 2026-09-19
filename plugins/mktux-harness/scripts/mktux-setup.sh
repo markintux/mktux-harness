@@ -71,3 +71,18 @@ case ":$PATH:" in
     echo "Depois abra um terminal novo e teste com: ralph --help"
     ;;
 esac
+
+# Memoria e opcional: so relata o estado, nao instala nada.
+echo
+if command -v ai-memory > /dev/null 2>&1; then
+  if ai-memory status < /dev/null > /dev/null 2>&1; then
+    echo "ai-memory: servidor no ar. O ralph grava uma pagina por fase."
+  else
+    echo "AVISO: ai-memory instalado, mas o servidor nao responde ('ai-memory status')."
+  fi
+  if ! command -v jq > /dev/null 2>&1; then
+    echo "AVISO: sem jq o ralph nao isola os hooks do ai-memory e aborta no preflight."
+  fi
+else
+  echo "ai-memory: nao instalado (opcional). Veja 'Memoria de longo prazo' no README."
+fi
