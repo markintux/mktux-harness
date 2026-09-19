@@ -56,6 +56,24 @@ Opcoes que mais importam:
   no preflight, porque todo gate 2 falharia e queimaria os ciclos de correcao a
   toa.
 
+## O que a sessao de uma fase recebe
+
+Sessao fria, prompt auto-contido: preambulo de stack, o comando de teste do
+gate 2, a fase, e o **recorte** dos documentos do plano.
+
+O ralph le a linha `**Read first:**` da fase e os ids citados em qualquer ponto
+dela, e recorta dos `.md` irmaos do plano so o que a fase aponta: secao pelo
+titulo exato entre aspas, tabela pelo nome entre crases (o heading dela ou o
+bloco DBML), regra por `BR-NN` e story por `US-N.N`, com as faixas
+(`BR-07 through BR-14`) expandidas. Os
+caminhos dos documentos continuam no prompt, para consulta pontual — a sessao e
+instruida a nao ler nenhum inteiro, e a nao abrir o arquivo de fases.
+
+Motivo: com "leia os documentos de contexto", 25 de 26 sessoes de um run real
+leram todos os irmaos inteiros (~19k tokens, resident em todo turno seguinte).
+Citacao vaga (*"all CLI-facing stories"*) nao e recortada — o contrato de como
+citar esta na skill `plan-project-phases`.
+
 ## Os quatro gates
 
 Por fase, em ordem. Todos verdes → commit. Qualquer vermelho → ciclo de correcao.

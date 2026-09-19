@@ -45,7 +45,9 @@
 #     2. .spec/project-phases.md         (repos pre-init, com aviso)
 #
 #   Os .md irmaos do input (feature-description, user-stories, database-schema,
-#   ...) entram automaticamente no prompt como documentos de contexto.
+#   ...) entram no prompt: o recorte do que a fase cita (secoes, regras BR,
+#   tabelas, stories US — scripts/lib/phase-context.sh) e os caminhos, para
+#   consulta pontual.
 #
 # Contrato de formato do input (validado no preflight):
 #   - >= 1 heading `## Phase N: <titulo>`
@@ -252,6 +254,8 @@ if [ ! -f "$RALPH_LIB" ]; then
 fi
 # shellcheck disable=SC1090
 . "$RALPH_LIB"
+# shellcheck disable=SC1091
+. "$(dirname "$RALPH_LIB")/phase-context.sh"
 
 format_duration() {
   local total_seconds=$1
@@ -1070,13 +1074,14 @@ stop_dashboard() {
 # ---------------------------------------------------------------------------
 
 context_preamble() {
+  local phase_file="$1"
+
   cat <<'PREAMBLE'
 ## Descubra a stack e as convencoes antes de escrever codigo
 Este projeto pode ser de qualquer linguagem ou framework. NAO assuma nenhuma
-stack. Antes de comecar, LEIA os que existirem, nesta ordem:
+stack. Antes de comecar, LEIA:
 1. AGENTS.md ou CLAUDE.md — convencoes, comandos e regras do projeto
-2. os documentos de contexto listados abaixo, se houver
-3. os documentos citados no proprio texto da fase
+2. o contexto desta fase, recortado abaixo pelo ralph, se houver
 Use os comandos de build, teste e execucao definidos por esses documentos e pelo
 tooling ja presente no repositorio.
 
@@ -1090,21 +1095,40 @@ PREAMBLE
   # Listar os que EXISTEM de verdade, derivados do input, em vez de caminhos
   # fixos: um caminho hardcoded que nao existe faz TODA sessao — implementacao e
   # cada ciclo de correcao — queimar tool calls procurando arquivo fantasma.
-  local doc_dir sibling found=0
+  #
+  # "Leia antes de escrever codigo" fazia a sessao ler todos, inteiros, e o
+  # arquivo de fases junto: ~19k tokens no contexto de cada turno, em 25 de 26
+  # sessoes de um run real. Agora o ralph recorta o que a fase cita, e os
+  # caminhos ficam para consulta pontual. O feature-brief e o rascunho humano
+  # que o feature-description substitui: entra no recorte quando citado, fora da
+  # lista de consulta.
+  local doc_dir sibling extract docs=""
   doc_dir="$(dirname "$INPUT_FILE")"
   for sibling in "$doc_dir"/*.md; do
     [ -f "$sibling" ] || continue
-    if [ "$(basename "$sibling")" = "$(basename "$INPUT_FILE")" ]; then
-      continue
-    fi
-    if [ "$found" -eq 0 ]; then
-      echo
-      echo "## Documentos de contexto deste plano"
-      echo "Estao ao lado do arquivo de fases. Leia antes de escrever codigo:"
-      found=1
-    fi
-    echo "  - $sibling"
+    case "$(basename "$sibling")" in
+      "$(basename "$INPUT_FILE")"|feature-brief.md) continue ;;
+    esac
+    docs="${docs}  - ${sibling}"$'\n'
   done
+
+  extract=$(phase_context "$PHASES_DIR/$phase_file" "$doc_dir" "$INPUT_FILE")
+  if [ -n "$extract" ]; then
+    echo
+    echo "## Contexto desta fase"
+    echo "O ralph recortou dos documentos do plano o que esta fase cita — secoes,"
+    echo "regras, tabelas, stories. Parta daqui."
+    printf '%s\n' "$extract"
+  fi
+
+  if [ -n "$docs" ]; then
+    echo
+    echo "## Documentos do plano (consulta pontual)"
+    echo "Nao leia inteiros, e nao abra o arquivo de fases: a fase abaixo e toda a sua"
+    echo "tarefa. Precisou de algo que nao esta no contexto acima? Busque pelo id ou"
+    echo "pelo titulo (ex: rg -n 'US-2.3' <arquivo>) e leia so aquele trecho."
+    printf '%s' "$docs"
+  fi
 
   # O gate 2 roda ESTE comando. Se o agente rodar outro (ex: o runner no host em
   # vez de dentro do container), ele ve verde e o gate ve vermelho.
@@ -1138,7 +1162,7 @@ build_impl_prompt() {
   {
     echo "Voce e um desenvolvedor senior implementando uma fase deste projeto."
     echo
-    context_preamble
+    context_preamble "$phase_file"
     cat <<'TASK'
 
 ## Sua tarefa agora
@@ -1182,7 +1206,7 @@ build_fix_prompt() {
   {
     echo "Voce e um desenvolvedor senior corrigindo uma fase parcialmente implementada."
     echo
-    context_preamble
+    context_preamble "$phase_file"
     cat <<'INTRO'
 
 ## Situacao

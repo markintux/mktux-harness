@@ -1049,10 +1049,57 @@ fi
 if case_enabled sibling-docs; then
   header "32. docs irmaos do input entram no prompt"
   d=$(new_case sibling-docs)
-  mkdir -p "$d/repo/docs/features/barcode"
-  printf '%s' "$PHASES_FIXTURE" > "$d/repo/docs/features/barcode/project-phases.md"
-  echo "# stories" > "$d/repo/docs/features/barcode/user-stories.md"
-  echo "# schema" > "$d/repo/docs/features/barcode/database-schema.md"
+  fd="$d/repo/docs/features/barcode"
+  mkdir -p "$fd"
+  cat > "$fd/project-phases.md" <<'PLAN'
+# Barcode — Project Phases
+
+<!-- inputs: x -->
+
+## Phase 1: Foundation
+
+**Read first:** `feature-description.md` next to this file, section "Overview"; rule BR-02; `database-schema.md`, table `sales`.
+
+- [ ] **Task:** cria o arquivo A
+- [ ] `tests/scan` (new file) covers these scenarios, one test case each:
+  - cashier scans → item added (US-1.1)
+
+## Phase 2: Feature
+
+- [ ] **Task:** cria o arquivo C
+PLAN
+  cat > "$fd/user-stories.md" <<'DOC'
+# User Stories
+
+### 1. Barcode
+
+**US-1.1** — As a cashier, I want to scan.
+
+- Given a product
+- Then it is added
+
+**US-1.2** — As a manager, I want reports.
+
+- Given sales
+DOC
+  cat > "$fd/feature-description.md" <<'DOC'
+# Feature Description
+
+## Overview
+
+Visao geral da feature.
+
+## Business Rules
+
+1. **BR-01 — Scan unico:** um scan por item.
+2. **BR-02 — Sem duplicado:** nada duplicado.
+
+## UI
+
+Tela de caixa.
+DOC
+  printf '# schema\n\n## New Tables\n\n```dbml\nTable sales {\n  id int [pk]\n}\n\nTable refunds {\n  id int [pk]\n}\n```\n' > "$fd/database-schema.md"
+  echo "# brief" > "$fd/feature-brief.md"
   git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: feature docs"
 
   rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh" docs/features/barcode/project-phases.md)
@@ -1062,6 +1109,23 @@ if case_enabled sibling-docs; then
   assert_contains "$prompt" "docs/features/barcode/database-schema.md" "database-schema irmao listado"
   assert_not_contains "$prompt" "docs/features/barcode/project-phases.md" "o proprio plano nao se auto-lista"
   assert_not_contains "$prompt" ".spec/init/project-description.md" "sem caminho fantasma do layout antigo"
+
+  # Contexto sob demanda: so o que a fase cita, recortado; o resto so por caminho.
+  # Mandar ler os docs fazia 25 de 26 sessoes lerem todos, inteiros (~19k tokens).
+  assert_contains "$prompt" "## Contexto desta fase" "recorte do que a fase cita"
+  assert_contains "$prompt" "Visao geral da feature." "secao citada no Read first"
+  assert_contains "$prompt" "**BR-02 — Sem duplicado:**" "regra citada"
+  assert_not_contains "$prompt" "BR-01 — Scan unico" "regra nao citada fica fora"
+  assert_contains "$prompt" "**US-1.1** — As a cashier" "story citada no cenario de teste"
+  assert_not_contains "$prompt" "US-1.2** — As a manager" "story nao citada fica fora"
+  assert_not_contains "$prompt" "Tela de caixa." "secao nao citada fica fora"
+  assert_contains "$prompt" "Table sales {" "tabela citada: bloco DBML"
+  assert_not_contains "$prompt" "Table refunds {" "tabela nao citada fica fora"
+  assert_contains "$prompt" "Nao leia inteiros" "docs completos so para consulta pontual"
+  assert_not_contains "$prompt" "docs/features/barcode/feature-brief.md" "brief fora da lista de consulta"
+  p2="$d/repo/.phases/prompts/phase-02.cycle-1.txt"
+  assert_not_contains "$p2" "## Contexto desta fase" "fase sem citacao: sem recorte"
+  assert_contains "$p2" "## Documentos do plano" "fase sem citacao: caminhos para consulta"
 fi
 
 # ---------------------------------------------------------------------------

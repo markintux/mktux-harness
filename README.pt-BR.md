@@ -474,6 +474,13 @@ Note quatro coisas, todas deliberadas:
    run real ele remontou a própria lista a cada ciclo, e a correção perseguiu um
    alvo que mudava sem o plano mudar.
 
+O `ralph` lê a linha `Read first:` e os ids que a fase cita, e entrega à sessão
+**só esses trechos** — a seção nomeada, a regra `BR-NN`, a story `US-N.N`, a
+tabela — mais os caminhos dos documentos, para consulta pontual. Mandar a sessão
+"ler os documentos de contexto" fazia 25 de 26 sessões de um run real lerem
+todos, inteiros: uns 19k tokens no contexto de todo turno seguinte. Por isso
+cite pelo título exato e pelo id: "veja a descrição" não é endereço.
+
 **Leia esse arquivo com atenção.** É o último ponto barato de correção. Depois
 daqui, cada erro custa uma sessão.
 

@@ -474,6 +474,14 @@ Four things there are deliberate:
    in a real run it rebuilt its own list each cycle, and the fix session chased
    a target that moved while the plan stayed the same.
 
+`ralph` reads the `Read first:` line and the ids the phase cites, and hands the
+session **only those excerpts** — the named section, the `BR-NN` rule, the
+`US-N.N` story, the table — plus the documents' paths for a targeted lookup.
+Telling the session to "read the context documents" made 25 of 26 sessions in a
+real run read all of them end to end, some 19k tokens riding in the context of
+every later turn. So cite by exact heading and by id: "see the description" is
+not an address.
+
 **Read this file carefully.** It is the last cheap correction point. After this,
 every mistake costs a session.
 

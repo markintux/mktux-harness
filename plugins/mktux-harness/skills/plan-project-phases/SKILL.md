@@ -99,13 +99,27 @@ sabendo que nenhum agente vai ver.
 
 | Sessao | Recebe |
 |---|---|
-| implementacao / correcao | preambulo de stack + **os caminhos** dos `.md` irmaos (`feature-description.md`, `user-stories.md`, `database-schema.md`) + o comando de teste do projeto + aquela fase |
+| implementacao / correcao | preambulo de stack + o **recorte** do que a fase cita nos `.md` irmaos (`feature-description.md`, `user-stories.md`, `database-schema.md`) + os caminhos deles, so para consulta pontual + o comando de teste do projeto + aquela fase |
 | verificador (gate 3) | aquela fase + a lista numerada das tasks (a primeira linha de cada) + os arquivos alterados na fase. **Nenhum doc irmao** |
 
-Os docs irmaos chegam como *caminho*, nao como conteudo — a sessao precisa
-escolher abrir. Entao uma fase que depende de decisao registrada em outro lugar
-tem que dizer:
-`**Read first:** feature-description.md next to this file, section "<nome>"`.
+O ralph recorta, mecanicamente, o que a fase cita — e so isso chega como
+conteudo. O resto chega como caminho, com a instrucao de nao ler inteiro. Entao
+o que a fase precisa tem que estar citado de um jeito que o recorte ache:
+
+| Cite | Como | O ralph recorta |
+|---|---|---|
+| secao | no **Read first:**, depois do arquivo: `` `feature-description.md` next to this file, section "PII Rules" `` — titulo exato, entre aspas duplas | a secao, ate o proximo titulo do mesmo nivel |
+| tabela | no **Read first:**, depois de `` `database-schema.md` ``: `` table `orders` `` | o `` ### `orders` `` ou o bloco DBML `Table orders {…}` |
+| regra | `BR-07`, ou a faixa `BR-07 through BR-14`, em qualquer ponto da fase | o item da lista de Business Rules |
+| story | `US-2.1`, ou a faixa `US-2.1 through US-2.5`, em qualquer ponto da fase | a story com os criterios |
+
+Citacao vaga — *"all CLI-facing stories"*, *"the relevant rules"*, *"see the
+description"* — nao e recortada: escreva os ids e os titulos.
+
+Isso nao e estetica. Num run real, "leia os documentos de contexto" fazia 25 de
+26 sessoes — correcao inclusive — lerem todos os docs irmaos inteiros, e trechos
+do arquivo de fases: ~19k tokens que ficam no contexto em todo turno seguinte. O
+recorte das mesmas fases fica entre 3 e 10 KB.
 
 O verificador nao recebe doc irmao nenhum. Qualquer coisa que ele precise pra
 julgar uma task tem que estar **dentro da task** ou nos criterios de conclusao da
@@ -479,6 +493,9 @@ Depois releia e confirme:
 - [ ] Todo arquivo de teste e uma task propria, com no maximo 8 cenarios
       `<situacao> → <resultado observavel>`, nenhum quantificador sem lista.
 - [ ] Todo cenario rastreia a pelo menos um `US-N.N`.
+- [ ] Todo nome entre aspas no **Read first:** e o titulo exato de uma secao do
+      arquivo citado antes dele; regra e story sao citadas por id, nunca por
+      descricao vaga.
 - [ ] Os criterios de conclusao nomeiam os testes existentes que passam sem modificacao.
 - [ ] `[x]` aparece so em task confirmada lendo o codigo.
 - [ ] Se um perfil casou, o reference dele foi lido, e comandos, caminhos de
