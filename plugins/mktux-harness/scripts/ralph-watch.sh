@@ -482,7 +482,9 @@ build_panels() {
   ph_done=$(($(count_status done) + $(count_status skipped)))
   ph_total=$P_N
   tk_done=$(count_tasks done)
-  tk_total=$T_N
+  # Task manual nunca vira "done" (e procedimento de quem conduz, fora dos
+  # gates): conta-la no total deixaria a barra abaixo de 100% num run completo.
+  tk_total=$((T_N - $(count_tasks manual)))
 
   bw=$((lw - 4 - 24))
   [ "$bw" -lt 8 ] && bw=8

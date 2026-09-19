@@ -110,6 +110,11 @@ TASK 3: NOT-CODE — needs a human to run `sail npm run build`
 `INCOMPLETE` reprova a fase e dispara um ciclo de correção. `NOT-CODE` não
 reprova — vira pendência manual no relatório.
 
+Task que o plano tipa como `- [ ] (manual) …` — rodar o formatador, o build de
+assets, conferir num celular de verdade — nunca chega ao verificador. O ralph a
+tira da lista numerada, descarta qualquer veredito sobre ela e a lista em
+*Pendencias manuais* no fim do run: o checklist de quem abre o PR.
+
 ---
 
 ## Instalação
@@ -453,7 +458,9 @@ Note quatro coisas, todas deliberadas:
 
 2. **A última task é um estado, não um comando.** "No file references `cpf`" o
    verificador consegue checar com Grep. "Confirme com `grep -rn cpf app/`" ele
-   não consegue — sai `NOT-CODE` e vira pendência manual.
+   não consegue — sai `NOT-CODE` e vira pendência manual. Procedimento de
+   verdade (formatador, build de assets) entra como `- [ ] (manual) …`, fora do
+   portão 3 por construção.
 
 3. **A primeira linha de cada task se sustenta sozinha.** O `ralph` conta os
    checkboxes e entrega ao verificador uma lista numerada com a primeira linha de
@@ -520,7 +527,7 @@ ralph docs/features/customer-export/project-phases.md --from 3
 
 Sai um relatório com três seções: violações de convenção contra o `CLAUDE.md` do
 projeto, auditoria de segurança do subagent `security-auditor`, e as pendências
-`NOT-CODE` que o portão 3 deixou para você.
+manuais — tasks `(manual)` e vereditos `NOT-CODE` — que ficaram para você.
 
 ---
 
@@ -1012,7 +1019,8 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | `Contrato de formato violado` no preflight | heading `## Phase` fora de `## Phase N: <título>`. Uma fase com heading torto **some silenciosamente** do run |
 | portão 3 reprova por `cobertura incompleta` ou índice fora da faixa | o verificador ignorou a lista numerada do prompt. Leia o veredito (`verify-M.last.txt` no Codex, `verify-M.log` no Claude); se repetir, troque `RALPH_VERIFY_MODEL` |
 | preflight aborta com `.harness/ esta versionado` | a telemetria foi commitada. `git rm -r --cached .harness` e commit |
-| task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do código |
+| task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do código, ou marque `(manual)` se for mesmo procedimento |
+| fase de fechamento reprova sem nada de errado no código | task de procedimento sem `(manual)`: o verificador tenta julgar o que não tem como ler. Marque `(manual)` |
 | fase reprova em todo ciclo até esgotar | task com escape condicional (*"faça X, mas se ficar estranho, deixe"*). Na dúvida, o verificador escolhe INCOMPLETE |
 | portão 2 sempre vermelho no primeiro run | Laravel: Sail parado, ou `.env.testing` ausente. Outras stacks: o ambiente de desenvolvimento nunca foi preparado (dependências, virtualenv) |
 | o ralph ou o `test-runner` escolhe o comando de teste errado | confira com `mktux-profile.sh test-cmd` (veja [Perfis de stack](#perfis-de-stack)); sobreponha com `--test-cmd` ou `RALPH_TEST_CMD` |

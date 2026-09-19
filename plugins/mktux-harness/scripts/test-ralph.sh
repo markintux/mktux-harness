@@ -183,7 +183,17 @@ if [ "$verify" -eq 1 ]; then
   fi
 
   emit_tasks() {
-    if [ "$scenario" = "verify-incomplete-once" ] && [ "$n" -eq 1 ]; then
+    if [ "$scenario" = "verify-manual-incomplete" ]; then
+      # Julga a task (manual) mesmo sem ela estar na lista pedida.
+      local i=0 l
+      while IFS= read -r l; do
+        i=$((i + 1))
+        case "$l" in
+          *"(manual)"*) echo "TASK $i: INCOMPLETE — aguardando o formatador" ;;
+          *) echo "TASK $i: DONE" ;;
+        esac
+      done < <(grep -E '^[[:space:]]*- \[[ x]\]' <<< "$prompt")
+    elif [ "$scenario" = "verify-incomplete-once" ] && [ "$n" -eq 1 ]; then
       echo "TASK 1: INCOMPLETE — o arquivo nao foi criado"
       for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
     else
@@ -1554,6 +1564,49 @@ if case_enabled harness-exclude; then
   assert_eq 1 "$rc" "versionada: exit 1"
   assert_contains "$d/out.log" "git rm -r --cached .harness" "diz como tirar do git"
   test -f "$d/state/impl_calls" && bad "nenhuma sessao iniciada" || ok "nenhuma sessao iniciada"
+fi
+
+# ---------------------------------------------------------------------------
+# 47. Task (manual): fora do gate 3 por construcao. Mantem a posicao (o <n> do
+#     veredito e do painel nao muda), veredito para ela e descartado, e ela sai
+#     no relatorio final como pendencia de quem conduz o PR.
+# ---------------------------------------------------------------------------
+MANUAL_FIXTURE='# Test Project — Project Phases
+
+<!-- inputs: project-description.md@sha256:000000000000 -->
+
+## Phase 1: Foundation
+
+- [ ] **Task:** cria o arquivo A
+- [ ] (manual) rode o formatador do projeto
+- [ ] **Task:** cria o arquivo B
+
+## Phase 2: Close out
+
+- [ ] **(manual)** confira a tela num aparelho real
+'
+
+if case_enabled manual-task; then
+  header "47. task (manual) fica fora do gate 3 e vira pendencia no relatorio"
+  d=$(new_case manual-task)
+  printf '%s' "$MANUAL_FIXTURE" > "$d/repo/.spec/init/project-phases.md"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: fixture manual"
+  rc=$(run_ralph "$d" verify-manual-incomplete --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "INCOMPLETE numa task (manual) nao reprova: exit 0"
+  assert_contains "$d/repo/.phases/logs/phase-01.verify-1.log" "TASK 2: INCOMPLETE" "o verificador julgou a (manual) e o ralph descartou"
+  vp="$d/repo/.phases/prompts/phase-01.verify-1.txt"
+  assert_contains "$vp" "Julgue EXATAMENTE estes 2 numeros: 1, 3." "verificador recebe so as posicoes julgadas"
+  assert_contains "$vp" "3. **Task:** cria o arquivo B" "posicao mantida depois da lacuna"
+  assert_not_contains "$vp" "2. (manual)" "(manual) fora da lista numerada"
+  assert_contains "$d/out.log" "(+1 manual, fora do gate)" "gate 3 conta a manual a parte"
+  assert_contains "$d/out.log" "toda task da fase (1) e (manual)" "fase so de (manual): gate 3 pulado"
+  assert_contains "$d/out.log" "Pendencias manuais (2)" "relatorio final lista as pendencias"
+  assert_contains "$d/out.log" "Phase 1: rode o formatador do projeto" "pendencia com fase e texto, sem o prefixo"
+  assert_contains "$d/out.log" "Phase 2: confira a tela num aparelho real" "pendencia da fase so de (manual)"
+  state="$d/repo/.phases/state/run.tsv"
+  assert_contains "$state" "$(printf 'TASK\t1\t2\tmanual')" "painel: (manual) continua manual apos o commit"
+  assert_contains "$state" "$(printf 'TASK\t1\t3\tdone')" "painel: task julgada vira done"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" 'Item "(manual)" e procedimento' "impl: sabe o que fazer com (manual)"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

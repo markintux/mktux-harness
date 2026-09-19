@@ -163,6 +163,9 @@ Por fase, em ordem. Todos verdes → commit. Qualquer vermelho → ciclo de corr
   - `TASK n: NOT-CODE — <o que precisa de um humano>` → nao reprova, e reportado
     como pendencia manual
 
+  Task marcada `(manual)` (1.6) nao entra no gate 3: nenhum veredito pedido,
+  nenhum aceito.
+
 ## 1.6 Escreva task como estado, nao como comando
 
 Esta e a regra de maior alavancagem do documento inteiro.
@@ -188,7 +191,22 @@ Prefira a forma de estado toda vez que a exigencia for legivel a partir do
 repositorio.
 
 **Task genuinamente procedural continua pertencendo ao plano** — alguem tem que
-rodar antes do PR. Essas ficam `NOT-CODE` e isso esta correto:
+rodar antes do PR. Marque-a com `(manual)`, literal e minusculo, logo depois do
+checkbox:
+
+```markdown
+- [ ] (manual) Run `<project formatter>` on the files this feature touched.
+- [ ] (manual) Open the export screen on a real phone, portrait and landscape.
+```
+
+O ralph tira toda task `(manual)` do gate 3 **por construcao**: ela nao entra na
+lista numerada do verificador, veredito que ele emita para ela e descartado, e
+ela sai no fim do run em "Pendencias manuais" — o checklist de quem abre o PR. A
+posicao dela na fase continua contando: a task seguinte mantem o mesmo `<n>`. A
+sessao de implementacao roda a task `(manual)` quando e um comando do repo que
+ela consegue rodar (formatador, build); o que exige pessoa ou aparelho fica.
+
+Sao `(manual)`:
 
 - rodar o formatador do projeto;
 - rodar a suite completa pelo subagent `test-runner`;
@@ -199,37 +217,31 @@ rodar antes do PR. Essas ficam `NOT-CODE` e isso esta correto:
 Escreva o comando exato de cada procedimento — o do perfil de stack, ou o que o
 `CLAUDE.md` / `AGENTS.md` do projeto define.
 
-**Nunca escreva uma fase 100% procedural.** Custa uma sessao inteira e uma passada
-de verificador pra confirmar `0/N` tasks em codigo. Uma fase de fechamento mistura
-afirmacoes legiveis (nenhuma migration perdida, nenhum identificador residual,
-nenhum codigo proibido em arquivo protegido) com os poucos procedimentos reais.
+Task de estado **nunca** leva `(manual)`: ela sairia do gate 3 e ninguem mais a
+confirmaria.
 
-### Fase com task procedural deve se declarar operacional
+**Nunca escreva uma fase 100% `(manual)`.** Custa uma sessao inteira sem nada
+que um gate confirme. Uma fase de fechamento mistura afirmacoes legiveis
+(nenhuma migration perdida, nenhum identificador residual, nenhum codigo
+proibido em arquivo protegido) com os poucos procedimentos reais.
 
-Toda fase que carrega task `NOT-CODE` MUST trazer, logo abaixo do heading, numa
-linha sozinha:
+### Por que tipar, em vez de deixar o verificador classificar
 
-```markdown
-## Phase 12: Close out — format, build, and prove nothing else moved
-
-**Operational phase**
-```
-
-O ralph le esse marcador e faz o gate 3 **reportar sem reprovar** naquela fase. O
-gate 2 continua rodando a suite de verdade, fora do agente: a corretude nao fica
-sem guarda.
-
-Sem o marcador, o destino da fase passa a depender de o verificador classificar
-`NOT-CODE` corretamente todas as vezes — e ele nao classifica. Num run real, uma
-fase de fechamento com 7 tasks (4 de estado, 3 procedurais) reprovou duas vezes
+Sem a marca, o destino da fase depende de o verificador classificar `NOT-CODE`
+corretamente todas as vezes — e ele nao classifica. Num run real, uma fase de
+fechamento com 7 tasks (4 de estado, 3 procedurais) reprovou duas vezes
 seguidas: no primeiro ciclo o verificador marcou 3 tasks como `NOT-CODE` e uma
 quarta como `INCOMPLETE` por nao conseguir confirmar; no segundo, com o codigo
 byte-identico, marcou duas daquelas como `DONE` e uma como `INCOMPLETE` dizendo
 que estava "aguardando o resultado da suite" — numa sessao onde a ferramenta de
-shell esta bloqueada. Nao havia nada errado com o codigo.
+shell esta bloqueada. Nao havia nada errado com o codigo. Com `(manual)`, nao ha
+o que classificar.
 
-O marcador nao dispensa nada do resto desta secao: continue preferindo a forma de
-estado, e continue sem escrever fase 100% procedural.
+Planos antigos trazem `**Operational phase**` numa linha logo abaixo do heading:
+o gate 3 da fase inteira passa a reportar sem reprovar. O ralph continua
+honrando o marcador, mas nao o escreva em plano novo — ele tira o poder de
+reprovar tambem das tasks de estado, que sao justamente o que a fase de
+fechamento precisa provar. `(manual)` tira so o procedimento.
 
 ## 1.7 Ambiguidade e loop infinito
 
@@ -445,6 +457,9 @@ awk '/^## Phase [0-9]+: /{p=$0; order[++n]=p; c[p]=0}
 # Tudo acima da Phase 1 e descartado — confirme que nada estrutural mora la
 sed -n "1,/^## Phase 1: /p" "$f"
 
+# Procedimento sem (manual) (1.6) — toda linha impressa ganha a marca ou vira estado
+grep -nE '^[[:space:]]*- \[[ x]\][[:space:]]+(Run|Execute|Build|Confirm|Verify|Check|Ask)\b' "$f"
+
 # Quantificador em task ou cenario (1.7, 5.1). Linha de teste impressa: vira
 # itens escritos. Linha de codigo: o conjunto tem que estar listado na propria task.
 grep -nwiE 'every|all|each|any' "$f" | grep -E '^[0-9]+:[[:space:]]*- '
@@ -456,7 +471,9 @@ Depois releia e confirme:
 - [ ] A primeira linha de cada task diz sozinha do que ela trata.
 - [ ] Toda fase que toca codigo compartilhado ou arriscado carrega a propria linha **Do not touch**.
 - [ ] Nenhuma task esta escrita como comando de shell quando a mesma exigencia e legivel do repo.
-- [ ] Nenhuma fase e 100% procedural.
+- [ ] Todo procedimento (formatador, build, suite, aparelho real, pergunta) leva
+      `(manual)`; nenhuma task de estado leva.
+- [ ] Nenhuma fase e 100% `(manual)`.
 - [ ] Nenhuma task tem escape condicional.
 - [ ] Sub-bullets de detalhe sao `-` simples, nao `- [ ]`.
 - [ ] Todo arquivo de teste e uma task propria, com no maximo 8 cenarios

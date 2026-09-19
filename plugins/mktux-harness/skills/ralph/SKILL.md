@@ -92,6 +92,13 @@ Para cada task ele emite exatamente uma linha:
 - `TASK n: NOT-CODE — <o que precisa de um humano>` → nao reprova, vira pendencia
   manual no relatorio
 
+**Task `- [ ] (manual) ...` nao passa pelo gate 3.** E procedimento tipado no
+plano (formatador, build, suite, aparelho real). O ralph a tira da lista
+numerada do verificador, mantendo a posicao das outras (`1, 2, 4`), descarta
+veredito que ele emita para ela, e a lista em **Pendencias manuais** no
+relatorio final, junto com os `NOT-CODE`. No painel ela aparece como Manual e
+nao conta na barra de tasks. Fase so com tasks `(manual)` pula o gate 3.
+
 `RALPH_VERIFY=auto` economiza: so roda quando o veredito do gate 2 nao basta.
 `--no-verify` / `RALPH_VERIFY=off` desliga.
 
@@ -101,9 +108,9 @@ codigo, e os mesmos bytes tem que dar o mesmo veredito. Sem isso um verificador
 barato muda de ideia entre ciclos sobre codigo identico.
 
 **Fase declarada `**Operational phase**` nao e reprovada pelo gate 3.** Ele roda e
-reporta, mas perde o poder de reprovar — as tasks de uma fase de fechamento sao
-acoes, nao afirmacoes sobre o codigo, e o ciclo de correcao nao teria o que
-corrigir. Quem garante corretude ali e o gate 2, que roda a suite fora do agente.
+reporta, mas perde o poder de reprovar. Marcador de planos antigos, anterior ao
+`(manual)`: continua valendo, mas desliga o gate 3 inclusive para as tasks de
+estado da fase. Em plano novo, marque so os procedimentos com `(manual)`.
 
 ## Comando de teste (gate 2)
 
@@ -221,8 +228,8 @@ sessao.
 | gate 3 reprova por `cobertura incompleta` ou indice fora da faixa | o verificador ignorou a lista numerada do prompt. Leia o veredito (`verify-M.last.txt` no codex, `verify-M.log` no claude); se repetir, troque `RALPH_VERIFY_MODEL` |
 | o verificador julga sub-item como task propria | sub-bullet de detalhe escrito como `- [ ]`: o ralph conta todo checkbox como task. Troque por `-` simples |
 | preflight aborta com `.harness/ esta versionado` | a telemetria foi commitada. `git rm -r --cached .harness` e commit |
-| task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do codigo, ou declare a fase com `**Operational phase**` se ela for mesmo de fechamento |
-| fase de fechamento reprova sem nada de errado no codigo | falta o marcador `**Operational phase**`. Sem ele o gate 3 reprova por task procedural que nao tem como julgar |
+| task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do codigo, ou marque `(manual)` se ela for mesmo procedimento |
+| fase de fechamento reprova sem nada de errado no codigo | task procedural sem `(manual)`: o verificador tenta julgar o que nao tem como ler. Marque os procedimentos com `(manual)` |
 | `gate 0 vermelho` e o relatorio manda revisar as tasks | leia o FIM do `phase-NN.cycle-M.log` antes de mexer no plano: engine que morre por cota, rede ou crash cai no mesmo lugar. Task correta nao e a causa mais provavel |
 | fase reprova em todo ciclo ate esgotar | task com escape condicional (*"faca X, mas se ficar estranho, deixe"*). O verificador escolhe INCOMPLETE na duvida |
 | gate 2 sempre vermelho no primeiro run | ambiente do perfil incompleto. A causa de cada perfil esta em *Perfis de stack* |

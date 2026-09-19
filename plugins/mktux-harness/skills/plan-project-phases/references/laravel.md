@@ -4,7 +4,7 @@ Carregado pela skill `plan-project-phases` quando existe `artisan` na raiz do
 projeto. Cada secao completa a parte da skill indicada no titulo. Onde o
 `CLAUDE.md` / `AGENTS.md` do projeto define outra coisa, o projeto vence.
 
-## Procedimentos NOT-CODE (Parte 1.6)
+## Procedimentos (manual) (Parte 1.6)
 
 Comandos exatos dos procedimentos tipicos num projeto Laravel com Sail:
 
