@@ -11,6 +11,12 @@ Slug vem do argumento. Diretorio: `${MKTUX_SPEC_DIR:-docs/features}/<slug>/`.
 
 ## Antes de escrever
 
+**Perfil de stack.** Se existe `artisan` na raiz do projeto, o stack e Laravel:
+leia `references/laravel.md`, ao lado desta skill, **antes** de escrever. Ele
+completa as Partes 1.6, 2, 3, 4, 5 e 6 com os comandos, caminhos, framework de
+teste e a ordem de fases do Laravel. Sem `artisan` nao ha perfil: tire comandos,
+caminhos e framework de teste do `CLAUDE.md` / `AGENTS.md` do projeto.
+
 Leia:
 
 - `<dir>/feature-description.md`
@@ -184,11 +190,14 @@ repositorio.
 **Task genuinamente procedural continua pertencendo ao plano** — alguem tem que
 rodar antes do PR. Essas ficam `NOT-CODE` e isso esta correto:
 
-- rodar o formatador (`vendor/bin/sail bin pint --dirty --format agent`);
+- rodar o formatador do projeto;
 - rodar a suite completa pelo subagent `test-runner`;
-- `vendor/bin/sail npm run build`;
+- o build de assets, quando o projeto tem um;
 - sanity check com `git diff --stat`;
 - verificar algo em dispositivo real, ou fazer uma pergunta ao usuario.
+
+Escreva o comando exato de cada procedimento — o do perfil de stack, ou o que o
+`CLAUDE.md` / `AGENTS.md` do projeto define.
 
 **Nunca escreva uma fase 100% procedural.** Custa uma sessao inteira e uma passada
 de verificador pra confirmar `0/N` tasks em codigo. Uma fase de fechamento mistura
@@ -268,7 +277,7 @@ are part of the task above them, not tasks of their own.
 - [ ] Next task
 
   Automated tests to generate:
-    - `tests/Feature/[Context]/[Resource]/SomeTest.php` — the scenarios it covers (US-N.N)
+    - `<test file path, in the stack's layout>` — the scenarios it covers (US-N.N)
 
 **Completion criteria:** Specific, verifiable conditions — what exists, what
 passes, and which existing tests must still pass **unmodified**.
@@ -285,15 +294,17 @@ documento legivel quando um humano revisa.
 
 Ordene as fases de modo que cada uma produza um incremento funcional e testavel:
 
-1. **Foundations** — enums, flags, classes de suporte compartilhadas, tudo de que
-   as fases seguintes dependem
-2. **Database** — migrations, models, factories, seeders
-3. **Backend core** — policies, actions, services (so quando justificado), form
-   requests
-4. **Controllers + Routes** — um contexto por vez
-5. **Views** — views e componentes Blade, mais `vendor/bin/sail npm run build`
+1. **Foundations** — tipos e constantes compartilhados, flags, classes de suporte
+   compartilhadas, tudo de que as fases seguintes dependem
+2. **Database** — schema, camada de dados, dados de teste e seed
+3. **Backend core** — autorizacao, regras de negocio, validacao de entrada
+4. **Routes + handlers** — um contexto por vez
+5. **Views** — telas e componentes, mais o build de assets quando houver
 6. **Regression** — formatador, suite completa, e afirmacoes legiveis de que nada
    mais se moveu
+
+O perfil de stack traz a mesma ordem nos termos do framework — use a dele quando
+houver.
 
 Adapte a feature; nem toda feature precisa de toda fase.
 
@@ -314,8 +325,7 @@ Duas regras que importam mais que a ordem:
 - Nao junte "cria controller, request, action, view" numa task — separe.
 - Especifique o caminho exato do arquivo e o nome de classe totalmente
   qualificado de todo artefato.
-- Para cada task de controller, nomeie o Single Action Controller e a rota que ele
-  atende.
+- Para cada task de handler, nomeie a classe ou funcao e a rota que ela atende.
 - Nomeie URI exata, nome da rota e middleware de toda task de rota.
 - Quando uma rota tem que ser registrada em posicao especifica (segmento literal
   antes de um wildcard, grupo de middleware aninhado), diga isso **e diga por
@@ -330,13 +340,13 @@ Duas regras que importam mais que a ordem:
 Toda task nao-trivial lista os testes automatizados a gerar ao lado dela, como
 sub-bullets `-` simples sob `Automated tests to generate:`.
 
-Testes sao **PHPUnit** — Feature preferencialmente, Unit so pra logica isolada.
-Crie arquivos com `vendor/bin/sail artisan make:test --phpunit {name}`.
+O framework de teste, o tipo de teste preferido e o comando que cria o arquivo
+vem do perfil de stack; sem perfil, do `CLAUDE.md` / `AGENTS.md` do projeto.
 Rode pelo subagent `test-runner`, nunca direto.
 
 Para cada teste, especifique:
 
-- o caminho do arquivo sob `tests/Feature/` ou `tests/Unit/`;
+- o caminho do arquivo, no layout de testes do stack;
 - os cenarios que cobre, cada um rastreado a um id de story (`US-N.N`);
 - se **estende um arquivo existente** — e se sim, diga explicitamente
   "add cases; do not rewrite the file and do not delete existing cases".
@@ -368,8 +378,9 @@ HTML, referencia de design ou qualquer artefato externo:
 - A task tem que abrir com instrucao explicita de leitura:
   ```
   - Before writing any code, read the full contents of `path/to/reference.html`
-    and reproduce its structure faithfully, adapting to Blade/PHP syntax.
+    and reproduce its structure faithfully, adapting to <template syntax>.
   ```
+  `<template syntax>` e a linguagem de template do stack (o perfil diz qual).
 - O agente tem que verificar que o arquivo existe antes de comecar. Se estiver
   faltando, ele para e pergunta ao usuario com a ferramenta AskUserQuestion —
   nunca prossegue por suposicao.
@@ -407,6 +418,8 @@ Depois releia e confirme:
 - [ ] Todo bullet de teste rastreia a pelo menos um `US-N.N`.
 - [ ] Os criterios de conclusao nomeiam os testes existentes que passam sem modificacao.
 - [ ] `[x]` aparece so em task confirmada lendo o codigo.
+- [ ] Se existe `artisan` na raiz, `references/laravel.md` foi lido, e comandos,
+      caminhos de teste e ordem de fases do plano seguem ele.
 
 ---
 

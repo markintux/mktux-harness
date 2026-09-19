@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# hooks podem rodar com cwd fora do projeto — ancora tudo na raiz
-cd "${CLAUDE_PROJECT_DIR:-$(cd "$(dirname "$0")/../.." && pwd)}"
+# hooks podem rodar com cwd fora do projeto — ancora tudo na raiz.
+# Fallback pela raiz do git, igual ao port do Codex: o script mora no plugin,
+# entao um caminho relativo a "$0" ancoraria no plugin, nao no projeto.
+cd "${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 
 input=$(cat)
 file=$(echo "$input" | jq -r '.tool_input.file_path // empty')

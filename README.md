@@ -817,8 +817,8 @@ mktux-harness/
     │   ├── plan-feature-brief/          step 0: interview + brief template
     │   ├── plan-feature-description/
     │   ├── plan-user-stories/
-    │   ├── plan-database-schema/
-    │   ├── plan-project-phases/        ralph's contract
+    │   ├── plan-database-schema/      references/laravel.md: DB conventions
+    │   ├── plan-project-phases/        ralph's contract + references/laravel.md
     │   ├── ralph/                      operation and troubleshooting
     │   ├── review-phases/
     │   ├── setup/
@@ -828,13 +828,17 @@ mktux-harness/
     ├── hooks/
     │   ├── hooks.json                  Claude  (${CLAUDE_PLUGIN_ROOT})
     │   ├── codex-hooks.json            Codex   (${PLUGIN_ROOT})
-    │   ├── shared/                     sail-guard, log-event
-    │   ├── claude/                     pint-and-test, log-tokens
-    │   └── codex/                      pint-and-test, log-tokens
+    │   ├── shared/                     log-event
+    │   ├── claude/                     log-tokens
+    │   └── codex/                      log-tokens
+    ├── profiles/laravel/               what only a Laravel project uses
+    │   └── hooks/                      sail-guard (shared/), pint-and-test
+    │                                   (claude/, codex/)
     └── scripts/
         ├── ralph.sh                    the orchestrator
         ├── ralph-watch.sh              live panel, read-only
         ├── test-ralph.sh               ralph's own test suite
+        ├── test-layout.sh              hook paths, skill references, Laravel hooks
         └── mktux-setup.sh              installs the PATH wrappers
 ```
 
