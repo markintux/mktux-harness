@@ -11,6 +11,10 @@ nada**, so reporta.
 O numero da fase vem do argumento. Sem argumento, liste as fases commitadas e
 pergunte qual.
 
+**Perfil de stack.** Se existe `artisan` na raiz do projeto, o stack e Laravel:
+leia `references/laravel.md`, ao lado desta skill. Ele lista as pastas
+relevantes a seguranca e traz a secao de auditoria de seguranca do Laravel.
+
 ## 1. Localize o commit da fase
 
 ```bash
@@ -68,33 +72,26 @@ No convention violations found.
 
 ## 4. Revisao de seguranca
 
-Use o subagent `security-auditor` (Claude Code: ferramenta Task; Codex: agente
-equivalente). Passe **so** os arquivos alterados relevantes a seguranca web
-Laravel, tipicamente sob:
+Passe **so** os arquivos alterados relevantes a seguranca web: rotas, handlers,
+validacao, autorizacao, models, templates com formulario e migrations. O perfil
+de stack lista as pastas tipicas.
 
-```text
-routes/
-app/Http/
-app/Actions/
-app/Services/
-app/Models/
-app/Policies/
-app/Enums/
-resources/views/
-database/migrations/
-```
+- **Claude Code:** use o subagent `security-auditor` (ferramenta Task). Ele carrega
+  sozinho a secao de seguranca do perfil. Instrua:
 
-Instrua o subagent:
+  ```text
+  Audit only the changed files from phase $1 that are relevant to web security.
+  Do not fix anything. Return only the compact security report.
+  ```
 
-```text
-Audit only the changed files from phase $1 that are relevant to Laravel monolith
-web security. Do not fix anything. Return only the compact security report.
-```
+- **Codex:** nao ha subagent. Faca voce mesmo a auditoria desses arquivos, sem
+  corrigir nada, com a secao "Security audit" do perfil: processo, checklist e
+  formato do relatorio.
 
 Se nenhum arquivo alterado for relevante a fluxo web sensivel:
 
 ```text
-No relevant Laravel web flow changed in this phase — security audit not applicable.
+No relevant web flow changed in this phase — security audit not applicable.
 ```
 
 ## 5. Relatorio final
@@ -124,8 +121,8 @@ de um humano antes do PR.>
 - Nao crie arquivo.
 - Nao rode teste.
 - Nao rode migration.
-- Nao rode Pint.
-- Nao rode npm build.
+- Nao rode formatador.
+- Nao rode build de assets.
 - Nao revise arquivo nao relacionado.
 - Nao cole diff bruto completo, salvo pra sustentar um achado especifico.
 - Relatorio compacto e acionavel.

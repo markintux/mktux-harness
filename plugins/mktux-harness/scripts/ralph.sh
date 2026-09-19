@@ -76,19 +76,22 @@
 # Comando de teste (gate 2), primeira regra que resolver:
 #   1. --test-cmd "<cmd>"
 #   2. RALPH_TEST_CMD
-#   3. deteccao por manifest:
-#        Laravel Sail (artisan + vendor/bin/sail)  -> vendor/bin/sail test
+#   3. o perfil de stack do diretorio atual (profiles/<nome>/profile.sh).
+#      Laravel (artisan): vendor/bin/sail artisan test --compact com Sail,
+#      senao composer test, senao php artisan test
+#   4. deteccao por manifest:
 #        composer.json com scripts.test            -> composer test
-#        artisan                                   -> php artisan test
 #        package.json com scripts.test             -> npm test
-#        pytest.ini / pyproject [tool.pytest]      -> pytest
+#        pytest.ini / pyproject [tool.pytest]      -> pytest (uv run pytest com
+#                                                     uv.lock, poetry run pytest
+#                                                     com poetry.lock)
 #        go.mod                                    -> go test ./...
 #        Cargo.toml                                -> cargo test
-#   4. nada resolvido -> aviso alto + gate 2 pulado (o gate 3 segura sozinho)
+#   5. nada resolvido -> aviso alto + gate 2 pulado (o gate 3 segura sozinho)
 #
-# Laravel Sail: a suite roda dentro do container, entao Sail tem precedencia
-# sobre `composer test`. Containers parados -> abort no preflight (todo gate 2
-# falharia, queimando ciclos de correcao).
+# O perfil tambem valida o ambiente no preflight (Laravel: Sail com containers
+# parados -> abort, todo gate 2 falharia queimando ciclos de correcao) e
+# acrescenta notas ao prompt. Contrato em scripts/lib/profile.sh.
 #
 # Variaveis de ambiente:
 #   RALPH_TEST_CMD           comando de teste (gate 2); --test-cmd tem prioridade
@@ -131,6 +134,8 @@
 #   RALPH_PHASE_TOTAL        total de fases do run
 #   RALPH_PHASE_ATTEMPT      ciclo corrente (1 = implementacao inicial)
 #   RALPH_PHASE_MAX_ATTEMPTS igual a RALPH_MAX_CYCLES
+#   RALPH_TEST_CMD           o comando do gate 2 (vazio quando desabilitado): o
+#                            subagent test-runner roda o mesmo que o gate
 #
 # Exit code: 0 = todas as fases verdes; 1 = alguma falhou ou abortou.
 #
@@ -182,7 +187,7 @@ while [[ $# -gt 0 ]]; do
     --no-smoke)    SKIP_SMOKE=1; shift ;;
     --verbose)     VERBOSE=1; shift ;;
     --dashboard)   DASHBOARD=1; shift ;;
-    -h|--help)     sed -n '2,142p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,/^set -euo pipefail$/p' "$0" | sed '$d'; exit 0 ;;
     *)             INPUT_FILE="$1"; shift ;;
   esac
 done
@@ -201,7 +206,7 @@ LIMIT_WAIT_DEFAULT="${RALPH_LIMIT_WAIT_DEFAULT:-1800}"
 LIMIT_BUFFER="${RALPH_LIMIT_BUFFER:-60}"
 
 TEST_CMD=""
-SAIL_BIN=""
+PROFILE=""
 LIMIT_WAITS=0
 # Flags de modelo/effort montadas uma vez: o smoke test e o loop usam as MESMAS,
 # entao o que passa no smoke e literalmente o que roda em cada fase.
@@ -226,6 +231,20 @@ log()     { echo -e "${BLUE}[$(date '+%H:%M:%S')]${NC} $1"; }
 success() { echo -e "${GREEN}[$(date '+%H:%M:%S')] $1${NC}"; }
 warn()    { echo -e "${YELLOW}[$(date '+%H:%M:%S')] $1${NC}"; }
 fail()    { echo -e "${RED}[$(date '+%H:%M:%S')] $1${NC}"; }
+
+# Perfis de stack: o ralph pergunta ao perfil do projeto o comando de teste, o
+# preflight do ambiente e as notas do prompt, em vez de conhecer cada stack.
+# A lib mora ao lado deste script; uma copia avulsa dele (ex: RALPH_BIN nos
+# testes) acha o plugin por MKTUX_HARNESS_ROOT, o mesmo do wrapper do PATH.
+RALPH_LIB="$(cd "$(dirname "$0")" && pwd)/lib/profile.sh"
+[ -f "$RALPH_LIB" ] || RALPH_LIB="${MKTUX_HARNESS_ROOT:-}/scripts/lib/profile.sh"
+if [ ! -f "$RALPH_LIB" ]; then
+  fail "Nao achei scripts/lib/profile.sh ao lado do ralph.sh."
+  fail "Rodando uma copia avulsa do ralph.sh? Aponte MKTUX_HARNESS_ROOT para a raiz do plugin."
+  exit 1
+fi
+# shellcheck disable=SC1090
+. "$RALPH_LIB"
 
 format_duration() {
   local total_seconds=$1
@@ -306,102 +325,51 @@ exclude_phases_dir() {
   fi
 }
 
-# Laravel Sail: a suite roda DENTRO do container. Rodar `composer test` /
-# `php artisan test` no host falha (sem PHP, sem banco, sem rede do compose).
-# Ecoa o caminho do binario sail quando o projeto usa Sail.
-detect_sail() {
-  [ -f artisan ] || return 1
-  if [ -x vendor/bin/sail ]; then
-    echo "vendor/bin/sail"
-    return 0
-  fi
-  # Sail declarado no composer.json mas vendor/ ainda nao instalado.
-  if [ -f composer.json ] && grep -qF 'laravel/sail' composer.json; then
-    echo "vendor/bin/sail"
-    return 0
-  fi
-  return 1
+# O perfil do diretorio atual. Nao sobe: o ralph roda na raiz do projeto, e os
+# caminhos que o perfil devolve (ex: vendor/bin/sail) sao relativos a ela.
+resolve_profile() {
+  PROFILE="$(mktux_profile_at "$PWD" || true)"
+  [ -n "$PROFILE" ] || return 0
+  mktux_load_profile "$PROFILE"
+  log "Perfil de stack: $PROFILE"
 }
 
-# Containers de pe? O wrapper do sail imprime "Sail is not running." e sai != 0.
-sail_running() {
-  local out rc=0
-  out=$("$SAIL_BIN" ps 2>&1) || rc=$?
-  grep -qiF 'is not running' <<< "$out" && return 1
-  [ "$rc" -ne 0 ] && return 1
-  grep -qiE '(^|[[:space:]])(Up|running)([[:space:]]|$)' <<< "$out"
-}
-
-# O comando de teste invoca o sail? Olha o executavel (1o token), nao a string
-# inteira: um caminho como /tmp/sail-fixture/test.sh nao usa sail.
-test_cmd_uses_sail() {
-  local first="${TEST_CMD%% *}"
-  [ "$(basename -- "$first")" = "sail" ]
-}
-
-# Gate 2 so tem valor se rodar de verdade. Sail com containers parados falha
-# toda fase e queima ciclos de correcao inuteis — aborta antes da 1a sessao.
-check_sail_running() {
-  [ -n "$SAIL_BIN" ] || return 0
-  test_cmd_uses_sail || return 0
-
-  if [ ! -x "$SAIL_BIN" ]; then
-    fail "Laravel Sail detectado, mas $SAIL_BIN nao existe."
-    fail "Rode a instalacao de dependencias do projeto (ex: composer install) antes."
-    exit 1
-  fi
-
-  if ! sail_running; then
-    fail "Laravel Sail detectado, mas os containers nao estao de pe."
-    fail "A suite de testes (gate 2) roda dentro do container e falharia em toda fase."
-    fail "Suba o ambiente antes de rodar o ralph:"
-    fail "    $SAIL_BIN up -d"
-    exit 1
-  fi
-
-  log "Sail: containers de pe"
+# Gate 2 so tem valor se rodar de verdade: o perfil checa, antes da 1a sessao,
+# que o ambiente roda o comando (Laravel: containers do Sail de pe).
+check_test_env() {
+  [ -n "$PROFILE" ] || return 0
+  profile_preflight "$TEST_CMD"
 }
 
 resolve_test_cmd() {
-  SAIL_BIN="$(detect_sail || true)"
+  resolve_profile
 
   if [ -n "$TEST_CMD_FLAG" ]; then
     TEST_CMD="$TEST_CMD_FLAG"
     log "Gate 2 — comando de teste (--test-cmd): $TEST_CMD"
-    check_sail_running
+    check_test_env
     return 0
   fi
 
   if [ -n "${RALPH_TEST_CMD:-}" ]; then
     TEST_CMD="$RALPH_TEST_CMD"
     log "Gate 2 — comando de teste (RALPH_TEST_CMD): $TEST_CMD"
-    check_sail_running
+    check_test_env
     return 0
   fi
 
-  # Sail vem ANTES de composer/npm: num projeto Laravel dockerizado o host nao
-  # tem PHP nem acesso ao banco, e `composer test` mentiria como gate.
-  if [ -n "$SAIL_BIN" ]; then
-    # --compact: a saida do gate 2 vira prompt de correcao (tail -200). O formato
-    # verboso do PHPUnit enche esse orcamento com ruido em vez de falhas.
-    TEST_CMD="$SAIL_BIN artisan test --compact"
-  elif [ -f composer.json ] && grep -qE '"test"[[:space:]]*:' composer.json; then
-    TEST_CMD="composer test"
-  elif [ -f artisan ]; then
-    TEST_CMD="php artisan test"
-  elif [ -f package.json ] && grep -qE '"test"[[:space:]]*:' package.json; then
-    TEST_CMD="npm test"
-  elif [ -f pytest.ini ] || { [ -f pyproject.toml ] && grep -qF '[tool.pytest' pyproject.toml; }; then
-    TEST_CMD="pytest"
-  elif [ -f go.mod ]; then
-    TEST_CMD="go test ./..."
-  elif [ -f Cargo.toml ]; then
-    TEST_CMD="cargo test"
+  # O perfil vem ANTES da deteccao por manifest: num projeto Laravel com Sail o
+  # host nao tem PHP nem banco, e `composer test` mentiria como gate.
+  if [ -n "$PROFILE" ]; then
+    TEST_CMD="$(profile_test_cmd)"
+  fi
+  if [ -z "$TEST_CMD" ]; then
+    TEST_CMD="$(mktux_generic_test_cmd)"
   fi
 
   if [ -n "$TEST_CMD" ]; then
     log "Gate 2 — comando de teste (detectado): $TEST_CMD"
-    check_sail_running
+    check_test_env
   else
     warn "Gate 2 DESABILITADO: nenhum comando de teste resolvido."
     if [ "$VERIFY_MODE" = "off" ]; then
@@ -1093,8 +1061,8 @@ PREAMBLE
     echo "  - $sibling"
   done
 
-  # O gate 2 roda ESTE comando. Se o agente rodar outro (ex: `php artisan test`
-  # no host de um projeto Sail), ele ve verde e o gate ve vermelho.
+  # O gate 2 roda ESTE comando. Se o agente rodar outro (ex: o runner no host em
+  # vez de dentro do container), ele ve verde e o gate ve vermelho.
   if [ -n "$TEST_CMD" ]; then
     echo
     echo "## Comando de teste deste projeto"
@@ -1104,9 +1072,8 @@ PREAMBLE
     echo
     echo "Este e o comando exato usado para validar a fase. Nao use outro runner"
     echo "nem rode os testes por fora dele."
-    if [ -n "$SAIL_BIN" ]; then
-      echo "O projeto usa Laravel Sail: artisan, composer, php e testes rodam DENTRO"
-      echo "do container, via '$SAIL_BIN <cmd>'. Nunca rode essas ferramentas no host."
+    if [ -n "$PROFILE" ]; then
+      profile_prompt_notes
     fi
   fi
 }
@@ -1413,6 +1380,9 @@ run_engine() {
 
   export RALPH_ENGINE="$ENGINE"
   export RALPH_PHASE_MAX_ATTEMPTS="$MAX_CYCLES"
+  # O subagent test-runner resolve o comando por mktux-profile.sh, que le isto
+  # primeiro: dentro de um run ele roda exatamente o comando do gate 2.
+  export RALPH_TEST_CMD="$TEST_CMD"
 
   local model_args=()
   if [[ "$mode" == "verify" ]]; then

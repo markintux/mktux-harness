@@ -52,8 +52,8 @@ Opcoes que mais importam:
 - Raiz de um repositorio git, com a **arvore de trabalho limpa**.
 - Codex: `npm install -g @openai/codex` + `OPENAI_API_KEY`
 - Claude: `npm install -g @anthropic-ai/claude-code` + `ANTHROPIC_API_KEY`
-- Laravel Sail: containers **de pe**. Parados → abort no preflight, porque todo
-  gate 2 falharia e queimaria os ciclos de correcao a toa.
+- Perfil Laravel com Sail: containers **de pe**. Parados → abort no preflight,
+  porque todo gate 2 falharia e queimaria os ciclos de correcao a toa.
 
 ## Os quatro gates
 
@@ -102,22 +102,35 @@ Primeira regra que resolver vence:
 
 1. `--test-cmd "<cmd>"`
 2. `RALPH_TEST_CMD`
-3. deteccao por manifest:
+3. o **perfil de stack** do diretorio de onde o ralph roda
+   (`profiles/<nome>/profile.sh`; nao sobe diretorios):
+
+   | Perfil | Detectado por | Comando |
+   |---|---|---|
+   | Laravel | `artisan` | `vendor/bin/sail artisan test --compact` com Sail; senao `composer test` se houver `scripts.test`; senao `php artisan test` |
+
+4. deteccao por manifest:
 
    | Detectado | Comando |
    |---|---|
-   | Laravel Sail (`artisan` + `vendor/bin/sail`) | `vendor/bin/sail test` |
    | `composer.json` com `scripts.test` | `composer test` |
-   | `artisan` | `php artisan test` |
    | `package.json` com `scripts.test` | `npm test` |
-   | `pytest.ini` / `pyproject [tool.pytest]` | `pytest` |
+   | `pytest.ini` / `pyproject [tool.pytest]` | `pytest`; `uv run pytest` com `uv.lock`; `poetry run pytest` com `poetry.lock` |
    | `go.mod` | `go test ./...` |
    | `Cargo.toml` | `cargo test` |
 
-4. nada resolvido → aviso alto e gate 2 pulado (o gate 3 segura sozinho)
+5. nada resolvido → aviso alto e gate 2 pulado (o gate 3 segura sozinho)
 
-Sail tem precedencia sobre `composer test` porque a suite roda dentro do
-container.
+O perfil tambem valida o ambiente no preflight (Laravel: Sail parado → abort,
+porque a suite roda dentro do container) e acrescenta notas ao prompt de
+implementacao. O comando resolvido vai para as sessoes em `RALPH_TEST_CMD`: o
+subagent `test-runner` roda exatamente o que o gate 2 roda.
+
+Para ver o que o ralph vai resolver num projeto, sem rodar nada:
+
+```bash
+bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd   # Codex: $PLUGIN_ROOT
+```
 
 ## Variaveis de ambiente
 

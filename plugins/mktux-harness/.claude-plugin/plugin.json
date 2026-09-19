@@ -1,7 +1,7 @@
 {
   "name": "mktux",
-  "version": "0.4.0",
-  "description": "Da ideia ao codigo rodando: especificacao em quatro artefatos, planejamento em fases e execucao autonoma com quatro gates mecanicos. Laravel/Sail em primeiro lugar.",
+  "version": "0.5.0",
+  "description": "Da ideia ao codigo rodando: especificacao em quatro artefatos, planejamento em fases e execucao autonoma com quatro gates mecanicos. Core agnostico de stack, com Laravel/Sail como primeiro perfil.",
   "author": {
     "name": "Marcos Vinicius",
     "url": "https://github.com/markintux"
@@ -9,5 +9,5 @@
   "homepage": "https://github.com/markintux/mktux-harness",
   "repository": "https://github.com/markintux/mktux-harness",
   "license": "MIT",
-  "keywords": ["laravel", "sail", "ralph", "spec-driven", "phases", "autonomous"]
+  "keywords": ["laravel", "sail", "stack-profiles", "ralph", "spec-driven", "phases", "autonomous"]
 }

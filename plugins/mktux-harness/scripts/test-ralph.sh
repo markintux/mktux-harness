@@ -15,6 +15,10 @@ SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
 # RALPH_BIN permite apontar para uma copia patchada (prova red dos testes).
 RALPH="${RALPH_BIN:-$SCRIPTS/ralph.sh}"
 WATCH="${WATCH_BIN:-$SCRIPTS/ralph-watch.sh}"
+# Uma copia patchada do ralph.sh fora de scripts/ acha a lib de perfis por
+# aqui. Fixo neste plugin: o MKTUX_HARNESS_ROOT de quem roda pode ser outro clone.
+export MKTUX_HARNESS_ROOT
+MKTUX_HARNESS_ROOT="$(cd "$SCRIPTS/.." && pwd)"
 ONLY="${1:-}"
 
 TMP=$(mktemp -d)
@@ -61,6 +65,9 @@ state="${MOCK_STATE:?}"
 scenario="${MOCK_SCENARIO:-ok}"
 prompt=""
 verify=0
+
+# O ralph exporta o comando do gate 2 para as sessoes (o test-runner le dali).
+printf '%s\n' "${RALPH_TEST_CMD-<unset>}" >> "$state/session_test_cmd"
 
 bump() {
   local f="$state/$1" n=0
@@ -1298,6 +1305,63 @@ JSON
   rc=$(CASE_HOOK_ISOLATION=0 run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "RALPH_HOOK_ISOLATION=0: exit 0"
   assert_eq 0 "$(count_lines "$d/state/hook_overrides")" "RALPH_HOOK_ISOLATION=0 desliga"
+fi
+
+# ---------------------------------------------------------------------------
+# 39. Perfil de stack: so o diretorio atual; sem perfil cai no manifest
+# ---------------------------------------------------------------------------
+if case_enabled profile-detect; then
+  header "39. perfil de stack no diretorio atual; sem perfil cai no manifest"
+  d=$(new_case profile-laravel)
+  touch "$d/repo/artisan"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: laravel"
+  # nao roda ate o fim: so precisamos do preflight resolvendo o comando
+  run_ralph "$d" empty-diff --engine claude --max-cycles 1 > /dev/null
+  assert_contains "$d/out.log" "Perfil de stack: laravel" "artisan -> perfil laravel"
+  assert_contains "$d/out.log" "comando de teste (detectado): php artisan test" "laravel sem Sail nem composer test -> php artisan test"
+
+  d=$(new_case profile-none)
+  printf '{ "scripts": { "test": "exit 0" } }\n' > "$d/repo/package.json"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: node"
+  run_ralph "$d" empty-diff --engine claude --max-cycles 1 > /dev/null
+  assert_not_contains "$d/out.log" "Perfil de stack" "sem artisan -> sem perfil"
+  assert_contains "$d/out.log" "comando de teste (detectado): npm test" "sem perfil -> deteccao por manifest"
+
+  # O ralph nao sobe diretorios: os caminhos do perfil (vendor/bin/sail) sao
+  # relativos a raiz, e Laravel numa subpasta nao e o projeto que ele commita.
+  d=$(new_case profile-subdir)
+  mkdir -p "$d/repo/backend" && touch "$d/repo/backend/artisan"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: monorepo"
+  run_ralph "$d" empty-diff --engine claude --max-cycles 1 > /dev/null
+  assert_not_contains "$d/out.log" "Perfil de stack" "artisan so em subpasta -> sem perfil na raiz"
+fi
+
+# ---------------------------------------------------------------------------
+# 40. Comando do gate 2 exportado para as sessoes: o test-runner roda o mesmo
+# ---------------------------------------------------------------------------
+if case_enabled session-test-cmd; then
+  header "40. RALPH_TEST_CMD chega a toda sessao (impl e gate 3)"
+  for engine in claude codex; do
+    d=$(new_case "session-test-cmd-$engine")
+    rc=$(run_ralph "$d" ok --engine "$engine" --test-cmd "$d/test.sh")
+    assert_eq 0 "$rc" "$engine: exit 0"
+    assert_eq "$d/test.sh" "$(sort -u "$d/state/session_test_cmd" 2>/dev/null)" "$engine: toda sessao recebeu o comando do gate 2"
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# 41. Copia avulsa do ralph.sh (RALPH_BIN) acha a lib por MKTUX_HARNESS_ROOT
+# ---------------------------------------------------------------------------
+if case_enabled ralph-copy; then
+  header "41. copia avulsa do ralph.sh acha a lib de perfis por MKTUX_HARNESS_ROOT"
+  d=$(new_case ralph-copy)
+  mkdir -p "$d/copy" && cp "$RALPH" "$d/copy/ralph.sh"
+  rc=$(MKTUX_HARNESS_ROOT="" RALPH="$d/copy/ralph.sh" run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 1 "$rc" "sem MKTUX_HARNESS_ROOT: exit 1"
+  assert_contains "$d/out.log" "Aponte MKTUX_HARNESS_ROOT" "diz como apontar para o plugin"
+  test -f "$d/state/impl_calls" && bad "nenhuma sessao iniciada sem a lib" || ok "nenhuma sessao iniciada sem a lib"
+  rc=$(RALPH="$d/copy/ralph.sh" run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "com MKTUX_HARNESS_ROOT: exit 0"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

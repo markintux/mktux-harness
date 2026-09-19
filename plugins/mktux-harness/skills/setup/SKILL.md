@@ -108,10 +108,16 @@ do ai-memory, porque o SessionStart deles consome handoffs. Detalhes na skill
 
 | Hook | Quando | O que faz |
 |---|---|---|
-| `sail-guard` | antes de todo Bash | bloqueia comando que rodaria PHP/DB no host quando o projeto usa Sail, e devolve ao agente a forma correta |
+| `profile-hook` | antes de todo Bash · Claude: apos Edit/Write · Codex: no fim do turno | detecta o perfil de stack subindo do diretorio do evento e repassa o evento ao script do perfil; sem perfil, nao faz nada |
 | `log-event` | todo evento | grava o evento em `.harness/events.jsonl` com timestamp e branch |
-| `pint-and-test` | Claude: apos Edit/Write · Codex: no fim do turno | roda Pint e os testes afetados |
 | `log-tokens` | fim da sessao | grava consumo por modelo em `.harness/tokens.jsonl`, com `vendor` para comparar Claude e Codex |
+
+Scripts do perfil Laravel (`profiles/laravel/hooks/`), chamados pelo `profile-hook`:
+
+| Script | Evento | O que faz |
+|---|---|---|
+| `sail-guard` | `pre-bash` | bloqueia comando que rodaria PHP/DB no host quando o projeto usa Sail, e devolve ao agente a forma correta |
+| `pint-and-test` | `claude-post-edit` · `codex-stop` | roda Pint e os testes afetados |
 
 `pint-and-test` e `log-tokens` sao **deliberadamente diferentes por engine** — o
 Codex nao tem hook de Edit e le tokens do rollout em `~/.codex/sessions/`,
