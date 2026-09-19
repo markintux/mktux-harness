@@ -44,7 +44,7 @@ mktux_profile_at() {
 }
 
 # mktux_profile_for <dir> -> "<nome>\t<raiz>" do perfil mais proximo, subindo a
-# partir de <dir>. Laravel numa subpasta de monorepo so e achado subindo do cwd.
+# partir de <dir>. Perfil numa subpasta de monorepo so e achado subindo do cwd.
 mktux_profile_for() {
   local dir name
   dir="$(cd "$1" 2> /dev/null && pwd)" || return 1

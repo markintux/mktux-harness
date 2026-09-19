@@ -3,7 +3,7 @@
 # profile-hook.sh <evento> — encaminha um hook para o script do perfil de stack.
 #
 # hooks.json e codex-hooks.json chamam isto em vez de nomear um stack. O perfil
-# e detectado subindo a partir do cwd do evento (Laravel numa subpasta de
+# e detectado subindo a partir do cwd do evento (perfil numa subpasta de
 # monorepo tambem conta). O script do perfil recebe o mesmo stdin e decide
 # saida e exit code (exit 2 bloqueia; o Stop do Codex le JSON do stdout).
 # Sem perfil, ou perfil sem script para o evento: exit 0 sem saida.

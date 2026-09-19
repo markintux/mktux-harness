@@ -76,9 +76,9 @@
 # Comando de teste (gate 2), primeira regra que resolver:
 #   1. --test-cmd "<cmd>"
 #   2. RALPH_TEST_CMD
-#   3. o perfil de stack do diretorio atual (profiles/<nome>/profile.sh).
-#      Laravel (artisan): vendor/bin/sail artisan test --compact com Sail,
-#      senao composer test, senao php artisan test
+#   3. o perfil de stack do diretorio atual (profiles/<nome>/profile.sh, que
+#      define o comando). O que resolve num projeto, sem rodar nada:
+#      scripts/mktux-profile.sh test-cmd
 #   4. deteccao por manifest:
 #        composer.json com scripts.test            -> composer test
 #        package.json com scripts.test             -> npm test
@@ -89,9 +89,9 @@
 #        Cargo.toml                                -> cargo test
 #   5. nada resolvido -> aviso alto + gate 2 pulado (o gate 3 segura sozinho)
 #
-# O perfil tambem valida o ambiente no preflight (Laravel: Sail com containers
-# parados -> abort, todo gate 2 falharia queimando ciclos de correcao) e
-# acrescenta notas ao prompt. Contrato em scripts/lib/profile.sh.
+# O perfil tambem valida o ambiente no preflight (ex: containers parados ->
+# abort, todo gate 2 falharia queimando ciclos de correcao) e acrescenta notas
+# ao prompt. Contrato em scripts/lib/profile.sh.
 #
 # Variaveis de ambiente:
 #   RALPH_TEST_CMD           comando de teste (gate 2); --test-cmd tem prioridade
@@ -326,7 +326,7 @@ exclude_phases_dir() {
 }
 
 # O perfil do diretorio atual. Nao sobe: o ralph roda na raiz do projeto, e os
-# caminhos que o perfil devolve (ex: vendor/bin/sail) sao relativos a ela.
+# caminhos que o perfil devolve (ex: wrapper do container) sao relativos a ela.
 resolve_profile() {
   PROFILE="$(mktux_profile_at "$PWD" || true)"
   [ -n "$PROFILE" ] || return 0
@@ -335,7 +335,7 @@ resolve_profile() {
 }
 
 # Gate 2 so tem valor se rodar de verdade: o perfil checa, antes da 1a sessao,
-# que o ambiente roda o comando (Laravel: containers do Sail de pe).
+# que o ambiente roda o comando (ex: containers de pe).
 check_test_env() {
   [ -n "$PROFILE" ] || return 0
   profile_preflight "$TEST_CMD"
@@ -358,8 +358,9 @@ resolve_test_cmd() {
     return 0
   fi
 
-  # O perfil vem ANTES da deteccao por manifest: num projeto Laravel com Sail o
-  # host nao tem PHP nem banco, e `composer test` mentiria como gate.
+  # O perfil vem ANTES da deteccao por manifest: num projeto cujos testes rodam
+  # em container o host nao tem runtime nem banco, e o comando do manifest
+  # mentiria como gate.
   if [ -n "$PROFILE" ]; then
     TEST_CMD="$(profile_test_cmd)"
   fi
@@ -1531,8 +1532,8 @@ gate2_tests_pass() {
   state_gate 2 run
   state_log test "$test_log"
   local rc=0
-  # < /dev/null: sail test (docker compose exec) anexa stdin e consumiria o
-  # stream de quem chamou, alem de poder travar esperando input.
+  # < /dev/null: teste via container (docker compose exec) anexa stdin e
+  # consumiria o stream de quem chamou, alem de poder travar esperando input.
   bash -c "$TEST_CMD" < /dev/null > "$test_log" 2>&1 || rc=$?
 
   if [ "$rc" -ne 0 ]; then
@@ -2016,7 +2017,7 @@ main() {
   local seq=0
   local failed_phases=() skipped_phases=() completed_phases=()
 
-  # fd 3, nunca stdin: comandos do corpo (claude -p, sail test / docker compose
+  # fd 3, nunca stdin: comandos do corpo (claude -p, teste via docker compose
   # exec) leem stdin quando nao e TTY e engoliriam o resto do manifest — o run
   # pararia apos a primeira fase.
   while IFS='|' read -r -u 3 file num title; do
