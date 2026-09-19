@@ -196,6 +196,12 @@ chmod +x "$fx/sail/vendor/bin/sail"
 cp "$fx/sail/vendor/bin/sail" "$fx/mono repo/backend/vendor/bin/sail"
 printf '{ "scripts": { "test": "phpunit" } }\n' > "$fx/comp/composer.json"
 printf '{ "scripts": { "test": "vitest" } }\n' > "$fx/node/package.json"
+# Python: pytest.ini, ou pyproject.toml com [tool.pytest...]. pyproject sem
+# config de pytest nao basta (pode ser so empacotamento).
+mkdir -p "$fx/py-ini" "$fx/py-proj" "$fx/py-noconf"
+printf '[pytest]\ntestpaths = tests\n' > "$fx/py-ini/pytest.ini"
+printf '[project]\nname = "x"\n\n[tool.pytest.ini_options]\ntestpaths = ["tests"]\n' > "$fx/py-proj/pyproject.toml"
+printf '[project]\nname = "x"\n\n[tool.ruff]\nline-length = 100\n' > "$fx/py-noconf/pyproject.toml"
 
 mp() { env -u RALPH_TEST_CMD bash "$MP" --dir "$fx/$1" "${@:2}" 2> /dev/null; }
 
@@ -204,6 +210,12 @@ assert_eq "vendor/bin/sail artisan test --compact" "$(mp sail test-cmd)" "test-c
 assert_eq "composer test" "$(mp comp test-cmd)" "test-cmd: Laravel sem Sail, com composer test"
 assert_eq "php artisan test" "$(mp bare test-cmd)" "test-cmd: Laravel sem Sail nem composer test"
 assert_eq "npm test" "$(mp node test-cmd)" "test-cmd: sem perfil -> manifest"
+assert_eq "pytest" "$(mp py-ini test-cmd)" "test-cmd: Python com pytest.ini -> pytest"
+assert_eq "pytest" "$(mp py-proj test-cmd)" "test-cmd: Python com [tool.pytest] no pyproject -> pytest"
+rc=0; mp py-noconf test-cmd > /dev/null || rc=$?
+assert_eq 1 "$rc" "test-cmd: pyproject sem config de pytest -> nada resolvido"
+rc=0; mp py-proj name > /dev/null || rc=$?
+assert_eq 1 "$rc" "name: Python ainda sem perfil -> exit 1"
 rc=0; mp node name > /dev/null || rc=$?
 assert_eq 1 "$rc" "name: sem perfil -> exit 1"
 rc=0; mp none test-cmd > /dev/null || rc=$?
