@@ -82,7 +82,9 @@
 #   4. deteccao por manifest:
 #        composer.json com scripts.test            -> composer test
 #        package.json com scripts.test             -> npm test
-#        pytest.ini / pyproject [tool.pytest]      -> pytest
+#        pytest.ini / pyproject [tool.pytest]      -> pytest (uv run pytest com
+#                                                     uv.lock, poetry run pytest
+#                                                     com poetry.lock)
 #        go.mod                                    -> go test ./...
 #        Cargo.toml                                -> cargo test
 #   5. nada resolvido -> aviso alto + gate 2 pulado (o gate 3 segura sozinho)
@@ -185,7 +187,7 @@ while [[ $# -gt 0 ]]; do
     --no-smoke)    SKIP_SMOKE=1; shift ;;
     --verbose)     VERBOSE=1; shift ;;
     --dashboard)   DASHBOARD=1; shift ;;
-    -h|--help)     sed -n '2,145p' "$0"; exit 0 ;;
+    -h|--help)     sed -n '2,/^set -euo pipefail$/p' "$0" | sed '$d'; exit 0 ;;
     *)             INPUT_FILE="$1"; shift ;;
   esac
 done

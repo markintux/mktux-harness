@@ -583,7 +583,7 @@ First rule that resolves wins:
 |---|---|
 | `composer.json` with `scripts.test` | `composer test` |
 | `package.json` with `scripts.test` | `npm test` |
-| `pytest.ini` / `pyproject [tool.pytest]` | `pytest` |
+| `pytest.ini` / `pyproject [tool.pytest]` | `pytest`; `uv run pytest` with `uv.lock`; `poetry run pytest` with `poetry.lock` |
 | `go.mod` | `go test ./...` |
 | `Cargo.toml` | `cargo test` |
 

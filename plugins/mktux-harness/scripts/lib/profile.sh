@@ -80,7 +80,16 @@ mktux_generic_test_cmd() {
   elif [ -f package.json ] && grep -qE '"test"[[:space:]]*:' package.json; then
     echo "npm test"
   elif [ -f pytest.ini ] || { [ -f pyproject.toml ] && grep -qF '[tool.pytest' pyproject.toml; }; then
-    echo "pytest"
+    # Com lock do uv ou do poetry o pytest mora no virtualenv do projeto, nao no
+    # PATH do host: `pytest` puro falharia em toda fase. `uv run` sincroniza o
+    # ambiente sozinho — e o jeito do projeto rodar, nao uma instalacao a parte.
+    if [ -f uv.lock ]; then
+      echo "uv run pytest"
+    elif [ -f poetry.lock ]; then
+      echo "poetry run pytest"
+    else
+      echo "pytest"
+    fi
   elif [ -f go.mod ]; then
     echo "go test ./..."
   elif [ -f Cargo.toml ]; then

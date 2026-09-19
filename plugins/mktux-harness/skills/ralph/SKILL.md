@@ -115,7 +115,7 @@ Primeira regra que resolver vence:
    |---|---|
    | `composer.json` com `scripts.test` | `composer test` |
    | `package.json` com `scripts.test` | `npm test` |
-   | `pytest.ini` / `pyproject [tool.pytest]` | `pytest` |
+   | `pytest.ini` / `pyproject [tool.pytest]` | `pytest`; `uv run pytest` com `uv.lock`; `poetry run pytest` com `poetry.lock` |
    | `go.mod` | `go test ./...` |
    | `Cargo.toml` | `cargo test` |
 

@@ -198,10 +198,13 @@ printf '{ "scripts": { "test": "phpunit" } }\n' > "$fx/comp/composer.json"
 printf '{ "scripts": { "test": "vitest" } }\n' > "$fx/node/package.json"
 # Python: pytest.ini, ou pyproject.toml com [tool.pytest...]. pyproject sem
 # config de pytest nao basta (pode ser so empacotamento).
-mkdir -p "$fx/py-ini" "$fx/py-proj" "$fx/py-noconf"
+mkdir -p "$fx/py-ini" "$fx/py-proj" "$fx/py-noconf" "$fx/py-uv" "$fx/py-poetry"
 printf '[pytest]\ntestpaths = tests\n' > "$fx/py-ini/pytest.ini"
 printf '[project]\nname = "x"\n\n[tool.pytest.ini_options]\ntestpaths = ["tests"]\n' > "$fx/py-proj/pyproject.toml"
 printf '[project]\nname = "x"\n\n[tool.ruff]\nline-length = 100\n' > "$fx/py-noconf/pyproject.toml"
+# Com lock do uv/poetry o pytest mora no virtualenv do projeto, nao no host.
+cp "$fx/py-proj/pyproject.toml" "$fx/py-uv/pyproject.toml" && touch "$fx/py-uv/uv.lock"
+cp "$fx/py-ini/pytest.ini" "$fx/py-poetry/pytest.ini" && touch "$fx/py-poetry/poetry.lock"
 
 mp() { env -u RALPH_TEST_CMD bash "$MP" --dir "$fx/$1" "${@:2}" 2> /dev/null; }
 
@@ -214,6 +217,8 @@ assert_eq "pytest" "$(mp py-ini test-cmd)" "test-cmd: Python com pytest.ini -> p
 assert_eq "pytest" "$(mp py-proj test-cmd)" "test-cmd: Python com [tool.pytest] no pyproject -> pytest"
 rc=0; mp py-noconf test-cmd > /dev/null || rc=$?
 assert_eq 1 "$rc" "test-cmd: pyproject sem config de pytest -> nada resolvido"
+assert_eq "uv run pytest" "$(mp py-uv test-cmd)" "test-cmd: Python com uv.lock -> uv run pytest"
+assert_eq "poetry run pytest" "$(mp py-poetry test-cmd)" "test-cmd: Python com poetry.lock -> poetry run pytest"
 rc=0; mp py-proj name > /dev/null || rc=$?
 assert_eq 1 "$rc" "name: Python ainda sem perfil -> exit 1"
 rc=0; mp node name > /dev/null || rc=$?
