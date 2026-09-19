@@ -23,10 +23,10 @@ Leia:
 
 Depois inspecione o codebase para entender o que ja existe:
 
-- Models, migrations, rotas e controllers no lugar
-- Enums ja definidos
-- Actions e Services ja justificados
-- Middleware, policies e gates atras dos quais a feature vai sentar
+- Entidades, schema/migrations, entrypoints e handlers no lugar
+- Valores de dominio ja definidos
+- Operacoes de aplicacao e servicos ja justificados
+- Guards, middleware e regras de autorizacao atras dos quais a feature vai sentar
 
 ## Saida
 

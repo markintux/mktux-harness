@@ -134,4 +134,18 @@ Scripts (`profiles/laravel/hooks/`):
 |---|---|---|
 | `sail-guard` | `pre-bash` | bloqueia comando que rodaria PHP/DB no host quando o projeto usa Sail, e devolve ao agente a forma correta |
 | `pint-and-test` | `claude-post-edit` · `codex-stop` | roda Pint e os testes afetados |
+
+### Node.js
+
+Detectado por `package.json`. Ative o major de Node declarado em `.node-version`
+ou `.nvmrc` e
+instale as dependencias (`npm ci` quando existe lockfile). O perfil nao declara
+hooks; resolve o gate e entrega ao `test-runner` a sintaxe do npm.
+
+### Python
+
+Detectado por `pyproject.toml`. Prepare o ambiente de desenvolvimento do
+gerenciador do projeto. Num projeto uv cujo pytest mora no extra `dev`, rode
+`uv sync --extra dev`. O perfil nao declara hooks; valida o ambiente sem
+sincroniza-lo por conta propria.
 <!-- /perfis -->

@@ -9,8 +9,8 @@ at every decision point.
 
 One repository, two engines, zero files copied into your projects.
 
-One stack-agnostic core, with stack profiles on top: Laravel (Sail) is the first
-one; Node, Python, Go and Rust projects run on the generic path. See
+One stack-agnostic core, with stack profiles on top for Laravel (Sail), Node.js
+and Python; Go and Rust projects run on the generic path. See
 [Stack profiles](#stack-profiles).
 
 ---
@@ -589,6 +589,8 @@ First rule that resolves wins:
 | Profile | Detected by | Command |
 |---|---|---|
 | Laravel | `artisan` | `vendor/bin/sail artisan test --compact` with Sail; else `composer test` if there is a `scripts.test`; else `php artisan test` |
+| Node.js | `package.json` | `npm run check` when available; else `npm test` |
+| Python | `pyproject.toml` | `uv run pytest` with `uv.lock`; `poetry run pytest` with `poetry.lock`; else `pytest` |
 
 4. manifest detection:
 
@@ -602,9 +604,9 @@ First rule that resolves wins:
 
 5. nothing resolved → loud warning and gate 2 skipped (gate 3 holds on its own)
 
-The profile also checks the environment in preflight — Laravel with Sail and the
-containers down → abort, because the suite runs in the container and every gate 2
-would fail and burn the fix cycles for nothing — and adds notes to the
+The profile also checks the environment in preflight — containers down,
+Node.js dependencies absent, or pytest missing from the project environment →
+abort before every gate 2 burns a fix cycle — and adds notes to the
 implementation prompt. The resolved command reaches every session as
 `RALPH_TEST_CMD`, so the `test-runner` subagent runs exactly what gate 2 runs.
 To see what ralph will resolve in a project without running anything:
@@ -715,7 +717,10 @@ says the project uses Pest, the plan uses Pest.
 
 ### How a profile is detected
 
-A profile applies when its marker is present. Laravel's marker is `artisan`.
+A profile applies when its marker is present: `artisan` for Laravel,
+`package.json` for Node.js and `pyproject.toml` for Python. More specific
+profiles win; the Node.js detector does not claim a root that also carries a
+Laravel or Python marker.
 
 - **ralph** looks only at the directory it runs from: the paths a profile
   returns (`vendor/bin/sail`) are relative to that root.
@@ -728,19 +733,33 @@ To see what applies to a project, without running anything:
 
 ```bash
 P="$CLAUDE_PLUGIN_ROOT"                          # Codex: $PLUGIN_ROOT
-bash "$P/scripts/mktux-profile.sh" name          # laravel — or exit 1: no profile
+bash "$P/scripts/mktux-profile.sh" name          # laravel, node, python — or exit 1
 bash "$P/scripts/mktux-profile.sh" test-cmd      # what gate 2 and test-runner run
 bash "$P/scripts/mktux-profile.sh" notes test-runner
 ```
 
-### Projects without a profile (Node, Python, Go, Rust)
+### Node.js and Python profiles
+
+- **Node.js:** prefers the project's complete `scripts.check` gate, falling back
+  to `npm test`; requires `node`, `npm`, the major declared by `.node-version`
+  / `.nvmrc`, and installed dependencies. Its
+  `test-runner` notes preserve npm's `--` separator and never replace scripts
+  with `npx` or a global binary.
+- **Python:** preserves the project environment wrapper (`uv run`, `poetry run`
+  or the active environment), checks that pytest is already available without
+  installing anything, and points to `uv sync --extra dev` when that is where
+  the project declares pytest.
+
+Both profiles intentionally stop at test/lint mechanics. They do not impose a
+framework, directory layout, database or web architecture.
+
+### Projects without a profile (Go, Rust and others)
 
 They run on the generic path — the whole harness, minus the stack rules:
 
 - gate 2 and `test-runner` use manifest detection (see
-  [Test command](#test-command-gate-2)): `npm test`; `pytest`, or
-  `uv run pytest` with `uv.lock` and `poetry run pytest` with `poetry.lock`;
-  `go test ./...`; `cargo test`. Override with `--test-cmd` or `RALPH_TEST_CMD`;
+  [Test command](#test-command-gate-2)): `go test ./...`, `cargo test`, or a
+  supported manifest script. Override with `--test-cmd` or `RALPH_TEST_CMD`;
 - the planning skills follow only your `CLAUDE.md` / `AGENTS.md` and the code
   that exists — so that is where your conventions go;
 - `security-auditor` applies the generic web checklist;
@@ -758,6 +777,12 @@ plugins/mktux-harness/
 │   ├── profile.sh                 detection, test command, preflight, prompt notes, hook map
 │   ├── agents/test-runner.md      notes only test-runner reads
 │   └── hooks/                     sail-guard, pint-and-test
+├── profiles/node/
+│   ├── profile.sh                 npm gate, dependency preflight, prompt notes
+│   └── agents/test-runner.md      npm argument and full-gate rules
+├── profiles/python/
+│   ├── profile.sh                 pytest command, environment preflight, prompt notes
+│   └── agents/test-runner.md      pytest file/filter and wrapper rules
 ├── skills/<skill>/references/laravel.md
 │                                  conventions a skill loads (schema, phases, security)
 └── scripts/
@@ -803,8 +828,8 @@ stack* section sits in:
 
 It also checks that every hook, reference and notes file a profile points at
 exists, and that every reference in a registry block has its `profiles/<name>/`.
-The `ai-context` skill and agents stay outside the guard until they stop
-assuming Sail and Boost.
+The `ai-context` skill loads its stack-specific ownership and wrapper rules from
+the matching reference, so its core is covered by the same guard.
 
 ### Upgrading from 0.3
 
@@ -823,6 +848,10 @@ Nothing to change in your projects. What behaves differently:
   instead of an unspecified "equivalent agent".
 - **Python** projects with `uv.lock` or `poetry.lock` get `uv run pytest` /
   `poetry run pytest` instead of a bare `pytest` that failed on the host.
+- **Node.js and Python** are now first-class profiles with dependency preflight,
+  implementation notes and runner-specific argument rules.
+- **`ai-context`** no longer assumes a container wrapper or ownership tool in
+  its core; the Laravel-specific contract loads only when `artisan` matches.
 - A plugin installed at **project scope** does not follow the user-scope update.
   List installs with `claude plugin list`, and update each project-scoped one
   from inside that project: `claude plugin update mktux@mktux-harness -s project`.

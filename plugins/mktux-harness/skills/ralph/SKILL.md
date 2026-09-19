@@ -139,6 +139,24 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd   # Codex: $PLUGIN_
 - **Preflight:** Sail parado → abort, porque a suite roda dentro do container.
 - **Gate 2 sempre vermelho no primeiro run:** Sail parado, ou `.env.testing`
   ausente.
+
+### Node.js
+
+- **Detectado por:** `package.json` na raiz, sem marcador de perfil mais
+  especifico.
+- **Comando (gate 2):** `npm run check` quando o script existe; senao `npm test`.
+- **Preflight:** `node`/`npm` ausente, major diferente de `.node-version` /
+  `.nvmrc`, ou dependencias ainda nao instaladas → abort antes da primeira
+  sessao; com lockfile, sugere `npm ci`.
+
+### Python
+
+- **Detectado por:** `pyproject.toml` na raiz.
+- **Comando (gate 2):** `uv run pytest` com `uv.lock`; `poetry run pytest` com
+  `poetry.lock`; senao `pytest`.
+- **Preflight:** gerenciador ausente ou pytest fora do ambiente → abort antes da
+  primeira sessao; quando pytest esta no extra `dev`, sugere
+  `uv sync --extra dev`.
 <!-- /perfis -->
 
 ## Variaveis de ambiente

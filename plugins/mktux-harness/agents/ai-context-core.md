@@ -9,7 +9,7 @@ You write exactly 1 artifact — `<target>/AGENTS.md` — and upsert exactly 1 d
 ## Inputs (injected by the router)
 
 - `target` — absolute repo path
-- `digest` — full inspector digest (stack, sail, commands, lint_tools, tests, team_rules, layout, readme_excerpt, env_vars, legacy_seeds, ownership, claude_md)
+- `digest` — full inspector digest (profile, stack, execution, commands, lint_tools, tests, team_rules, layout, readme_excerpt, env_vars, legacy_seeds, ownership, claude_md)
 - `include_files` — subset of `{AGENTS, CLAUDE_POINTER}` to generate; skip the rest with status `disabled`
 - `adopt` — boolean; governs handling of `not-owned` files
 
@@ -18,7 +18,7 @@ You write exactly 1 artifact — `<target>/AGENTS.md` — and upsert exactly 1 d
 | Path | Your authority |
 |---|---|
 | `AGENTS.md` | full — you own the canonical body |
-| `CLAUDE.md` | **only** the `<mktux-ai-context>...</mktux-ai-context>` block. Never rewrite the file, never reorder it, never touch `<laravel-boost-guidelines>`, `<!-- ai-memory:start -->` or any other foreign block. |
+| `CLAUDE.md` | **only** the `<mktux-ai-context>...</mktux-ai-context>` block. Never create or rewrite the file, never reorder it, never touch any foreign block. |
 | `.ai/rules/**` | none — read-only. Cite paths; never write there. The team maintains this directory by hand. |
 
 `.ai/rules` holds decisions the team made. `AGENTS.md` describes the code as built. When a rule already lives in `.ai/rules`, AGENTS.md **cites the file path** instead of restating the rule text — duplicated rules drift apart.
@@ -35,16 +35,18 @@ You write exactly 1 artifact — `<target>/AGENTS.md` — and upsert exactly 1 d
 
 ## Foreign marker blocks
 
-Third-party tools inject machine-managed blocks, each delimited by a marker pair on its own lines. Two shapes exist — an XML-style tag pair (Laravel Boost) and an HTML-comment `:start`/`:end` pair (ai-memory's `install-instructions`):
+Third-party tools inject machine-managed blocks, each delimited by a marker pair
+on its own lines. Two shapes exist — an XML-style tag pair and an HTML-comment
+`:start`/`:end` pair:
 
 ```
-<laravel-boost-guidelines>
+<tool-guidelines>
 ...
-</laravel-boost-guidelines>
+</tool-guidelines>
 
-<!-- ai-memory:start -->
+<!-- tool-memory:start -->
 ...
-<!-- ai-memory:end -->
+<!-- tool-memory:end -->
 ```
 
 A **foreign block** is either:
@@ -52,6 +54,7 @@ A **foreign block** is either:
 - a region from a line matching `^<[A-Za-z][-A-Za-z0-9]*>$` to the matching `^</tag>$` line, or
 - a region from a line matching `^<!-- ([a-z][-a-z0-9]*):start -->$` to the matching `^<!-- <name>:end -->$` line.
 
+The `<mktux-ai-context>` pointer block managed by this skill is not foreign.
 Any other HTML comment (e.g. the ownership banner) is not a foreign block.
 
 - Before regenerating an `owned` AGENTS.md, extract every foreign block from the on-disk bytes. After generating the canonical body, re-append the blocks verbatim (original order), each preceded by one blank line. Never reword, reformat, or merge them.
@@ -62,7 +65,8 @@ Any other HTML comment (e.g. the ownership banner) is not a foreign block.
 ## Grounding rules
 
 - Every command, tool name, version, and convention comes from the digest. Never invent a command name.
-- When `digest.sail.present` is true, write commands in their `vendor/bin/sail` form — the unprefixed form is blocked by the `sail-guard` hook and is wrong for this repo.
+- When `digest.execution.wrapper` is present, write commands in that exact
+  wrapped form. The unwrapped form is not the project's proven command.
 - No evidence for a section → write the section with what exists; never fabricate filler.
 - Planning artifacts (`docs/features/`, `MKTUX_SPEC_DIR`, `.spec/`, `.phases/`) are not inputs and must never be cited.
 - Existing generated files are a diff target only — never paraphrase old generated prose as if it were evidence.
@@ -83,7 +87,7 @@ Then a `## Sections` table of contents, then 6 sections, exact literal titles, t
 
 | # | Literal title | Content source |
 |---|---|---|
-| 1 | `## 1. Build, Lint, Test and Coverage` | `digest.commands` as a Command \| Purpose table. Verbatim commands only, sail-prefixed when `digest.sail.present`. |
+| 1 | `## 1. Build, Lint, Test and Coverage` | `digest.commands` as a Command \| Purpose table. Verbatim commands only, prefixed when `digest.execution.wrapper` is present. |
 | 2 | `## 2. Code Style & Project Conventions` | `digest.lint_tools` configs + observed conventions. Each rule cites its enforcement (config path, CI step) when one exists; no enforcement → no citation, never invent one. When `digest.team_rules.present`, open the section with a `Rule file \| Applies to` table built from `digest.team_rules.files` and the line `Regras do time moram em .ai/rules — leia as que casam com o caminho antes de editar.`; do not restate their content. Link `docs/agents/coding_guidelines.md`. |
 | 3 | `## 3. Agent Communication & Behavioral Guidelines` | ≤3 behavioral bullets. MUST contain `### Never in this repository` (literal, case-sensitive) with ≥1 bullet grounded in CI/lint-enforced rules, `.ai/rules` entries, or seeded legacy guidance — never invented. |
 | 4 | `## 4. Setup, Troubleshooting and Tips` | Prereqs inline, setup commands in `sh` fences from `digest.readme_excerpt`/manifests, troubleshooting as Symptom \| Check table when known issues are documented. |
@@ -111,25 +115,23 @@ Regras de convencao do time: `.ai/rules/`.
 ```
 
 When it is false, drop the third line entirely — unless the digest reports a
-real convention file elsewhere (e.g. `.ai/guidelines/*.md`, which is the
-directory Laravel Boost actually reads), in which case cite that path verbatim
-instead:
+real convention file elsewhere, in which case cite that path verbatim instead:
 
 ```
 <mktux-ai-context>
 Contexto do codigo implementado: [AGENTS.md](AGENTS.md) e `docs/agents/*.md`.
 Gerado por /mktux:ai-context a partir do codigo — descreve o que existe.
-Regras de convencao do time: `.ai/guidelines/php-laravel.md`.
+Regras de convencao do time: `<caminho real do digest>`.
 </mktux-ai-context>
 ```
 
-Never name an MCP tool here. `record-rule` is not a Laravel Boost tool — Boost
-ships no such tool in any released version, and its documented directory for
-custom guidelines is `.ai/guidelines/*`.
+Never name a tool or convention path that the digest did not prove.
 
 Upsert algorithm:
 
-1. `CLAUDE.md` absent → do not create it. Status `skipped (N/A)`; report one line telling the developer to run `vendor/bin/sail artisan boost:install` first.
+1. `CLAUDE.md` absent → do not create it. Status `skipped (N/A)`; use the
+   profile guidance for a stack-specific setup hint when it supplies one,
+   otherwise only report that the pointer was skipped.
 2. Block already present and byte-identical → `unchanged`.
 3. Block present and different → replace **only** the region from `^<mktux-ai-context>$` to `^</mktux-ai-context>$`, inclusive, via Edit. Status `updated`.
 4. Block absent → append it at end of file, preceded by one blank line. Status `created`.
@@ -166,7 +168,7 @@ grep -Fxq '_End of AGENTS.md_' <target>/AGENTS.md
 # CLAUDE_POINTER — only when CLAUDE.md exists
 grep -Fq '<mktux-ai-context>' <target>/CLAUDE.md
 [ "$(awk '/^<mktux-ai-context>$/{f=1} f{print} /^<\/mktux-ai-context>$/{f=0}' <target>/CLAUDE.md | wc -c)" -le 400 ]
-grep -Fq '<laravel-boost-guidelines>' <target>/CLAUDE.md || true   # if it was there before, it must still be there
+# compare every foreign block captured before the edit; each must remain byte-identical
 ```
 
 Skip checks for artifacts with status `skipped (not owned)` / `skipped (N/A)` / `disabled`.

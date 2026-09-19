@@ -22,11 +22,12 @@ sao invisiveis para esta skill — nunca lidos, nunca citados, em nenhum passo.
 
 ## Divisao de territorio (importante)
 
-Este harness convive com o Laravel Boost. Cada um manda no seu arquivo:
+Esta skill convive com arquivos de instrucao e blocos gerenciados por outras
+ferramentas. Cada territorio tem um dono:
 
 | Arquivo | Dono | Esta skill |
 |---|---|---|
-| `CLAUDE.md` | Laravel Boost (`boost:install`) | **nunca reescreve**; so faz upsert de 1 bloco ponteiro delimitado |
+| `CLAUDE.md` | projeto / ferramenta que o criou | **nunca reescreve**; se o arquivo existe, so faz upsert de 1 bloco ponteiro delimitado |
 | `.ai/rules/**` | time, na mao | **nunca escreve**; le e cita como referencia |
 | `AGENTS.md` | esta skill | gera / atualiza |
 | `docs/agents/*.md` | esta skill | gera / atualiza |
@@ -70,6 +71,22 @@ Validacao: misturar `+` e `-` e erro — aborte com uma linha de explicacao. Id
 desconhecido → aborte listando os ids validos. Sem flag de filtro → todos os 10
 ids.
 
+## Perfil de stack
+
+Antes da inspecao, procure o marcador do perfil **somente na raiz alvo**. Leia no
+maximo o reference da linha que casar e repasse seu conteudo verbatim ao
+inspector e aos escritores como `profile_guidance`.
+
+<!-- perfis -->
+| Perfil | Marcador na raiz | Reference |
+|---|---|---|
+| Laravel | `artisan` | `references/laravel.md` |
+<!-- /perfis -->
+
+Se nenhum marcador casar, `profile_guidance: none`. **nao leia nenhum
+`references/<perfil>.md` sem o marcador correspondente**: o registro nao e uma
+lista de leitura.
+
 ## Contrato de posse
 
 Todo arquivo gerado carrega este banner na linha 3:
@@ -107,10 +124,10 @@ grave nada.
 
 Chame o subagent `ai-context-inspector` (Claude Code: ferramenta Task, nome
 namespaced `mktux:ai-context-inspector`; Codex: agente equivalente) passando o
-caminho do alvo. Ele devolve o digest estruturado: stack, comandos verbatim,
-layout, dependencias, sinais de API/async/persistencia, sinais de dominio,
-sementes legadas, presenca de Sail e de `.ai/rules`, e a classificacao de posse
-dos 9 caminhos canonicos.
+caminho do alvo e `profile_guidance`. Ele devolve o digest estruturado: stack,
+ambiente de execucao, comandos verbatim, layout, dependencias, sinais de
+API/async/persistencia, sinais de dominio, sementes legadas, regras do time e a
+classificacao de posse dos 9 caminhos canonicos.
 
 Guarde o digest para o passo 4. Nao re-inspecione o repo voce mesmo.
 
@@ -139,8 +156,7 @@ id em `include_files` cujo status reportado nao seja `skipped (not owned)` /
 `disabled`:
 
 ```bash
-# checagem de tamanho ignora bloco de marcador estrangeiro (<tag>...</tag> do Laravel Boost,
-# <!-- nome:start -->...<!-- nome:end --> do ai-memory)
+# checagem de tamanho ignora blocos de marcador estrangeiro
 strip_foreign() { awk '/^<[A-Za-z][-A-Za-z0-9]*>$/ || /^<!-- [a-z][-a-z0-9]*:start -->$/{skip=1} !skip{print} /^<\/[A-Za-z][-A-Za-z0-9]*>$/ || /^<!-- [a-z][-a-z0-9]*:end -->$/{skip=0}' "$1"; }
 
 test -f <path>                                            # existe
@@ -176,11 +192,11 @@ Depois da tabela:
 - **So realidade** — `docs/features/`, o valor de `MKTUX_SPEC_DIR`, `.spec/`, `.specs/`, `spec/` e `.phases/` nunca sao lidos nem citados por nenhum passo deste pipeline. Sao intencao, nao codigo.
 - **Nunca invente** — vale transitivamente; subagent cita evidencia ou emite a forma N/A.
 - **Nunca sobrescreva arquivo escrito a mao** sem `--adopt`.
-- **`CLAUDE.md` e do Boost** — so o bloco `<mktux-ai-context>` e seu. Nunca reescreva o arquivo, nunca mexa no bloco `<laravel-boost-guidelines>`.
+- **`CLAUDE.md` e estrangeiro** — so o bloco `<mktux-ai-context>` e seu. Nunca
+  crie o arquivo nem altere qualquer outro byte.
 - **`.ai/rules` e read-only aqui** — regra de convencao o time grava na mao, nunca esta skill.
-  Nem todo projeto tem esse diretorio: quando `team_rules.present` e falso, cite o
-  caminho real de convencao que o digest achou (`.ai/guidelines/*.md` e o que o
-  Laravel Boost le) em vez de apontar para `.ai/rules/`.
+  Nem todo projeto tem esse diretorio: quando `team_rules.present` e falso, cite
+  somente um caminho real de convencao que o digest tenha encontrado.
 - **Preserve bloco de marcador estrangeiro** — regiao `<tag>...</tag>` de terceiro em arquivo owned volta verbatim na regeneracao, nunca reescrita, nunca semeada; checagem de tamanho ignora ela.
 - **Sem escrita git** — nunca faca stage, commit ou reset; o dev commita na mao.
 - **Sem segredo** — `.env` nunca e lido; nome de variavel vem so de `.env.example`.

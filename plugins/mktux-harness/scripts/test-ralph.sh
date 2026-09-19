@@ -1308,10 +1308,10 @@ JSON
 fi
 
 # ---------------------------------------------------------------------------
-# 39. Perfil de stack: so o diretorio atual; sem perfil cai no manifest
+# 39. Perfil de stack: so o diretorio atual; perfil resolve antes do manifest
 # ---------------------------------------------------------------------------
 if case_enabled profile-detect; then
-  header "39. perfil de stack no diretorio atual; sem perfil cai no manifest"
+  header "39. perfil de stack no diretorio atual; perfil resolve antes do manifest"
   d=$(new_case profile-laravel)
   touch "$d/repo/artisan"
   git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: laravel"
@@ -1320,12 +1320,12 @@ if case_enabled profile-detect; then
   assert_contains "$d/out.log" "Perfil de stack: laravel" "artisan -> perfil laravel"
   assert_contains "$d/out.log" "comando de teste (detectado): php artisan test" "laravel sem Sail nem composer test -> php artisan test"
 
-  d=$(new_case profile-none)
+  d=$(new_case profile-node)
   printf '{ "scripts": { "test": "exit 0" } }\n' > "$d/repo/package.json"
   git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: node"
   run_ralph "$d" empty-diff --engine claude --max-cycles 1 > /dev/null
-  assert_not_contains "$d/out.log" "Perfil de stack" "sem artisan -> sem perfil"
-  assert_contains "$d/out.log" "comando de teste (detectado): npm test" "sem perfil -> deteccao por manifest"
+  assert_contains "$d/out.log" "Perfil de stack: node" "package.json -> perfil node"
+  assert_contains "$d/out.log" "comando de teste (detectado): npm test" "perfil node -> scripts.test"
 
   # O ralph nao sobe diretorios: os caminhos do perfil (vendor/bin/sail) sao
   # relativos a raiz, e Laravel numa subpasta nao e o projeto que ele commita.
