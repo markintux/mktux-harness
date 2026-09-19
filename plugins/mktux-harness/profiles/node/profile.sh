@@ -94,6 +94,11 @@ profile_preflight() {
 profile_prompt_notes() {
   echo "O projeto usa Node.js com npm: execute build, lint, formato e testes pelos"
   echo "scripts declarados em package.json; nao invoque binarios de node_modules direto."
+  # Um `check` completo (typecheck + lint + testes + build) a cada item foi o
+  # que um run real fez 14 vezes numa sessao. O script de teste aceita arquivo.
+  if node_has_script test; then
+    echo "Teste focado: 'npm test -- <caminho-do-arquivo-de-teste>'."
+  fi
 }
 
 profile_hook() { return 0; }

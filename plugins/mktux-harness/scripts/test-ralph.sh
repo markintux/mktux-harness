@@ -81,6 +81,15 @@ model=""
 effort=""
 disallowed=""
 strict=0
+tools=""
+noskills=0
+last=""
+
+# Os hooks do plugin gravam telemetria na raiz do projeto a cada tool call.
+if [ "${MOCK_HARNESS:-0}" = "1" ]; then
+  mkdir -p .harness
+  echo "{\"session\":\"$name\"}" >> .harness/events.jsonl
+fi
 
 if [ "$name" = "claude" ]; then
   # claude -p real le stdin quando nao e TTY: se o ralph nao redirecionar
@@ -91,6 +100,8 @@ if [ "$name" = "claude" ]; then
       -p) prompt="$2"; shift 2 ;;
       --allowedTools) verify=1; shift 2 ;;
       --disallowedTools) disallowed="$2"; shift 2 ;;
+      --tools) tools="$2"; shift 2 ;;
+      --disable-slash-commands) noskills=1; shift ;;
       --strict-mcp-config) strict=1; shift ;;
       --model) model="$2"; shift 2 ;;
       --effort) effort="$2"; shift 2 ;;
@@ -114,10 +125,12 @@ else
     case "$1" in
       --sandbox) [ "$2" = "read-only" ] && verify=1; shift 2 ;;
       --model) model="$2"; shift 2 ;;
+      -o|--output-last-message) last="$2"; shift 2 ;;
       -c)
         case "$2" in
           model_reasoning_effort=*) effort="${2#*=}" ;;
           hooks.state=*) echo "$2" >> "$state/hook_overrides" ;;
+          features.memories=*) echo "$2" >> "$state/codex_memories" ;;
         esac
         shift 2 ;;
       *) shift ;;
@@ -138,6 +151,11 @@ fi
 if [ "$verify" -eq 1 ] && [ "$name" = "claude" ]; then
   echo "$disallowed" > "$state/verify_disallowed"
   echo "$strict" > "$state/verify_strict"
+  echo "$tools" > "$state/verify_tools"
+  echo "$noskills" > "$state/verify_noskills"
+fi
+if [ "$verify" -eq 1 ] && [ "$name" = "codex" ]; then
+  echo "$last" > "$state/verify_last_path"
 fi
 if [ "$verify" -eq 0 ] && [ -n "$effort" ]; then
   echo "$effort" > "$state/impl_effort"
@@ -153,8 +171,14 @@ if [ "$verify" -eq 1 ]; then
   implemented=0
   compgen -G "src/impl-*.txt" > /dev/null 2>&1 && implemented=1
 
+  last_dest=/dev/null
+  if [ "$name" = "codex" ] && [ -n "$last" ] && [ "${MOCK_CODEX_NO_LAST:-0}" != "1" ]; then
+    last_dest="$last"
+  fi
+
   if [ "$implemented" -eq 0 ]; then
-    for i in $(seq 1 "$tasks"); do echo "TASK $i: INCOMPLETE — nenhum codigo encontrado"; done
+    for i in $(seq 1 "$tasks"); do echo "TASK $i: INCOMPLETE — nenhum codigo encontrado"; done \
+      | tee "$last_dest"
     exit 0
   fi
 
@@ -166,6 +190,16 @@ if [ "$verify" -eq 1 ]; then
       for i in $(seq 1 "$tasks"); do echo "TASK $i: DONE"; done
     fi
   }
+
+  # -o: o codex grava so a mensagem final, sem \n no fim da ultima linha.
+  # MOCK_CODEX_NO_LAST simula a engine que nao gravou (codex antigo, crash).
+  printf '%s' "$(emit_tasks)" > "$last_dest"
+
+  # verify-last-only: o transcript nao traz veredito legivel; so o -o traz.
+  if [ "$scenario" = "verify-last-only" ]; then
+    echo "transcript sem veredito"
+    exit 0
+  fi
 
   emit_tasks
   # `codex exec` reimprime a ultima mensagem do agente depois do resumo de
@@ -397,6 +431,8 @@ run_ralph() {
     RALPH_MEM0_USER="${CASE_MEM0_USER:-}" \
     MOCK_MEMORY_STATUS="${CASE_MEMORY_STATUS:-0}" \
     MOCK_MEMORY_WRITE="${CASE_MEMORY_WRITE:-0}" \
+    MOCK_CODEX_NO_LAST="${CASE_CODEX_NO_LAST:-0}" \
+    MOCK_HARNESS="${CASE_HARNESS:-0}" \
     CLAUDE_CONFIG_DIR="$dir/claude-home" \
     CODEX_HOME="$dir/codex-home" \
       bash "$RALPH" "$@" > "$dir/out.log" 2>&1
@@ -713,6 +749,7 @@ if case_enabled sail-up; then
   # o agente precisa saber qual runner usar, senao roda php artisan test no host
   assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "vendor/bin/sail artisan test --compact" "prompt informa o comando de teste"
   assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "Nunca rode essas ferramentas no host" "prompt avisa sobre o container"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "Teste focado: 'vendor/bin/sail artisan test --compact --filter=" "prompt da o teste focado pelo sail"
 fi
 
 # ---------------------------------------------------------------------------
@@ -836,6 +873,8 @@ fi
 # ---------------------------------------------------------------------------
 if case_enabled verify-duplicated; then
   header "25. codex duplica o bloco TASK -> gate 3 consolida por task"
+  # Sem o -o gravado o veredito sai do log, onde o bloco aparece duas vezes.
+  CASE_CODEX_NO_LAST=1
   d=$(new_case verify-duplicated)
   rc=$(run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "exit 0 (nao reprova por cobertura)"
@@ -848,6 +887,7 @@ if case_enabled verify-duplicated; then
   rc=$(run_ralph "$d2" verify-incomplete-once --engine codex --test-cmd "$d2/test.sh" --max-cycles 1)
   assert_eq 1 "$rc" "exit 1 (INCOMPLETE vence DONE duplicado)"
   assert_contains "$d2/out.log" "tasks incompletas" "reportou a task incompleta"
+  CASE_CODEX_NO_LAST=""
 fi
 
 # ---------------------------------------------------------------------------
@@ -955,6 +995,8 @@ if case_enabled verify-readonly; then
   assert_contains "$d/state/verify_disallowed" "Bash" "verificador recebe deny de Bash"
   assert_not_contains "$d/state/verify_disallowed" "MultiEdit" "sem MultiEdit (o CLI rejeita: tool inexistente)"
   assert_eq 1 "$(cat "$d/state/verify_strict")" "verificador roda sem MCP (--strict-mcp-config)"
+  assert_eq "Read,Glob,Grep" "$(cat "$d/state/verify_tools" 2>/dev/null)" "verificador so tem Read/Glob/Grep (--tools)"
+  assert_eq 1 "$(cat "$d/state/verify_noskills" 2>/dev/null)" "verificador sem listagem de skills (--disable-slash-commands)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1362,6 +1404,151 @@ if case_enabled ralph-copy; then
   test -f "$d/state/impl_calls" && bad "nenhuma sessao iniciada sem a lib" || ok "nenhuma sessao iniciada sem a lib"
   rc=$(RALPH="$d/copy/ralph.sh" run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "com MKTUX_HARNESS_ROOT: exit 0"
+fi
+
+# ---------------------------------------------------------------------------
+# 42. Prompt de implementacao: teste focado durante, suite completa uma vez,
+#     e nenhum convite a consultar memoria (sessao fria).
+#     "Rode a suite SEMPRE com <cmd>" fez um run real rodar 20 suites completas
+#     numa sessao, sem nenhuma execucao filtrada.
+# ---------------------------------------------------------------------------
+if case_enabled impl-prompt; then
+  header "42. prompt: teste focado, suite uma vez, sem memoria"
+  d=$(new_case impl-prompt)
+  rc=$(run_ralph "$d" test-red-once --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  for p in "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "$d/repo/.phases/prompts/phase-01.cycle-2.txt"; do
+    kind=$(basename "$p" .txt)
+    assert_contains "$p" "rode so os testes afetados" "$kind: teste focado durante o trabalho"
+    assert_contains "$p" "rode o comando acima UMA vez" "$kind: suite completa uma vez"
+    assert_not_contains "$p" "Rode a suite SEMPRE" "$kind: sem a ordem de suite a cada item"
+    assert_not_contains "$p" "use-a para entender o historico" "$kind: sem convite a memoria"
+    assert_contains "$p" "nao consulte memoria de sessoes anteriores" "$kind: sessao fria declarada"
+  done
+
+  # Cada perfil diz como rodar o teste focado no runner dele.
+  d=$(new_case impl-prompt-node)
+  printf '{ "scripts": { "test": "exit 0" } }\n' > "$d/repo/package.json"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: node"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "node: exit 0"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "Teste focado: 'npm test -- " "node: teste focado pelo script de teste"
+
+  d=$(new_case impl-prompt-python)
+  printf '[project]\nname = "x"\n\n[tool.pytest.ini_options]\n' > "$d/repo/pyproject.toml"
+  touch "$d/repo/uv.lock"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: python"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "python: exit 0"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "Teste focado: 'uv run pytest " "python: teste focado pelo runner do projeto"
+fi
+
+# ---------------------------------------------------------------------------
+# 43. Prompt do verificador: tasks numeradas pelo ralph e ponto de partida.
+#     Contando sozinho o verificador emitiu TASK 9 numa fase de 8; sem ponto
+#     de partida explorou o repo inteiro (1,3M tokens por sessao).
+# ---------------------------------------------------------------------------
+if case_enabled verify-prompt; then
+  header "43. verificador recebe tasks numeradas e arquivos alterados"
+  d=$(new_case verify-prompt)
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  vp="$d/repo/.phases/prompts/phase-01.verify-1.txt"
+  assert_contains "$vp" "1. **Task:** cria o arquivo A" "task 1 numerada pelo ralph"
+  assert_contains "$vp" "2. **Task:** cria o arquivo B" "task 2 numerada pelo ralph"
+  assert_contains "$vp" "de 1 a 2" "faixa de indices explicita"
+  assert_contains "$vp" "src/impl-1.txt" "arquivo alterado na fase listado"
+  assert_not_contains "$vp" ".phases/" "estado do run fora da lista"
+  assert_contains "$vp" "NAO rode build, testes, typecheck nem lint" "proibe rodar build e teste"
+  assert_contains "$vp" "node_modules" "proibe ler dependencias de terceiros"
+
+  d=$(new_case verify-prompt-head)
+  mkdir -p "$d/repo/src"
+  echo "impl previo" > "$d/repo/src/impl-1.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat: trabalho previo"
+  rc=$(run_ralph "$d" already-done --engine claude --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "ja implementada: exit 0"
+  assert_contains "$d/repo/.phases/prompts/phase-01.verify-1.txt" "Nenhum arquivo alterado nesta fase" "sem diff: aponta para HEAD"
+fi
+
+# ---------------------------------------------------------------------------
+# 44. Codex: veredito pela mensagem final (-o), nunca por uma de run anterior
+# ---------------------------------------------------------------------------
+if case_enabled verify-last-message; then
+  header "44. codex: gate 3 le a mensagem final gravada com -o"
+  d=$(new_case verify-last-message)
+  rc=$(run_ralph "$d" verify-last-only --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0 (veredito so no -o)"
+  assert_contains "$d/state/verify_last_path" ".phases/logs/phase-02.verify-1.last.txt" "-o ao lado do log do verificador"
+  assert_eq 3 "$(commits "$d")" "as 2 fases commitadas"
+
+  # Arquivo de um run anterior com tudo DONE; a engine deste run nao grava o
+  # -o e reprova no log. Ler o arquivo velho aprovaria a fase.
+  d=$(new_case verify-last-stale)
+  mkdir -p "$d/repo/.phases/logs"
+  printf 'TASK 1: DONE\nTASK 2: DONE\n' > "$d/repo/.phases/logs/phase-01.verify-1.last.txt"
+  CASE_CODEX_NO_LAST=1
+  rc=$(run_ralph "$d" verify-incomplete-once --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
+  CASE_CODEX_NO_LAST=""
+  assert_eq 1 "$rc" "exit 1 (arquivo velho descartado, veredito do log)"
+  assert_contains "$d/out.log" "TASK 1: INCOMPLETE" "reprovou pelo veredito deste run"
+fi
+
+# ---------------------------------------------------------------------------
+# 45. Codex: memoria nativa desligada em toda sessao do ralph
+#     Com features.memories ligado na config do usuario, fases e verificador
+#     liam o historico das fases anteriores num MEMORY.md de 60 KB.
+# ---------------------------------------------------------------------------
+if case_enabled codex-memories; then
+  header "45. codex: features.memories=false em toda sessao"
+  d=$(new_case codex-memories)
+  rc=$(CASE_SMOKE=1 run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  sessions=$(( $(cat "$d/state/impl_calls") + $(cat "$d/state/verify_calls" 2>/dev/null || echo 0) ))
+  # O smoke roda com --sandbox read-only: o mock o conta em verify_calls.
+  assert_eq "$sessions" "$(count_lines "$d/state/codex_memories")" "smoke, impl e gate 3 com a memoria desligada"
+  assert_eq "features.memories=false" "$(sort -u "$d/state/codex_memories" 2>/dev/null)" "flag no formato do -c"
+
+  d=$(new_case codex-memories-claude)
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "claude: exit 0"
+  assert_eq 0 "$(count_lines "$d/state/codex_memories")" "claude nao recebe flag do codex"
+fi
+
+# ---------------------------------------------------------------------------
+# 46. .harness/ (telemetria dos hooks) fora do git e fora dos gates
+#     Visivel, ela muda a cada tool call: toda sessao "escreve", o ciclo
+#     travado nunca e detectado e a telemetria entra no commit da fase.
+# ---------------------------------------------------------------------------
+if case_enabled harness-exclude; then
+  header "46. .harness/ excluido: nao conta como escrita nem entra no commit"
+  d=$(new_case harness-exclude)
+  rc=$(CASE_HARNESS=1 run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  assert_contains "$d/repo/.git/info/exclude" "/.harness/" ".harness/ no info/exclude"
+  assert_contains "$d/repo/.git/info/exclude" "/.phases/" ".phases/ no info/exclude"
+  assert_not_contains <(git -C "$d/repo" log --name-only --format=) ".harness" "nenhum commit leva telemetria"
+
+  # Fase ja em HEAD, sessao so gera telemetria: e "nao escreveu", sem commit.
+  d=$(new_case harness-already-done)
+  mkdir -p "$d/repo/src"
+  echo "impl previo" > "$d/repo/src/impl-1.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat: trabalho previo"
+  before=$(commits "$d")
+  rc=$(CASE_HARNESS=1 run_ralph "$d" already-done --engine claude --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "ja implementada: exit 0"
+  assert_contains "$d/out.log" "a sessao nao escreveu nada" "telemetria nao conta como escrita (gate 1)"
+  assert_contains "$d/out.log" "JA IMPLEMENTADA" "reconheceu a fase feita"
+  assert_eq "$before" "$(commits "$d")" "nenhum commit so de telemetria"
+
+  # Ja versionada: o exclude nao vale, aborta antes de gastar sessao.
+  d=$(new_case harness-tracked)
+  mkdir -p "$d/repo/.harness" && echo '{}' > "$d/repo/.harness/events.jsonl"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: telemetria versionada"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 1 "$rc" "versionada: exit 1"
+  assert_contains "$d/out.log" "git rm -r --cached .harness" "diz como tirar do git"
+  test -f "$d/state/impl_calls" && bad "nenhuma sessao iniciada" || ok "nenhuma sessao iniciada"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
