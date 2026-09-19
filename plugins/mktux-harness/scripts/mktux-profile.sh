@@ -18,6 +18,8 @@
 #             Com o perfil numa pasta acima de <dir>, sai prefixado com
 #             `cd <raiz> &&`. exit 1 se nada resolver.
 #   hook <e>  caminho do script do perfil para o evento <e>; exit 1 se nenhum
+#   notes <a> notas do perfil para o agent <a> (profiles/<nome>/agents/<a>.md);
+#             sem perfil ou sem notas: nada, exit 0
 #
 # <dir> default: o diretorio atual.
 
@@ -73,8 +75,15 @@ case "$cmd" in
     [ -n "$name" ] || exit 1
     mktux_profile_hook "$name" "${2:?hook exige o evento}"
     ;;
+  notes)
+    agent="${2:?notes exige o nome do agent}"
+    [ -n "$name" ] || exit 0
+    notes="$MKTUX_PLUGIN_DIR/profiles/$name/agents/$agent.md"
+    [ -f "$notes" ] && cat "$notes"
+    exit 0
+    ;;
   *)
-    sed -n '3,22p' "$0" >&2
+    sed -n '3,24p' "$0" >&2
     exit 2
     ;;
 esac

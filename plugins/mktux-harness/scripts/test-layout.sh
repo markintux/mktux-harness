@@ -96,6 +96,17 @@ for skill in "$PLUGIN"/skills/*/SKILL.md; do
   done <<< "$refs"
 done
 
+# Agents (so Claude) leem arquivos do plugin por ${CLAUDE_PLUGIN_ROOT}. Caminho
+# com variavel ($p = perfil) e resolvido em runtime; o fixo tem que existir.
+for agent in "$PLUGIN"/agents/*.md; do
+  aname=$(basename "$agent" .md)
+  paths=$(grep -oE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9._/$-]+' "$agent" | sed 's#^\${CLAUDE_PLUGIN_ROOT}/##' | grep -v '\$' | sort -u)
+  [ -z "$paths" ] && continue
+  while IFS= read -r p; do
+    if [ -f "$PLUGIN/$p" ]; then ok "agent $aname -> $p"; else bad "agent $aname -> $p (nao existe)"; fi
+  done <<< "$paths"
+done
+
 # ---------------------------------------------------------------------------
 # 3. Nenhuma referencia aos caminhos antigos dos hooks Laravel
 # ---------------------------------------------------------------------------
@@ -206,6 +217,10 @@ assert_eq "make t" "$(RALPH_TEST_CMD="make t" bash "$MP" --dir "$fx/sail" test-c
 assert_eq "$PLUGIN/profiles/laravel/hooks/shared/sail-guard.sh" "$(mp sail hook pre-bash)" "hook: evento -> script do perfil"
 rc=0; mp sail hook evento-inexistente > /dev/null || rc=$?
 assert_eq 1 "$rc" "hook: evento sem script -> exit 1"
+mp sail notes test-runner > "$TMP/notes.out"
+assert_contains "$TMP/notes.out" "Sail is not running" "notes: perfil com notas para o agent -> conteudo"
+rc=0; out=$(mp node notes test-runner) || rc=$?
+assert_eq "0:" "$rc:$out" "notes: sem perfil -> nada, exit 0"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then
