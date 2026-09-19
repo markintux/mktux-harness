@@ -818,7 +818,7 @@ mktux-harness/
     │   ├── plan-feature-description/
     │   ├── plan-user-stories/
     │   ├── plan-database-schema/      references/laravel.md: DB conventions
-    │   ├── plan-project-phases/        ralph's contract
+    │   ├── plan-project-phases/        ralph's contract + references/laravel.md
     │   ├── ralph/                      operation and troubleshooting
     │   ├── review-phases/
     │   ├── setup/

@@ -814,7 +814,7 @@ mktux-harness/
     │   ├── plan-feature-description/
     │   ├── plan-user-stories/
     │   ├── plan-database-schema/      references/laravel.md: convenções de banco
-    │   ├── plan-project-phases/        o contrato do ralph
+    │   ├── plan-project-phases/        o contrato do ralph + references/laravel.md
     │   ├── ralph/                      operação e diagnóstico
     │   ├── review-phases/
     │   ├── setup/
