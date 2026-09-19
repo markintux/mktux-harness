@@ -304,6 +304,12 @@ while IFS= read -r skill; do
   done <<< "$refs"
 done < <(find "$PLUGIN/skills" -name SKILL.md | sort)
 
+for skill in plan-database-schema plan-project-phases review-phases; do
+  assert_contains "$PLUGIN/skills/$skill/SKILL.md" \
+    '**nao leia nenhum' \
+    "$skill: sem marcador nao abre reference de perfil"
+done
+
 # O proprio guard: pega o vazamento, poupa o bloco de perfis, o reference de
 # perfil e a fixture de teste, e acusa bloco sem fechamento.
 gx="$TMP/guard"

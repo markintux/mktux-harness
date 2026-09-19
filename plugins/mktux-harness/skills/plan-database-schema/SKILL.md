@@ -23,6 +23,10 @@ de banco do perfil. Nenhum marcador na raiz, nenhum perfil: siga so as regras do
 | Laravel | `artisan` | `references/laravel.md` |
 <!-- /perfis -->
 
+Antes de abrir qualquer Reference, confirme que o marcador daquela linha existe
+na raiz. Se nenhum marcador existir, **nao leia nenhum
+`references/<perfil>.md`**: a tabela e um registro, nao uma lista de leitura.
+
 Leia `<dir>/feature-description.md`, `<dir>/user-stories.md` e a documentacao do
 projeto. Depois inspecione o banco **que ja existe**:
 

@@ -24,6 +24,10 @@ raiz, nenhum perfil: tire comandos, caminhos e framework de teste do
 | Laravel | `artisan` | `references/laravel.md` |
 <!-- /perfis -->
 
+Antes de abrir qualquer Reference, confirme que o marcador daquela linha existe
+na raiz. Se nenhum marcador existir, **nao leia nenhum
+`references/<perfil>.md`**: a tabela e um registro, nao uma lista de leitura.
+
 Leia:
 
 - `<dir>/feature-description.md`
