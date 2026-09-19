@@ -217,7 +217,7 @@ As suites do próprio harness rodam offline, com engines mock e sem gastar token
 ```bash
 cd plugins/mktux-harness
 scripts/test-ralph.sh      # ralph: portões, ciclos, limites, painel, perfis
-scripts/test-layout.sh     # manifests, perfis, references das skills, hooks, mktux-profile
+scripts/test-layout.sh     # manifests, perfis, references das skills, hooks, mktux-profile, guarda do core
 ```
 
 ---
@@ -719,8 +719,8 @@ Um perfil vale quando o marcador dele está presente. O marcador do Laravel é o
   (`vendor/bin/sail`) são relativos a essa raiz.
 - **Hooks e subagents** sobem a partir do diretório atual, então um app Laravel
   numa subpasta de monorepo continua protegido enquanto você trabalha dentro dele.
-- As **skills** checam o `artisan` na raiz do projeto e carregam o
-  `references/laravel.md` delas.
+- As **skills** procuram, na raiz do projeto, os marcadores da tabela de perfis
+  delas (`artisan` → `references/laravel.md`) e carregam o reference que casar.
 
 Para ver o que vale num projeto, sem rodar nada:
 
@@ -782,9 +782,27 @@ está em `scripts/lib/profile.sh`):
 
 Depois, conforme a stack pedir: scripts de hook em `profiles/<nome>/hooks/`,
 notas de subagent em `profiles/<nome>/agents/`, e um `references/<nome>.md` ao
-lado de cada skill que deve carregar convenções da stack (mais a linha de
-detecção nessa skill). O `scripts/test-layout.sh` checa que todo hook, reference
-e arquivo de notas que um perfil aponta existe.
+lado de cada skill que deve carregar convenções da stack, mais uma linha na
+tabela de perfis dessa skill. As skills `ralph` e `setup` ganham um heading na
+seção *Perfis de stack* de cada uma.
+
+Nome de stack fica fora do núcleo. O `scripts/test-layout.sh` falha quando uma
+skill, agent, hook ou script cita uma stack fora de `profiles/`, do reference de
+perfil de uma skill, ou de um bloco de registro — a cerca em que ficam toda
+tabela de perfis e toda seção *Perfis de stack*:
+
+```markdown
+<!-- perfis -->
+| Perfil | Marcador na raiz | Reference |
+|---|---|---|
+| Laravel | `artisan` | `references/laravel.md` |
+<!-- /perfis -->
+```
+
+Ele também checa que todo hook, reference e arquivo de notas que um perfil
+aponta existe, e que todo reference citado num bloco de registro tem seu
+`profiles/<nome>/`. A skill e os agents `ai-context` ficam fora da guarda até
+pararem de assumir Sail e Boost.
 
 ### Atualizando a partir da 0.3
 

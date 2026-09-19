@@ -217,7 +217,7 @@ The harness's own suites run offline, with mock engines and no tokens spent:
 ```bash
 cd plugins/mktux-harness
 scripts/test-ralph.sh      # ralph: gates, cycles, limits, dashboard, profiles
-scripts/test-layout.sh     # manifests, profiles, skill references, hooks, mktux-profile
+scripts/test-layout.sh     # manifests, profiles, skill references, hooks, mktux-profile, core guard
 ```
 
 ---
@@ -721,8 +721,8 @@ A profile applies when its marker is present. Laravel's marker is `artisan`.
   returns (`vendor/bin/sail`) are relative to that root.
 - **Hooks and subagents** walk up from the current directory, so a Laravel app in
   a monorepo subfolder is still guarded while you work inside it.
-- **Skills** check for `artisan` at the project root and load their
-  `references/laravel.md`.
+- **Skills** look up the project root's markers in their profile table
+  (`artisan` → `references/laravel.md`) and load the matching reference.
 
 To see what applies to a project, without running anything:
 
@@ -784,9 +784,27 @@ is in `scripts/lib/profile.sh`):
 
 Then, as the stack needs them: hook scripts under `profiles/<name>/hooks/`,
 subagent notes under `profiles/<name>/agents/`, and a `references/<name>.md`
-next to each skill that should carry conventions for it (plus the detection
-line in that skill). `scripts/test-layout.sh` checks that every hook, reference
-and notes file a profile points at exists.
+next to each skill that should carry conventions for it, plus a row in that
+skill's profile table. The `ralph` and `setup` skills each get a heading under
+their *Perfis de stack* section.
+
+Stack names stay out of the core. `scripts/test-layout.sh` fails when a skill,
+agent, hook or script names a stack anywhere but `profiles/`, a profile's skill
+reference, or a registry block — the fence every profile table and *Perfis de
+stack* section sits in:
+
+```markdown
+<!-- perfis -->
+| Perfil | Marcador na raiz | Reference |
+|---|---|---|
+| Laravel | `artisan` | `references/laravel.md` |
+<!-- /perfis -->
+```
+
+It also checks that every hook, reference and notes file a profile points at
+exists, and that every reference in a registry block has its `profiles/<name>/`.
+The `ai-context` skill and agents stay outside the guard until they stop
+assuming Sail and Boost.
 
 ### Upgrading from 0.3
 
