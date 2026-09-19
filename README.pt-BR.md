@@ -20,6 +20,7 @@ Um repositório, dois engines, zero arquivo copiado para dentro dos seus projeto
 - [O pipeline em detalhe](#o-pipeline-em-detalhe)
 - [O ralph em detalhe](#o-ralph-em-detalhe)
 - [Hooks e telemetria](#hooks-e-telemetria)
+- [Memória de longo prazo (ai-memory)](#memória-de-longo-prazo-ai-memory)
 - [O que seu projeto precisa ter](#o-que-seu-projeto-precisa-ter)
 - [Referência de comandos](#referência-de-comandos)
 - [Diagnóstico](#diagnóstico)
@@ -595,7 +596,9 @@ ciclos de correção à toa.
 | `RALPH_MAX_CYCLES` | ciclos de correção por fase |
 | `RALPH_MAX_LIMIT_WAITS` | esperas consecutivas por limite, por fase |
 | `RALPH_SMOKE` | `0` desliga o smoke test |
-| `RALPH_MEM0` / `RALPH_MEM0_USER` | resumo por fase no mem0. **Desligado** enquanto `RALPH_MEM0_USER` não for definida |
+| `RALPH_MEMORY` | `0` desliga a página por fase no [ai-memory](#memória-de-longo-prazo-ai-memory). Sem o binário ou com o servidor fora do ar, desliga sozinha |
+| `RALPH_MEMORY_BIN` | binário do ai-memory (default `ai-memory` no PATH) |
+| `RALPH_HOOK_ISOLATION` | `0` deixa os hooks do ai-memory rodarem nas sessões do ralph (default `1`: isola) |
 | `RALPH_VERBOSE` | `1` espelha a saída da engine |
 | `RALPH_DASHBOARD` | `1` liga o painel embutido |
 | `MKTUX_SPEC_DIR` | raiz dos specs (default `docs/features`) |
@@ -614,7 +617,8 @@ ciclos de correção à toa.
     ├── run.log                    log linear do run inteiro
     ├── phase-NN.cycle-M.log       sessão de implementação
     ├── phase-NN.test-M.log        saída do portão 2
-    └── phase-NN.verify-M.log      veredito task a task do portão 3
+    ├── phase-NN.verify-M.log      veredito task a task do portão 3
+    └── phase-NN.memory.log        saída do `ai-memory write-page`
 ```
 
 `.phases/` é registrado em `.git/info/exclude` automaticamente — o ralph **não
@@ -644,6 +648,87 @@ Adicione ao `.gitignore` do seu projeto:
 ```gitignore
 /.harness
 ```
+
+---
+
+## Memória de longo prazo (ai-memory)
+
+A memória do harness é o [ai-memory](https://github.com/akitaonrails/ai-memory):
+um servidor local (`127.0.0.1:49374`), com a memória numa wiki markdown
+versionada em git e hooks no Claude Code e no Codex. Ele é **opcional**: sem
+ele, o ralph roda igual.
+
+### Instalar (macOS, uma vez por máquina)
+
+```bash
+# binário nativo (Apple Silicon; Intel: troque aarch64 por x86_64)
+mkdir -p ~/Applications/ai-memory && cd ~/Applications/ai-memory
+gh release download -R akitaonrails/ai-memory -p 'ai-memory-macos-aarch64.tar.gz*'
+shasum -a 256 -c ai-memory-macos-aarch64.tar.gz.sha256
+tar -xzf ai-memory-macos-aarch64.tar.gz && ./ai-memory init
+ln -sf "$PWD/ai-memory" ~/.local/bin/ai-memory
+
+# servidor como serviço de login (launchd), em 127.0.0.1:49374
+mkdir -p ~/Library/Logs/ai-memory
+sed -e "s|__AI_MEMORY_BIN__|$PWD/ai-memory|" -e "s|__HOME__|$HOME|" \
+  packaging/launchd/com.github.akitaonrails.ai-memory.plist \
+  > ~/Library/LaunchAgents/com.github.akitaonrails.ai-memory.plist
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.github.akitaonrails.ai-memory.plist
+
+# hooks + MCP nas duas engines
+ai-memory install-hooks --agent claude-code --project-strategy repo-root --apply
+ai-memory install-hooks --agent codex       --project-strategy repo-root --apply
+ai-memory install-mcp   --client claude-code --apply
+ai-memory install-mcp   --client codex       --apply
+```
+
+- **Codex:** hook novo só roda depois de confiado. Abra o `codex` uma vez e
+  escolha *Trust all* em `/hooks`.
+- **`install-mcp --client codex` falhando com `invalid inline table`:** o
+  parser TOML do ai-memory não aceita tabela inline multilinha (TOML 1.1) no
+  seu `~/.codex/config.toml`. Adicione à mão:
+
+  ```toml
+  [mcp_servers.ai-memory]
+  url = "http://127.0.0.1:49374/mcp"
+  default_tools_approval_mode = "approve"
+  ```
+
+### O que o ralph faz com ele
+
+- **Uma página por fase.** Depois do commit, o ralph roda `ai-memory
+  write-page` e grava `ralph/<feature>/phase-NN.md` (tier `episodic`, tags
+  `ralph` e `<feature>`). A página leva o SHA do commit, a engine, os ciclos,
+  os arquivos alterados e o plano da fase. É um POST determinístico: não usa
+  LLM nem abre sessão extra, e vale nas duas engines. Rodar de novo com
+  `--from` atualiza a página em vez de duplicar.
+- **Sessões isoladas dos hooks do ai-memory.** O `SessionStart` do ai-memory
+  consome o handoff pendente (o GET é destrutivo) e o injeta como contexto.
+  Sem isolamento, a fase 1 comeria o handoff que *você* deixou, cada sessão
+  receberia o "onde parou" da anterior e o juiz do portão 3 deixaria de ser
+  independente. Quando o preflight acha os hooks na config de usuário, toda
+  sessão do ralph (smoke, implementação, portão 3) roda sem eles:
+  - **Claude:** `--setting-sources project,local` mais `--settings` com o seu
+    `settings.json` *menos* os hooks do ai-memory. Modelo, effort, plugins e
+    os seus outros hooks continuam.
+  - **Codex:** `-c hooks.state={...={enabled=false}}` só nos handlers do
+    ai-memory. A confiança dos outros hooks continua.
+  - Precisa de `jq`. Hooks do ai-memory instalados na config de **projeto**
+    não são detectados.
+- **Falha aberta.** Sem o binário, a memória desliga em silêncio. Com o
+  servidor fora do ar, o preflight avisa. Se a escrita falhar, a fase avisa e
+  segue válida. Memória é registro, não portão.
+
+Para consultar depois, peça ao agente "busque na memória a fase 3 da feature
+X" (MCP `memory_query`), ou rode `ai-memory search "..."`.
+
+### `/mktux:ai-context` e o bloco do ai-memory
+
+O `ai-memory install-instructions` grava um bloco
+`<!-- ai-memory:start -->…<!-- ai-memory:end -->` no `CLAUDE.md`/`AGENTS.md`.
+O `/mktux:ai-context` trata esse bloco como externo: preserva o bloco
+intacto ao regenerar o `AGENTS.md` e nunca o semeia como conteúdo escrito à
+mão.
 
 ---
 
@@ -702,6 +787,8 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | o run reinicia da fase 1 depois de você editar o plano | editar o `project-phases.md` invalida o stamp. Use `--from N` |
 | `ralph: command not found` | rode o passo 3 da instalação, e confira que `~/.local/bin` está no PATH |
 | `mktux-harness: não encontrei ralph.sh` | o plugin não está instalado nessa máquina, ou aponte `MKTUX_HARNESS_ROOT` para um clone |
+| preflight aborta com `Hooks do ai-memory em ... sem jq` | os hooks do ai-memory estão na config de usuário e o isolamento precisa do `jq`. Instale o `jq`. Use `RALPH_HOOK_ISOLATION=0` só se aceitar que as sessões consumam seus handoffs |
+| `Falha ao gravar no ai-memory` | leia `.phases/logs/phase-NN.memory.log`. Se o servidor caiu: `ai-memory status` e `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. A fase continua válida |
 
 Quando uma fase falhar, leia nesta ordem:
 

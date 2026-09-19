@@ -18,7 +18,7 @@ You write exactly 1 artifact — `<target>/AGENTS.md` — and upsert exactly 1 d
 | Path | Your authority |
 |---|---|
 | `AGENTS.md` | full — you own the canonical body |
-| `CLAUDE.md` | **only** the `<mktux-ai-context>...</mktux-ai-context>` block. Never rewrite the file, never reorder it, never touch `<laravel-boost-guidelines>` or any other foreign block. |
+| `CLAUDE.md` | **only** the `<mktux-ai-context>...</mktux-ai-context>` block. Never rewrite the file, never reorder it, never touch `<laravel-boost-guidelines>`, `<!-- ai-memory:start -->` or any other foreign block. |
 | `.ai/rules/**` | none — read-only. Cite paths; never write there. The team maintains this directory by hand. |
 
 `.ai/rules` holds decisions the team made. `AGENTS.md` describes the code as built. When a rule already lives in `.ai/rules`, AGENTS.md **cites the file path** instead of restating the rule text — duplicated rules drift apart.
@@ -35,15 +35,24 @@ You write exactly 1 artifact — `<target>/AGENTS.md` — and upsert exactly 1 d
 
 ## Foreign marker blocks
 
-Third-party tools (e.g. Laravel Boost) inject machine-managed blocks, delimited by an XML-style tag pair on its own lines:
+Third-party tools inject machine-managed blocks, each delimited by a marker pair on its own lines. Two shapes exist — an XML-style tag pair (Laravel Boost) and an HTML-comment `:start`/`:end` pair (ai-memory's `install-instructions`):
 
 ```
 <laravel-boost-guidelines>
 ...
 </laravel-boost-guidelines>
+
+<!-- ai-memory:start -->
+...
+<!-- ai-memory:end -->
 ```
 
-A **foreign block** is any region from a line matching `^<[A-Za-z][-A-Za-z0-9]*>$` to the matching `^</tag>$` line. HTML comments (`<!-- -->`) are not foreign blocks.
+A **foreign block** is either:
+
+- a region from a line matching `^<[A-Za-z][-A-Za-z0-9]*>$` to the matching `^</tag>$` line, or
+- a region from a line matching `^<!-- ([a-z][-a-z0-9]*):start -->$` to the matching `^<!-- <name>:end -->$` line.
+
+Any other HTML comment (e.g. the ownership banner) is not a foreign block.
 
 - Before regenerating an `owned` AGENTS.md, extract every foreign block from the on-disk bytes. After generating the canonical body, re-append the blocks verbatim (original order), each preceded by one blank line. Never reword, reformat, or merge them.
 - `_End of AGENTS.md_` closes the canonical body; preserved foreign blocks come after it.
@@ -138,7 +147,7 @@ Never reorder, reindent, or reflow any other byte of `CLAUDE.md`. `--adopt` does
 
 ```bash
 # size checks ignore foreign marker blocks
-strip_foreign() { awk '/^<[A-Za-z][-A-Za-z0-9]*>$/{skip=1} !skip{print} /^<\/[A-Za-z][-A-Za-z0-9]*>$/{skip=0}' "$1"; }
+strip_foreign() { awk '/^<[A-Za-z][-A-Za-z0-9]*>$/ || /^<!-- [a-z][-a-z0-9]*:start -->$/{skip=1} !skip{print} /^<\/[A-Za-z][-A-Za-z0-9]*>$/ || /^<!-- [a-z][-a-z0-9]*:end -->$/{skip=0}' "$1"; }
 
 test -f <target>/AGENTS.md
 [ "$(strip_foreign <target>/AGENTS.md | wc -c)" -ge 120 ]

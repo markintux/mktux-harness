@@ -139,8 +139,9 @@ id em `include_files` cujo status reportado nao seja `skipped (not owned)` /
 `disabled`:
 
 ```bash
-# checagem de tamanho ignora bloco de marcador estrangeiro (regiao <tag>...</tag> de terceiro, ex. Laravel Boost)
-strip_foreign() { awk '/^<[A-Za-z][-A-Za-z0-9]*>$/{skip=1} !skip{print} /^<\/[A-Za-z][-A-Za-z0-9]*>$/{skip=0}' "$1"; }
+# checagem de tamanho ignora bloco de marcador estrangeiro (<tag>...</tag> do Laravel Boost,
+# <!-- nome:start -->...<!-- nome:end --> do ai-memory)
+strip_foreign() { awk '/^<[A-Za-z][-A-Za-z0-9]*>$/ || /^<!-- [a-z][-a-z0-9]*:start -->$/{skip=1} !skip{print} /^<\/[A-Za-z][-A-Za-z0-9]*>$/ || /^<!-- [a-z][-a-z0-9]*:end -->$/{skip=0}' "$1"; }
 
 test -f <path>                                            # existe
 [ "$(wc -c < <path>)" -ge 120 ]                           # corpo nao trivial
