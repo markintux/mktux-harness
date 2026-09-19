@@ -52,6 +52,16 @@ for manifest in "$PLUGIN/hooks/hooks.json" "$PLUGIN/hooks/codex-hooks.json"; do
   done <<< "$paths"
 done
 
+# O dispatcher so acha o script de um evento pelo profile_hook do perfil.
+for profile_sh in "$PLUGIN"/profiles/*/profile.sh; do
+  pname=$(basename "$(dirname "$profile_sh")")
+  for event in pre-bash claude-post-edit codex-stop; do
+    rel=$( . "$profile_sh" && profile_hook "$event" )
+    [ -z "$rel" ] && continue
+    if [ -f "$PLUGIN/profiles/$pname/$rel" ]; then ok "perfil $pname: $event -> $rel"; else bad "perfil $pname: $event -> $rel (nao existe)"; fi
+  done
+done
+
 # ---------------------------------------------------------------------------
 # 2. Todo references/*.md citado numa skill existe ao lado dela
 # ---------------------------------------------------------------------------
@@ -79,10 +89,11 @@ done
 # ---------------------------------------------------------------------------
 header "3. sem caminho antigo de hook Laravel"
 # O caminho novo (profiles/laravel/hooks/...) contem o antigo como sufixo: so
-# conta como antigo o `hooks/` que nao vem logo depois de `laravel/`.
+# conta como antigo o `hooks/` que nao vem logo depois de `laravel/`. O
+# profile.sh cita os scripts relativos ao proprio perfil — esse e o caminho novo.
 old='(shared/sail-guard|claude/pint-and-test|codex/pint-and-test)'
 stale=$(grep -rnE "(^|[^l])/hooks/$old|(^|[^/])hooks/$old" "$PLUGIN" \
-          --exclude="$(basename "$0")" || true)
+          --exclude="$(basename "$0")" --exclude=profile.sh || true)
 if [ -z "$stale" ]; then
   ok "nenhum caminho antigo"
 else
@@ -135,6 +146,42 @@ else
   assert_eq 0 "$rc" "pint-and-test (codex): exit 0"
   assert_eq '{"continue": true}' "$out" "pint-and-test (codex): sem Sail -> continue, sem block"
 fi
+
+# ---------------------------------------------------------------------------
+# 5. mktux-profile.sh: o que os agents perguntam sobre o projeto
+# ---------------------------------------------------------------------------
+header "5. mktux-profile.sh"
+MP="$PLUGIN/scripts/mktux-profile.sh"
+fx="$TMP/fx"
+mkdir -p "$fx/sail/vendor/bin" "$fx/sail/app/Http" "$fx/comp" "$fx/bare" "$fx/node" "$fx/none" \
+         "$fx/mono repo/backend/vendor/bin" "$fx/mono repo/backend/app"
+touch "$fx/sail/artisan" "$fx/comp/artisan" "$fx/bare/artisan" "$fx/mono repo/backend/artisan"
+printf '#!/bin/sh\n' > "$fx/sail/vendor/bin/sail"
+chmod +x "$fx/sail/vendor/bin/sail"
+cp "$fx/sail/vendor/bin/sail" "$fx/mono repo/backend/vendor/bin/sail"
+printf '{ "scripts": { "test": "phpunit" } }\n' > "$fx/comp/composer.json"
+printf '{ "scripts": { "test": "vitest" } }\n' > "$fx/node/package.json"
+
+mp() { env -u RALPH_TEST_CMD bash "$MP" --dir "$fx/$1" "${@:2}" 2> /dev/null; }
+
+assert_eq "laravel" "$(mp sail name)" "name: artisan -> laravel"
+assert_eq "vendor/bin/sail artisan test --compact" "$(mp sail test-cmd)" "test-cmd: Laravel com Sail"
+assert_eq "composer test" "$(mp comp test-cmd)" "test-cmd: Laravel sem Sail, com composer test"
+assert_eq "php artisan test" "$(mp bare test-cmd)" "test-cmd: Laravel sem Sail nem composer test"
+assert_eq "npm test" "$(mp node test-cmd)" "test-cmd: sem perfil -> manifest"
+rc=0; mp node name > /dev/null || rc=$?
+assert_eq 1 "$rc" "name: sem perfil -> exit 1"
+rc=0; mp none test-cmd > /dev/null || rc=$?
+assert_eq 1 "$rc" "test-cmd: nada resolvido -> exit 1"
+assert_eq "cd $(printf '%q' "$fx/sail") && vendor/bin/sail artisan test --compact" "$(mp sail/app/Http test-cmd)" \
+  "test-cmd: de uma subpasta, roda na raiz do perfil"
+assert_eq "laravel" "$(mp "mono repo/backend/app" name)" "name: Laravel em subpasta de monorepo (com espaco)"
+rc=0; mp "mono repo" name > /dev/null || rc=$?
+assert_eq 1 "$rc" "name: raiz do monorepo nao herda o perfil da subpasta"
+assert_eq "make t" "$(RALPH_TEST_CMD="make t" bash "$MP" --dir "$fx/sail" test-cmd)" "test-cmd: RALPH_TEST_CMD (sessao do ralph) vence"
+assert_eq "$PLUGIN/profiles/laravel/hooks/shared/sail-guard.sh" "$(mp sail hook pre-bash)" "hook: evento -> script do perfil"
+rc=0; mp sail hook evento-inexistente > /dev/null || rc=$?
+assert_eq 1 "$rc" "hook: evento sem script -> exit 1"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then
