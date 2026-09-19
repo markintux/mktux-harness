@@ -824,9 +824,12 @@ mktux-harness/
     ├── hooks/
     │   ├── hooks.json                  Claude   (${CLAUDE_PLUGIN_ROOT})
     │   ├── codex-hooks.json            Codex    (${PLUGIN_ROOT})
-    │   ├── shared/                     sail-guard, log-event
-    │   ├── claude/                     pint-and-test, log-tokens
-    │   └── codex/                      pint-and-test, log-tokens
+    │   ├── shared/                     log-event
+    │   ├── claude/                     log-tokens
+    │   └── codex/                      log-tokens
+    ├── profiles/laravel/               o que só projeto Laravel usa
+    │   └── hooks/                      sail-guard (shared/), pint-and-test
+    │                                   (claude/, codex/)
     └── scripts/
         ├── ralph.sh                    o orquestrador
         ├── ralph-watch.sh              painel ao vivo, read-only
