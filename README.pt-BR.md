@@ -834,6 +834,7 @@ mktux-harness/
         ├── ralph.sh                    o orquestrador
         ├── ralph-watch.sh              painel ao vivo, read-only
         ├── test-ralph.sh               suite do próprio ralph
+        ├── test-layout.sh              caminhos de hook, references das skills, hooks Laravel
         └── mktux-setup.sh              instala os wrappers no PATH
 ```
 
