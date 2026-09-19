@@ -2,7 +2,8 @@
 #
 # test-layout.sh — checa o layout do plugin: todo caminho que um manifest, um
 # perfil ou uma skill cita existe; os hooks, pelo dispatcher de perfil, ainda se
-# comportam; e o mktux-profile.sh responde o que os agents perguntam.
+# comportam; o mktux-profile.sh responde o que os agents perguntam; e o core nao
+# cita nome de stack fora de profiles/ e do registro de perfis.
 #
 # A test-ralph.sh cobre o ralph.sh; nada cobria hooks nem skills. Um hook movido
 # sem atualizar o hooks.json some calado (o engine so loga o erro), e um
@@ -238,6 +239,83 @@ mp sail notes test-runner > "$TMP/notes.out"
 assert_contains "$TMP/notes.out" "Sail is not running" "notes: perfil com notas para o agent -> conteudo"
 rc=0; out=$(mp node notes test-runner) || rc=$?
 assert_eq "0:" "$rc:$out" "notes: sem perfil -> nada, exit 0"
+
+# ---------------------------------------------------------------------------
+# 6. Core sem nome de stack
+# ---------------------------------------------------------------------------
+header "6. core sem nome de stack"
+# Convencao de stack mora em profiles/<nome>/ e em skills/*/references/<nome>.md.
+# Citada no core, vaza para projeto de outro stack (o Laravel vazava no plano
+# de um projeto Node). Unica excecao: o registro de perfis, num .md, entre
+# <!-- perfis --> e <!-- /perfis -->. `composer` fica de fora de proposito: e
+# manifest, par de npm e cargo nas listas que cobrem varios stacks.
+STACK_TERMS='laravel|artisan|sail|php[a-z]*|pint|pest|eloquent|blade|livewire|inertia|horizon'
+# Fora do guard ate o passo 4 do roadmap de perfis: no ai-context o Laravel e
+# comportamento (prefixo do Sail, Boost dono do CLAUDE.md), nao texto, e
+# generalizar pede um projeto nao-Laravel para validar.
+CORE_SKIP='skills/ai-context/SKILL.md agents/ai-context-core.md agents/ai-context-docs.md agents/ai-context-inspector.md'
+
+# core_stack_leaks <raiz do plugin> -> "arquivo:linha:texto" de cada nome de
+# stack fora do bloco de perfis, e "arquivo: bloco ... sem fechamento" (bloco
+# aberto liberaria o resto do arquivo).
+core_stack_leaks() {
+  local root="$1" f rel
+  while IFS= read -r f; do
+    rel="${f#"$root/"}"
+    case " $CORE_SKIP " in *" $rel "*) continue ;; esac
+    if [[ "$rel" =~ ^skills/[^/]+/references/([^/]+)\.md$ ]] && [ -d "$root/profiles/${BASH_REMATCH[1]}" ]; then
+      continue
+    fi
+    if awk '/^<!-- perfis -->$/{f=1} /^<!-- \/perfis -->$/{f=0} END{exit !f}' "$f"; then
+      echo "$rel: bloco <!-- perfis --> sem fechamento"
+    fi
+    awk '/^<!-- perfis -->$/{f=1} {print (f ? "" : $0)} /^<!-- \/perfis -->$/{f=0}' "$f" \
+      | grep -nwiE "$STACK_TERMS" | awk -v f="$rel" '{print f ":" $0}'
+  done < <(find "$root/skills" "$root/agents" "$root/hooks" "$root/scripts" \
+             -type f ! -name '.*' ! -name 'test-*.sh' 2> /dev/null | LC_ALL=C sort)
+}
+
+for rel in $CORE_SKIP; do
+  if [ -f "$PLUGIN/$rel" ]; then
+    echo -e "  ${YELLOW}skip${NC} $rel (ai-context: passo 4)"
+  else
+    bad "CORE_SKIP cita $rel, que nao existe"
+  fi
+done
+
+leaks=$(core_stack_leaks "$PLUGIN")
+if [ -z "$leaks" ]; then
+  ok "nenhum nome de stack fora de profiles/, references de perfil e bloco de perfis"
+else
+  bad "nome de stack no core:"
+  printf '%s\n' "$leaks" | sed 's/^/         /'
+fi
+
+# Todo reference citado num bloco de perfis leva o nome de um perfil existente:
+# sem profiles/<nome>/ nao ha deteccao, e a linha do registro nunca casa.
+while IFS= read -r skill; do
+  name=$(basename "$(dirname "$skill")")
+  refs=$(awk '/^<!-- perfis -->$/{f=1} f{print} /^<!-- \/perfis -->$/{f=0}' "$skill" \
+           | grep -oE 'references/[A-Za-z0-9._-]+\.md' | sort -u)
+  [ -z "$refs" ] && continue
+  while IFS= read -r r; do
+    pname=$(basename "$r" .md)
+    if [ -d "$PLUGIN/profiles/$pname" ]; then ok "$name: bloco de perfis -> profiles/$pname"; else bad "$name: bloco de perfis cita $r, sem profiles/$pname/"; fi
+  done <<< "$refs"
+done < <(find "$PLUGIN/skills" -name SKILL.md | sort)
+
+# O proprio guard: pega o vazamento, poupa o bloco de perfis, o reference de
+# perfil e a fixture de teste, e acusa bloco sem fechamento.
+gx="$TMP/guard"
+mkdir -p "$gx/skills/a/references" "$gx/profiles/laravel" "$gx/agents" "$gx/scripts"
+printf 'linha neutra\nRode php artisan test.\n<!-- perfis -->\n| Laravel | `artisan` |\n<!-- /perfis -->\n' > "$gx/skills/a/SKILL.md"
+printf 'Sail no reference do perfil\n' > "$gx/skills/a/references/laravel.md"
+printf 'Sail num template\n' > "$gx/skills/a/references/template.md"
+printf '<!-- perfis -->\nLaravel\n' > "$gx/agents/aberto.md"
+printf '# Laravel na fixture\n' > "$gx/scripts/test-x.sh"
+assert_eq "agents/aberto.md: bloco <!-- perfis --> sem fechamento
+skills/a/SKILL.md:2:Rode php artisan test.
+skills/a/references/template.md:1:Sail num template" "$(core_stack_leaks "$gx")" "guard: acha vazamento, poupa o permitido, acusa bloco aberto"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then
