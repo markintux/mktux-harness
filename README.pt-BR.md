@@ -95,8 +95,11 @@ agente.**
 | **3** | um verificador independente, read-only, que julga **task por task** | sim |
 
 O portão 3 é o que segura a mentira. Ele roda numa sessão separada, com modelo
-barato, com acesso só a `Read`, `Glob` e `Grep` — **sem Bash, sem shell, sem
-git**. Para cada task do plano ele emite exatamente uma linha:
+barato. O ralph entrega as tasks da fase já numeradas, mais os arquivos que a
+fase alterou como ponto de partida. No Claude ele só tem `Read`, `Glob` e `Grep`
+— **sem Bash, sem shell, sem git**; no Codex roda em sandbox read-only, instruído
+a não rodar build nem teste. Para cada task do plano ele emite exatamente uma
+linha:
 
 ```
 TASK 1: DONE
@@ -412,10 +415,6 @@ total-spent calculation must behave exactly as before.
 **Conventions here, to follow rather than "fix":** actions live in
 `app/Actions/Customer/`, one class per use case, constructor property promotion.
 
-**This phase has exactly 4 tasks.** Emit one verdict line per task, numbered 1 to
-4 in the order they appear. The sub-bullets under "Automated tests to generate"
-are part of the task above them, not tasks of their own.
-
 **Tasks:**
 - [ ] Create `App\Actions\Customer\ExportCustomersAction` returning a
       `CsvDocument`, reading through the existing `CustomerQuery`.
@@ -455,9 +454,11 @@ Note três coisas, todas deliberadas:
    verificador consegue checar com Grep. "Confirme com `grep -rn cpf app/`" ele
    não consegue — sai `NOT-CODE` e vira pendência manual.
 
-3. **A contagem de tasks está declarada.** O `ralph` conta com `grep`, o
-   verificador conta lendo. Se divergirem, a fase é reprovada mesmo com tudo
-   verde. Num run real isso custou dois ciclos e 30 minutos.
+3. **A primeira linha de cada task se sustenta sozinha.** O `ralph` conta os
+   checkboxes e entrega ao verificador uma lista numerada com a primeira linha de
+   cada task, então o verificador nunca conta lendo. Detalhe vai em sub-bullet
+   `-` simples: todo `- [ ]`, em qualquer indentação, vira task com veredito
+   próprio.
 
 **Leia esse arquivo com atenção.** É o último ponto barato de correção. Depois
 daqui, cada erro custa uma sessão.
@@ -604,7 +605,10 @@ Vence a primeira regra que resolver:
 O perfil também valida o ambiente no preflight — containers parados,
 dependências Node.js ausentes ou pytest fora do ambiente do projeto → abort
 antes que cada portão 2 queime um ciclo de correção — e acrescenta notas ao prompt de
-implementação. O comando resolvido chega a toda sessão como `RALPH_TEST_CMD`,
+implementação, incluindo como rodar um teste focado naquela stack. O prompt pede
+teste focado durante o trabalho e o comando completo uma vez, no fim: rodar a
+suite inteira a cada item custava minutos por item. O comando resolvido chega a
+toda sessão como `RALPH_TEST_CMD`,
 então o subagent `test-runner` roda exatamente o que o portão 2 roda. Para ver o
 que o ralph vai resolver num projeto sem rodar nada:
 `bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd`.
@@ -622,7 +626,7 @@ que o ralph vai resolver num projeto sem rodar nada:
 | `RALPH_SMOKE` | `0` desliga o smoke test |
 | `RALPH_MEMORY` | `0` desliga a página por fase no [ai-memory](#memória-de-longo-prazo-ai-memory). Sem o binário ou com o servidor fora do ar, desliga sozinha |
 | `RALPH_MEMORY_BIN` | binário do ai-memory (default `ai-memory` no PATH) |
-| `RALPH_HOOK_ISOLATION` | `0` deixa os hooks do ai-memory rodarem nas sessões do ralph (default `1`: isola) |
+| `RALPH_HOOK_ISOLATION` | `0` deixa os hooks do ai-memory rodarem nas sessões do ralph (default `1`: isola). Independente disso, toda sessão Codex que o ralph abre roda com `-c features.memories=false`, para a memória nativa do Codex nunca trazer sessões anteriores para dentro de uma sessão fria |
 | `RALPH_VERBOSE` | `1` espelha a saída da engine |
 | `RALPH_DASHBOARD` | `1` liga o painel embutido |
 | `MKTUX_SPEC_DIR` | raiz dos specs (default `docs/features`) |
@@ -641,12 +645,16 @@ que o ralph vai resolver num projeto sem rodar nada:
     ├── run.log                    log linear do run inteiro
     ├── phase-NN.cycle-M.log       sessão de implementação
     ├── phase-NN.test-M.log        saída do portão 2
-    ├── phase-NN.verify-M.log      veredito task a task do portão 3
+    ├── phase-NN.verify-M.log      sessão do portão 3
+    ├── phase-NN.verify-M.last.txt veredito final do portão 3 (Codex)
     └── phase-NN.memory.log        saída do `ai-memory write-page`
 ```
 
-`.phases/` é registrado em `.git/info/exclude` automaticamente — o ralph **não
-mexe** no `.gitignore` do seu projeto.
+`.phases/` e `.harness/` (telemetria dos hooks) são registrados em
+`.git/info/exclude` automaticamente — o ralph **não mexe** no `.gitignore` do
+seu projeto. `.harness/` já versionado aborta o preflight: a telemetria muda a
+cada tool call, então entraria no commit de toda fase e o portão 1 veria escrita
+em toda sessão.
 
 ---
 
@@ -678,6 +686,9 @@ Adicione ao `.gitignore` do seu projeto:
 ```gitignore
 /.harness
 ```
+
+O ralph exclui `.harness/` sozinho quando roda, mas os hooks gravam ali em toda
+sessão, não só nas do ralph: ignore antes do seu primeiro commit.
 
 ---
 
@@ -992,7 +1003,8 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | Sintoma | Causa provável |
 |---|---|
 | `Contrato de formato violado` no preflight | heading `## Phase` fora de `## Phase N: <título>`. Uma fase com heading torto **some silenciosamente** do run |
-| fase reprova com todos os vereditos `DONE` | contagem de tasks divergente. A fase precisa da linha `**This phase has exactly N tasks.**` |
+| portão 3 reprova por `cobertura incompleta` ou índice fora da faixa | o verificador ignorou a lista numerada do prompt. Leia o veredito (`verify-M.last.txt` no Codex, `verify-M.log` no Claude); se repetir, troque `RALPH_VERIFY_MODEL` |
+| preflight aborta com `.harness/ esta versionado` | a telemetria foi commitada. `git rm -r --cached .harness` e commit |
 | task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do código |
 | fase reprova em todo ciclo até esgotar | task com escape condicional (*"faça X, mas se ficar estranho, deixe"*). Na dúvida, o verificador escolhe INCOMPLETE |
 | portão 2 sempre vermelho no primeiro run | Laravel: Sail parado, ou `.env.testing` ausente. Outras stacks: o ambiente de desenvolvimento nunca foi preparado (dependências, virtualenv) |

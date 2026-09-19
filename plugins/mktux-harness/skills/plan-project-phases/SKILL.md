@@ -100,7 +100,7 @@ sabendo que nenhum agente vai ver.
 | Sessao | Recebe |
 |---|---|
 | implementacao / correcao | preambulo de stack + **os caminhos** dos `.md` irmaos (`feature-description.md`, `user-stories.md`, `database-schema.md`) + o comando de teste do projeto + aquela fase |
-| verificador (gate 3) | **aquela fase e mais nada** |
+| verificador (gate 3) | aquela fase + a lista numerada das tasks (a primeira linha de cada) + os arquivos alterados na fase. **Nenhum doc irmao** |
 
 Os docs irmaos chegam como *caminho*, nao como conteudo — a sessao precisa
 escolher abrir. Entao uma fase que depende de decisao registrada em outro lugar
@@ -126,36 +126,23 @@ Consequencia: sub-bullets que detalham uma task tem que ser `-` simples, **nunca
 
 Isso e **uma** task, nao tres.
 
-## 1.4b Declare a contagem de tasks em toda fase
+## 1.4b O ralph numera as tasks — a primeira linha tem que se sustentar
 
-O ralph conta task mecanicamente (`grep -cE '^[[:space:]]*- \[[ x]\]'`). O
-verificador conta *lendo o markdown*, num modelo barato. Quando as duas contagens
-divergem, o ralph rejeita o relatorio inteiro como malformado e **reprova a
-fase** — mesmo com todo veredito tendo saido `DONE`.
+O ralph conta task mecanicamente (`grep -cE '^[[:space:]]*- \[[ x]\]'`) e entrega
+ao verificador uma lista numerada com a **primeira linha** de cada task, junto
+com a fase completa. O verificador nao conta mais lendo o markdown: contando
+sozinho, num run real, ele emitiu `TASK 9` numa fase de 8 e reprovou uma fase
+completa com a suite verde.
 
-Isso nao e hipotetico. Num run real custou dois ciclos e 30 minutos numa fase cujo
-codigo estava completo e cuja suite estava verde: o verificador emitiu `TASK 9`
-numa fase de 8 tasks, e o ralph recusou o indice fora de faixa.
+A linha `**This phase has exactly N tasks.**` que planos antigos carregam deixou
+de ser necessaria. Nao atrapalha; nao escreva em plano novo.
 
-Entao **de o numero pro verificador**. Imediatamente acima de `**Tasks:**`, em
-toda fase:
+O que continua valendo:
 
-```markdown
-**This phase has exactly 8 tasks.** Emit one verdict line per task, numbered 1 to
-8 in the order they appear. The sub-bullets under "Automated tests to generate"
-are part of the task above them, not tasks of their own.
-```
-
-Dois habitos que tornam o erro de contagem mais provavel, ambos evitaveis:
-
-- task que junta dois artefatos ligados por "and" (`Filenames: X and Y`,
-  `Activity events: A and B`, `Both controllers: …`) le como duas tasks pra um
-  modelo que esta contando em vez de parseando;
-- um bloco longo de `Automated tests to generate:` sob a ultima task da fase, que
-  visualmente fica no mesmo nivel das tasks.
-
-A linha de contagem e o que de fato te protege. Atualize sempre que adicionar ou
-remover task — numero velho e pior que nenhum.
+- a primeira linha da task diz sozinha do que ela trata — arquivo, classe,
+  estado. E o que aparece na lista numerada; os detalhes ficam nos sub-bullets;
+- todo `- [ ]` vira um numero. Checkbox num sub-bullet ou num bloco de testes e
+  uma task propria, com veredito proprio.
 
 ## 1.5 Os gates, e como escrever para eles
 
@@ -166,9 +153,11 @@ Por fase, em ordem. Todos verdes → commit. Qualquer vermelho → ciclo de corr
 - **Gate 1** — a sessao escreveu codigo? Sinal, nao veredito.
 - **Gate 2** — a suite de testes do projeto, rodada pelo ralph **fora** da sessao
   do agente. Fase cujos testes nao passam nunca chega no gate 3.
-- **Gate 3** — verificador independente, read-only, task a task. Roda num modelo
-  barato com `Read`, `Glob` e `Grep` — **sem Bash, sem shell, sem git**. Para cada
-  task ele emite exatamente um de:
+- **Gate 3** — verificador independente, read-only, task a task, num modelo
+  barato. No claude tem so `Read`, `Glob` e `Grep` — **sem Bash, sem shell, sem
+  git**. No codex tem shell em sandbox read-only, instruido a nao rodar build nem
+  teste. Escreva a task para o caso mais restrito: legivel lendo arquivo. Para
+  cada task ele emite exatamente um de:
   - `TASK n: DONE`
   - `TASK n: INCOMPLETE — <o que falta>` → **reprova a fase**
   - `TASK n: NOT-CODE — <o que precisa de um humano>` → nao reprova, e reportado
@@ -277,10 +266,6 @@ near the blast radius>.
 phase live and how they are named, when it is not obvious>.
 
 <Test-environment gotcha this phase's tests will hit, if any.>
-
-**This phase has exactly N tasks.** Emit one verdict line per task, numbered 1 to
-N in the order they appear. The sub-bullets under "Automated tests to generate"
-are part of the task above them, not tasks of their own.
 
 **Tasks:**
 - [ ] One task, stated as a code state, naming the exact class/file path.
@@ -420,7 +405,8 @@ sed -n "1,/^## Phase 1: /p" "$f"
 
 Depois releia e confirme:
 
-- [ ] Toda fase declara a contagem exata de tasks, e o numero bate com o que o `awk` imprimiu.
+- [ ] A contagem que o `awk` imprimiu e a que voce pretendia: nenhum checkbox perdido em sub-bullet.
+- [ ] A primeira linha de cada task diz sozinha do que ela trata.
 - [ ] Toda fase que toca codigo compartilhado ou arriscado carrega a propria linha **Do not touch**.
 - [ ] Nenhuma task esta escrita como comando de shell quando a mesma exigencia e legivel do repo.
 - [ ] Nenhuma fase e 100% procedural.

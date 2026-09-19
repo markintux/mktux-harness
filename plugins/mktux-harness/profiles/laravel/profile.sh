@@ -74,12 +74,17 @@ profile_preflight() {
 }
 
 # Sem isto o agente roda `php artisan test` no host de um projeto Sail: ele ve
-# verde e o gate 2 ve vermelho.
+# verde e o gate 2 ve vermelho. O filtro e o teste focado que o prompt pede
+# durante o trabalho: a suite inteira fica para o fim.
 profile_prompt_notes() {
   local sail
-  sail="$(laravel_sail_bin)" || return 0
-  echo "O projeto usa Laravel Sail: artisan, composer, php e testes rodam DENTRO"
-  echo "do container, via '$sail <cmd>'. Nunca rode essas ferramentas no host."
+  if sail="$(laravel_sail_bin)"; then
+    echo "O projeto usa Laravel Sail: artisan, composer, php e testes rodam DENTRO"
+    echo "do container, via '$sail <cmd>'. Nunca rode essas ferramentas no host."
+    echo "Teste focado: '$sail artisan test --compact --filter=<NomeDoTeste>'."
+  else
+    echo "Teste focado: 'php artisan test --compact --filter=<NomeDoTeste>'."
+  fi
 }
 
 profile_hook() {

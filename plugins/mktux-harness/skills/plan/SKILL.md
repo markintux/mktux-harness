@@ -49,10 +49,12 @@ Ele nasce de duas formas, e as duas produzem o mesmo arquivo: por entrevista, vi
 `references/feature-brief-template.md`, ao lado daquela skill. Escrito na mao
 continua valendo — o passo 0 e conveniencia, nao obrigacao.
 
-Uma feature que nao mexe em banco pode nao ter `database-schema.md`. Trate o
-passo 3 como pulavel quando o `feature-description.md` nao introduz nem altera
-tabela — diga isso explicitamente no relatorio em vez de gerar um documento
-vazio.
+Toda feature tem `database-schema.md`, inclusive a que nao mexe em banco. Nesse
+caso o passo 3 gera um documento curto cujo veredito e "esta feature nao tem
+migration", com `None.` nas secoes. O veredito nao e enchimento: o ralph passa
+o arquivo para toda sessao, e uma sessao fria que nao sabe se a feature tem
+migration inventa uma. O `plan-project-phases` le o arquivo e carimba o hash
+dele, entao ausente nunca e um estado valido.
 
 ## Fluxo
 
@@ -101,7 +103,7 @@ Uma tabela so:
 | `feature-brief.md` | `presente` / `ausente — passo 0 primeiro` |
 | `feature-description.md` | `presente` / `ausente` / `desatualizado (<entrada> mudou)` / `presente (sem carimbo)` |
 | `user-stories.md` | idem |
-| `database-schema.md` | idem / `nao se aplica` |
+| `database-schema.md` | idem |
 | `project-phases.md` | idem |
 
 Depois da tabela, cite verbatim as linhas `desatualizado:` do passo 2.

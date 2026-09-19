@@ -95,9 +95,11 @@ agent's exit code.**
 | **2** | the project's test suite, run **by ralph**, outside the agent's session | yes |
 | **3** | an independent read-only verifier that judges **task by task** | yes |
 
-Gate 3 is what catches the lie. It runs in a separate session, on a cheap model,
-with access to `Read`, `Glob` and `Grep` only — **no Bash, no shell, no git**. For
-each task in the plan it emits exactly one line:
+Gate 3 is what catches the lie. It runs in a separate session, on a cheap model.
+ralph hands it the phase's tasks already numbered, plus the files the phase
+changed as a starting point. On Claude it has `Read`, `Glob` and `Grep` only —
+**no Bash, no shell, no git**; on Codex it runs in a read-only sandbox, told not to
+run builds or tests. For each task in the plan it emits exactly one line:
 
 ```
 TASK 1: DONE
@@ -414,10 +416,6 @@ total-spent calculation must behave exactly as before.
 **Conventions here, to follow rather than "fix":** actions live in
 `app/Actions/Customer/`, one class per use case, constructor property promotion.
 
-**This phase has exactly 4 tasks.** Emit one verdict line per task, numbered 1 to
-4 in the order they appear. The sub-bullets under "Automated tests to generate"
-are part of the task above them, not tasks of their own.
-
 **Tasks:**
 - [ ] Create `App\Actions\Customer\ExportCustomersAction` returning a
       `CsvDocument`, reading through the existing `CustomerQuery`.
@@ -457,9 +455,10 @@ Three things there are deliberate:
    is something the verifier can check with Grep. "Confirm with `grep -rn` that…"
    is not — that comes back `NOT-CODE` and becomes a manual pending item.
 
-3. **The task count is declared.** `ralph` counts with `grep`; the verifier counts
-   by reading. If the two disagree, the phase fails even with everything green. In
-   a real run that cost two cycles and 30 minutes.
+3. **Each task's first line stands on its own.** `ralph` counts the checkboxes and
+   hands the verifier a numbered list of first lines, so the verifier never
+   counts by reading. Details go in plain `-` sub-bullets: every `- [ ]`, at any
+   indentation, becomes a task with its own verdict.
 
 **Read this file carefully.** It is the last cheap correction point. After this,
 every mistake costs a session.
@@ -607,7 +606,10 @@ First rule that resolves wins:
 The profile also checks the environment in preflight — containers down,
 Node.js dependencies absent, or pytest missing from the project environment →
 abort before every gate 2 burns a fix cycle — and adds notes to the
-implementation prompt. The resolved command reaches every session as
+implementation prompt, including how to run a focused test in that stack. The
+prompt asks for focused tests while working and the full command once, at the
+end: running the whole suite after every item cost minutes per item. The
+resolved command reaches every session as
 `RALPH_TEST_CMD`, so the `test-runner` subagent runs exactly what gate 2 runs.
 To see what ralph will resolve in a project without running anything:
 `bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd`.
@@ -625,7 +627,7 @@ To see what ralph will resolve in a project without running anything:
 | `RALPH_SMOKE` | `0` disables the smoke test |
 | `RALPH_MEMORY` | `0` disables the per-phase page in [ai-memory](#long-term-memory-ai-memory). Turns itself off when the binary is missing or the server is down |
 | `RALPH_MEMORY_BIN` | ai-memory binary (default `ai-memory` on PATH) |
-| `RALPH_HOOK_ISOLATION` | `0` lets ai-memory's hooks run inside ralph's sessions (default `1`: isolate) |
+| `RALPH_HOOK_ISOLATION` | `0` lets ai-memory's hooks run inside ralph's sessions (default `1`: isolate). Independently, every Codex session ralph starts runs with `-c features.memories=false`, so Codex's native memory never brings earlier sessions into a cold one |
 | `RALPH_VERBOSE` | `1` mirrors engine output |
 | `RALPH_DASHBOARD` | `1` enables the built-in panel |
 | `MKTUX_SPEC_DIR` | spec root (default `docs/features`) |
@@ -644,12 +646,15 @@ To see what ralph will resolve in a project without running anything:
     ├── run.log                    linear log of the whole run
     ├── phase-NN.cycle-M.log       implementation session
     ├── phase-NN.test-M.log        gate 2 output
-    ├── phase-NN.verify-M.log      gate 3 task-by-task verdict
+    ├── phase-NN.verify-M.log      gate 3 session
+    ├── phase-NN.verify-M.last.txt gate 3 final verdict (Codex)
     └── phase-NN.memory.log        `ai-memory write-page` output
 ```
 
-`.phases/` is registered in `.git/info/exclude` automatically — ralph **does not
-touch** your project's `.gitignore`.
+`.phases/` and `.harness/` (hook telemetry) are registered in `.git/info/exclude`
+automatically — ralph **does not touch** your project's `.gitignore`. A tracked
+`.harness/` aborts the preflight: the telemetry changes on every tool call, so it
+would land in every phase commit and gate 1 would see a write in every session.
 
 ---
 
@@ -681,6 +686,9 @@ Add to your project's `.gitignore`:
 ```gitignore
 /.harness
 ```
+
+ralph excludes `.harness/` on its own when it runs, but the hooks write it in
+every session, not just ralph's: ignore it before your first commit.
 
 ---
 
@@ -993,7 +1001,8 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | Symptom | Likely cause |
 |---|---|
 | `Contrato de formato violado` in preflight | a `## Phase` heading outside `## Phase N: <title>`. A malformed heading makes the phase **vanish silently** from the run |
-| phase fails with every verdict `DONE` | task count mismatch. The phase needs the `**This phase has exactly N tasks.**` line |
+| gate 3 fails on `cobertura incompleta` or an out-of-range index | the verifier ignored the numbered list in its prompt. Read the verdict (`verify-M.last.txt` on Codex, `verify-M.log` on Claude); if it repeats, change `RALPH_VERIFY_MODEL` |
+| preflight aborts with `.harness/ esta versionado` | the telemetry was committed. `git rm -r --cached .harness` and commit |
 | a task always comes back `NOT-CODE` | it is worded as a command (`run`, `confirm with git diff`). Reword it as a code state |
 | phase fails every cycle until exhausted | a task with a conditional escape hatch (*"do X, but if it feels awkward, leave it"*). In doubt, the verifier picks INCOMPLETE |
 | gate 2 red on the very first run | Laravel: Sail is down, or `.env.testing` is missing. Other stacks: the dev environment was never set up (dependencies, virtualenv) |

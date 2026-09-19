@@ -95,6 +95,11 @@ profile_prompt_notes() {
   if grep -qF '[tool.ruff' pyproject.toml; then
     echo "Ruff esta configurado no pyproject.toml; use o comando documentado pelo projeto."
   fi
+  local runner
+  runner="$(profile_test_cmd)"
+  if [ -n "$runner" ]; then
+    echo "Teste focado: '$runner <caminho/test_arquivo.py>::<test_nome>'."
+  fi
 }
 
 profile_hook() { return 0; }

@@ -53,8 +53,10 @@ O harness nao copia arquivo para dentro do projeto. O que o projeto precisa ter:
 
 **Ignorar no git**
 
-O ralph registra `/.phases/` no `.git/info/exclude` sozinho, sem tocar no
-`.gitignore` do projeto. Falta so a telemetria:
+O ralph registra `/.phases/` e `/.harness/` no `.git/info/exclude` sozinho, sem
+tocar no `.gitignore` do projeto. Mas os hooks gravam `.harness/` em toda sessao,
+nao so nas do ralph: ignore a telemetria antes do primeiro run, para ela nunca
+entrar num commit seu:
 
 ```gitignore
 /.harness

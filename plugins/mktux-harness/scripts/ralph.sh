@@ -68,7 +68,14 @@
 #      gate 2 desabilitado. --no-verify / RALPH_VERIFY=off desliga. O
 #      verificador usa modelo barato por default (claude: haiku; codex:
 #      gpt-5.6-luna com esforco baixo) — e leitura + checklist, nao precisa do
-#      modelo de implementacao.
+#      modelo de implementacao. Recebe as tasks ja numeradas pelo ralph e os
+#      arquivos alterados na fase como ponto de partida. Ferramentas: claude so
+#      tem Read/Glob/Grep; codex roda em sandbox read-only, instruido a nao
+#      rodar build nem teste.
+#
+# Sessoes frias de verdade: os hooks do ai-memory ficam de fora
+# (RALPH_HOOK_ISOLATION) e, no codex, a memoria nativa (features.memories).
+# .phases/ e .harness/ entram no .git/info/exclude.
 #
 # Gates verdes com a arvore limpa => a fase ja estava implementada em HEAD:
 # marcada como feita, sem commit (nao ha o que commitar).
@@ -315,13 +322,28 @@ validate_input_format() {
   log "Formato do input OK ($top_level fases declaradas)"
 }
 
-exclude_phases_dir() {
-  local exclude_file
-  exclude_file="$(git rev-parse --git-dir)/info/exclude"
+# .phases/ e o estado do run; .harness/ e a telemetria que os hooks do plugin
+# gravam a cada tool call. Fora do git os dois: .harness/ visivel faz toda sessao
+# "escrever" (o gate 1 perde o sinal e o ciclo travado nunca e detectado) e entra
+# no commit de toda fase. --git-path resolve o exclude certo tambem em worktree.
+exclude_run_dirs() {
+  local exclude_file entry
+  exclude_file="$(git rev-parse --git-path info/exclude)"
   mkdir -p "$(dirname "$exclude_file")"
-  if ! grep -qxF '/.phases/' "$exclude_file" 2>/dev/null; then
-    echo '/.phases/' >> "$exclude_file"
-    log "Registrado /.phases/ em .git/info/exclude (nao mexe no .gitignore do projeto)"
+  for entry in /.phases/ /.harness/; do
+    if ! grep -qxF "$entry" "$exclude_file" 2>/dev/null; then
+      echo "$entry" >> "$exclude_file"
+      log "Registrado $entry em .git/info/exclude (nao mexe no .gitignore do projeto)"
+    fi
+  done
+
+  # Exclude nao vale para arquivo ja versionado.
+  if [ -n "$(git ls-files -- .harness | head -n 1)" ]; then
+    fail ".harness/ esta versionado neste repo. A telemetria dos hooks muda a cada tool"
+    fail "call: entraria no commit de toda fase e o gate 1 veria escrita em toda sessao."
+    fail "Tire do git antes de rodar:"
+    fail "    git rm -r --cached .harness && git commit -m 'chore: untrack .harness'"
+    exit 1
   fi
 }
 
@@ -460,6 +482,17 @@ resolve_hook_isolation() {
 
 cleanup_run() {
   [ -z "$ISOLATION_SETTINGS_FILE" ] || rm -f "$ISOLATION_SETTINGS_FILE"
+}
+
+# Memoria nativa do codex (features.memories): com ela ligada na config do
+# usuario, cada sessao do ralph le o historico de sessoes anteriores — num run
+# real, as fases e o verificador faziam grep num MEMORY.md de 60 KB com o
+# resumo das fases passadas. Quebra a sessao fria pelo mesmo motivo do handoff
+# do ai-memory, e as sessoes do ralph ainda poluem a memoria do uso interativo.
+# Vai junto das flags de isolamento: smoke, impl e gate 3 recebem.
+resolve_engine_memory() {
+  [[ "$ENGINE" == "codex" ]] || return 0
+  ENGINE_ISOLATION_ARGS+=(-c features.memories=false)
 }
 
 # Pagina da wiki por fase: ralph/<feature>/phase-NN.md. A feature e a pasta do
@@ -636,7 +669,7 @@ preflight_checks() {
   fi
 
   validate_input_format
-  exclude_phases_dir
+  exclude_run_dirs
 
   # Arvore limpa: 'git add -A' da primeira fase engoliria trabalho nao commitado.
   if [ -n "$(git status --porcelain)" ]; then
@@ -648,6 +681,7 @@ preflight_checks() {
 
   resolve_test_cmd
   resolve_hook_isolation
+  resolve_engine_memory
   resolve_memory
 
   success "Pre-checks OK (engine: $ENGINE, input: $INPUT_FILE, model: ${MODEL:-default}, effort: ${EFFORT:-default})"
@@ -811,7 +845,7 @@ state_init() {
       TSK_IDX[$TSK_N]="$idx"
       TSK_STATUS[$TSK_N]="pending"
       TSK_TEXT[$TSK_N]="$(printf '%s' "${line:0:200}" | tr '\t' ' ')"
-    done < <(sed -n 's/^[[:space:]]*- \[[ x]\][[:space:]]*//p' "$PHASES_DIR/$file" | sed 's/\*\*//g')
+    done < <(phase_task_lines "$file" | sed 's/\*\*//g')
   done < <(manifest_entries)
 
   PH_TOTAL=$seq
@@ -1037,8 +1071,11 @@ stack. Antes de comecar, LEIA os que existirem, nesta ordem:
 2. os documentos de contexto listados abaixo, se houver
 3. os documentos citados no proprio texto da fase
 Use os comandos de build, teste e execucao definidos por esses documentos e pelo
-tooling ja presente no repositorio. Se o projeto tiver uma ferramenta de memoria
-ou contexto configurada, use-a para entender o historico.
+tooling ja presente no repositorio.
+
+Esta sessao e fria de proposito: nao consulte memoria de sessoes anteriores
+(ferramentas ou servidores de memoria, memorias da engine). O estado do projeto
+e o codigo, o git e os documentos acima.
 PREAMBLE
 
   # Os documentos de contexto vivem ao lado do plano de fases (ex:
@@ -1064,15 +1101,23 @@ PREAMBLE
 
   # O gate 2 roda ESTE comando. Se o agente rodar outro (ex: o runner no host em
   # vez de dentro do container), ele ve verde e o gate ve vermelho.
+  #
+  # Suite completa so no fim. "Rode a suite SEMPRE com <cmd>" fazia o agente
+  # rodar o comando inteiro a cada item: num run real, 20 suites completas de
+  # ~2 min numa unica sessao, e nenhuma execucao filtrada em fase nenhuma. O
+  # runner e o mesmo; o que muda e o recorte.
   if [ -n "$TEST_CMD" ]; then
     echo
     echo "## Comando de teste deste projeto"
-    echo "Rode a suite SEMPRE com:"
+    echo "A fase e validada pelo ralph, depois da sessao, com:"
     echo
     echo "    $TEST_CMD"
     echo
-    echo "Este e o comando exato usado para validar a fase. Nao use outro runner"
-    echo "nem rode os testes por fora dele."
+    echo "- Durante o trabalho, rode so os testes afetados, pelo MESMO runner (filtro"
+    echo "  por nome ou caminho de arquivo). Suite completa a cada item custa minutos"
+    echo "  e nao prova nada a mais."
+    echo "- Ao terminar, rode o comando acima UMA vez. Nao troque de runner: fora dele"
+    echo "  voce pode ver verde onde a validacao ve vermelho."
     if [ -n "$PROFILE" ]; then
       profile_prompt_notes
     fi
@@ -1095,9 +1140,12 @@ Implemente COMPLETAMENTE a fase descrita abaixo.
 Para cada item:
 1. Implemente o codigo completo (nao deixe TODOs ou placeholders)
 2. Crie os testes listados, seguindo o framework de testes do projeto
-3. Rode os testes com o comando de teste do projeto
+3. Rode SO os testes desse item (teste focado, pelo runner do projeto)
 4. Se um teste falhar, corrija o codigo e rode novamente
-5. So passe pro proximo item quando os testes passarem
+5. So passe pro proximo item quando esses testes passarem
+
+Com todos os itens prontos, rode a suite completa UMA vez e corrija o que
+quebrar.
 
 ## Regras obrigatorias
 - Use SEMPRE os comandos, o runner de testes e as ferramentas ja adotados pelo
@@ -1105,7 +1153,6 @@ Para cada item:
 - Testes e fixtures/factories devem criar todas as dependencias necessarias
 - Nomes de classes, arquivos e metodos devem seguir EXATAMENTE o que esta descrito
 - Nao pule nenhum item marcado com [ ]
-- Ao final, valide que toda a suite de testes da fase passa
 
 ## Fase a implementar
 TASK
@@ -1135,7 +1182,8 @@ antes de mudar qualquer coisa.
 ## Regras obrigatorias
 - Corrija APENAS o que falta. Nao reimplemente o que ja esta correto e testado.
 - Nao deixe TODOs, placeholders ou testes pulados.
-- Rode a suite de testes do projeto ao final e garanta que ela passa.
+- Durante a correcao, rode so os testes afetados. Ao final, rode a suite
+  completa UMA vez e garanta que ela passa.
 INTRO
     echo
     echo "## Motivo da falha ($gate)"
@@ -1150,9 +1198,31 @@ INTRO
   echo "$prompt_file"
 }
 
+# Primeira linha de cada task da fase (`- [ ]` / `- [x]`, em qualquer nivel de
+# indentacao), na ordem. O mesmo padrao do gate 3 e do painel: a posicao aqui e
+# o <n> do veredito.
+phase_task_lines() {
+  sed -n 's/^[[:space:]]*- \[[ x]\][[:space:]]*//p' "$PHASES_DIR/$1"
+}
+
+# Arquivos que a fase mexeu ate aqui: a arvore contra HEAD, que e o commit da
+# fase anterior. Vazio quando a fase ja estava implementada.
+phase_changed_files() {
+  git status --porcelain --untracked-files=all 2> /dev/null | cut -c4-
+}
+
 build_verify_prompt() {
   local phase_file="$1" cycle="$2"
   local prompt_file="$PROMPT_DIR/${phase_file%.md}.verify-${cycle}.txt"
+  local tasks n changed n_changed
+
+  # O ralph numera as tasks. Contando sozinho, lendo o markdown, o verificador
+  # errava: num run real emitiu TASK 9 numa fase de 8, e o ralph reprovou uma
+  # fase completa, com a suite verde, por indice fora da faixa.
+  tasks=$(phase_task_lines "$phase_file")
+  n=$(printf '%s\n' "$tasks" | grep -c . || true)
+  changed=$(phase_changed_files)
+  n_changed=$(printf '%s\n' "$changed" | grep -c . || true)
 
   {
     cat <<'VERIFY'
@@ -1160,10 +1230,18 @@ RALPH_VERIFY
 
 Voce e um verificador independente. NAO escreva, edite ou crie nenhum arquivo.
 Seu unico trabalho e ler o codigo real e dizer o que esta feito e o que nao esta.
+VERIFY
+    echo
+    echo "## Tasks a julgar"
+    echo "O ralph numerou as $n tasks da fase abaixo, na ordem em que aparecem. Use"
+    echo "EXATAMENTE estes numeros, de 1 a $n: um veredito por numero, nem mais nem menos."
+    echo
+    printf '%s\n' "$tasks" | awk '{ t = $0; if (length(t) > 300) t = substr(t, 1, 300) "..."; print NR ". " t }'
+    cat <<'VERIFY'
 
-Para CADA task marcada com `- [ ]` ou `- [x]` na fase abaixo, na ordem em que
-aparecem, confira os acceptance criteria contra o codigo real (arquivos, classes,
-testes, rotas, migrations — o que a task exigir) e emita EXATAMENTE UMA linha:
+Para cada uma, confira os acceptance criteria (na fase completa, abaixo) contra
+o codigo real — arquivos, classes, testes, rotas, migrations, o que a task
+exigir — e emita EXATAMENTE UMA linha:
 
 TASK <n>: DONE
 TASK <n>: INCOMPLETE — <o que falta>
@@ -1184,9 +1262,32 @@ o que ela exige de quem for executa-la.
 NOT-CODE e sobre a NATUREZA da task, nunca sobre a sua confianca: task de codigo
 que voce nao conseguiu confirmar e INCOMPLETE, nao NOT-CODE.
 
-Regras:
-- <n> e o indice da task na fase, comecando em 1.
-- Uma linha TASK para cada task, sem excecao, sem agrupar.
+## Onde olhar
+VERIFY
+    # Sem ponto de partida o verificador explora o repo inteiro: num run real,
+    # 1,3M tokens de input por sessao, cada arquivo lido duas vezes, tipos de
+    # dependencia de terceiros e um typecheck — mais do que a implementacao.
+    if [ "$n_changed" -gt 0 ]; then
+      echo "Arquivos alterados nesta fase (ponto de partida, nao limite):"
+      printf '%s\n' "$changed" | head -n 80 | sed 's/^/  /'
+      if [ "$n_changed" -gt 80 ]; then
+        echo "  ... e mais $((n_changed - 80))"
+      fi
+    else
+      echo "Nenhum arquivo alterado nesta fase: o codigo pode ja estar em HEAD. Procure"
+      echo "pelos caminhos e nomes que as tasks citam."
+    fi
+    cat <<'VERIFY'
+
+- Comece pelos arquivos acima. Abra outro so quando a task o citar ou o codigo o
+  importar.
+- Leia cada arquivo uma vez.
+- NAO rode build, testes, typecheck nem lint: outro gate ja cuida disso.
+- NAO leia codigo de dependencias de terceiros (node_modules, vendor, .venv) nem
+  lockfiles.
+
+## Regras
+- Uma linha TASK para cada numero da lista acima, sem excecao, sem agrupar.
 - Nao emita nenhum outro texto alem das linhas TASK.
 - Codigo ausente, TODO, placeholder ou teste faltando => INCOMPLETE.
 - Na duvida entre DONE e INCOMPLETE, INCOMPLETE.
@@ -1401,9 +1502,12 @@ run_engine() {
 
     if [[ "$ENGINE" == "codex" ]]; then
       if [[ "$mode" == "verify" ]]; then
+        # -o: so a mensagem final, sem o transcript nem o bloco que o `codex
+        # exec` reimprime depois do resumo de tokens. O gate 3 le dali.
         run_logged "$log_file" codex exec --color never --sandbox read-only \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
-          ${model_args[@]+"${model_args[@]}"} - < "$prompt_file" || rc=$?
+          ${model_args[@]+"${model_args[@]}"} \
+          -o "$(verify_last_message_file "$log_file")" - < "$prompt_file" || rc=$?
       else
         run_logged "$log_file" codex exec --color never --sandbox danger-full-access \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
@@ -1420,8 +1524,12 @@ run_engine() {
         # codigo que o gate 2 — que roda ANTES do gate 3 — nunca testou.
         # --strict-mcp-config: le codigo com Read/Glob/Grep, nao precisa de
         # nenhum MCP server; carregar os schemas custa ~4k tokens por fase.
+        # --tools: so essas tres existem na sessao (nem Agent, que abriria um
+        # subagent com escrita); o deny fica como segunda trava.
+        # --disable-slash-commands: sem a listagem de skills no contexto.
         run_logged "$log_file" env -u CLAUDECODE claude --dangerously-skip-permissions \
-          --strict-mcp-config \
+          --strict-mcp-config --disable-slash-commands \
+          --tools "Read,Glob,Grep" \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${model_args[@]+"${model_args[@]}"} \
           -p "$(cat "$prompt_file")" \
@@ -1557,6 +1665,11 @@ gate2_tests_pass() {
 # GATE3_RAN diz ao caminho "ja implementada" quais gates de fato validaram HEAD.
 GATE3_RAN=0
 
+# Onde o codex grava a mensagem final do verificador (-o). Ao lado do log.
+verify_last_message_file() {
+  printf '%s\n' "${1%.log}.last.txt"
+}
+
 gate3_verify_uncached() {
   local phase_file="$1" cycle="$2" session_wrote="$3"
   local verify_log="$LOG_DIR/${phase_file%.md}.verify-${cycle}.log"
@@ -1591,12 +1704,20 @@ gate3_verify_uncached() {
   log "Gate 3 — sessao verificadora independente ($expected tasks${VERIFY_MODEL:+, modelo: $VERIFY_MODEL}${VERIFY_EFFORT:+, effort: $VERIFY_EFFORT})"
   state_gate 3 run
 
-  local prompt_file
+  local prompt_file verdict_src last_msg
   prompt_file=$(build_verify_prompt "$phase_file" "$cycle")
+  # Logs sobrevivem ao re-run com o mesmo nome: a mensagem final de um run
+  # anterior nao pode passar pelo veredito deste.
+  last_msg=$(verify_last_message_file "$verify_log")
+  rm -f "$last_msg"
   run_engine "$prompt_file" "$verify_log" verify || true
 
+  # A mensagem final quando a engine a grava (codex -o); o log inteiro senao.
+  verdict_src="$verify_log"
+  [ -s "$last_msg" ] && verdict_src="$last_msg"
+
   local task_lines
-  task_lines=$(sed 's/^[[:space:]]*//' "$verify_log" | grep -E '^TASK [0-9]+: (DONE|INCOMPLETE|NOT-CODE)' || true)
+  task_lines=$(sed 's/^[[:space:]]*//' "$verdict_src" | grep -E '^TASK [0-9]+: (DONE|INCOMPLETE|NOT-CODE)' || true)
 
   if [ -z "$task_lines" ]; then
     GATE_CAUSE="O verificador independente nao emitiu nenhuma linha 'TASK <n>: DONE|INCOMPLETE|NOT-CODE' — nao foi possivel confirmar que a fase esta completa. Ultimas linhas do verificador:"$'\n'"$(engine_tail "$verify_log" 40)"
@@ -1604,9 +1725,10 @@ gate3_verify_uncached() {
     return 1
   fi
 
-  # Consolida por NUMERO da task, nao por linha. O `codex exec` reimprime a
-  # ultima mensagem do agente depois do resumo de tokens, entao o bloco TASK
-  # aparece duas vezes no log: contar linhas cruas reprovaria toda fase por
+  # Consolida por NUMERO da task, nao por linha. Sem o -o (codex antigo, ou
+  # engine que falhou antes de gravar) o veredito sai do log, onde o `codex
+  # exec` reimprime a ultima mensagem depois do resumo de tokens: o bloco TASK
+  # aparece duas vezes, e contar linhas cruas reprovaria toda fase por
   # "cobertura incompleta". INCOMPLETE em qualquer emissao vence DONE — na
   # duvida, incompleto, igual a instrucao dada ao verificador.
   local verdicts
