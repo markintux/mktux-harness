@@ -9,8 +9,8 @@ cada ponto de decisão.
 
 Um repositório, dois engines, zero arquivo copiado para dentro dos seus projetos.
 
-Um núcleo agnóstico de stack, com perfis de stack por cima: o Laravel (Sail) é o
-primeiro; projetos Node, Python, Go e Rust rodam pelo caminho genérico. Veja
+Um núcleo agnóstico de stack, com perfis para Laravel (Sail), Node.js e Python;
+projetos Go e Rust rodam pelo caminho genérico. Veja
 [Perfis de stack](#perfis-de-stack).
 
 ---
@@ -586,6 +586,8 @@ Vence a primeira regra que resolver:
 | Perfil | Detectado por | Comando |
 |---|---|---|
 | Laravel | `artisan` | `vendor/bin/sail artisan test --compact` com Sail; senão `composer test` se houver `scripts.test`; senão `php artisan test` |
+| Node.js | `package.json` | `npm run check` quando existir; senão `npm test` |
+| Python | `pyproject.toml` | `uv run pytest` com `uv.lock`; `poetry run pytest` com `poetry.lock`; senão `pytest` |
 
 4. detecção por manifest:
 
@@ -599,9 +601,9 @@ Vence a primeira regra que resolver:
 
 5. nada resolvido → aviso alto e portão 2 pulado (o portão 3 segura sozinho)
 
-O perfil também valida o ambiente no preflight — Laravel com Sail e containers
-parados → abort, porque a suite roda no container e todo portão 2 falharia
-queimando os ciclos de correção à toa — e acrescenta notas ao prompt de
+O perfil também valida o ambiente no preflight — containers parados,
+dependências Node.js ausentes ou pytest fora do ambiente do projeto → abort
+antes que cada portão 2 queime um ciclo de correção — e acrescenta notas ao prompt de
 implementação. O comando resolvido chega a toda sessão como `RALPH_TEST_CMD`,
 então o subagent `test-runner` roda exatamente o que o portão 2 roda. Para ver o
 que o ralph vai resolver num projeto sem rodar nada:
@@ -712,8 +714,10 @@ que o projeto usa Pest, o plano usa Pest.
 
 ### Como um perfil é detectado
 
-Um perfil vale quando o marcador dele está presente. O marcador do Laravel é o
-`artisan`.
+Um perfil vale quando o marcador dele está presente: `artisan` para Laravel,
+`package.json` para Node.js e `pyproject.toml` para Python. Perfis mais
+específicos vencem; o detector Node.js não assume uma raiz que também tenha o
+marcador Laravel ou Python.
 
 - O **ralph** olha só o diretório de onde roda: os caminhos que o perfil devolve
   (`vendor/bin/sail`) são relativos a essa raiz.
@@ -726,19 +730,33 @@ Para ver o que vale num projeto, sem rodar nada:
 
 ```bash
 P="$CLAUDE_PLUGIN_ROOT"                          # Codex: $PLUGIN_ROOT
-bash "$P/scripts/mktux-profile.sh" name          # laravel — ou exit 1: sem perfil
+bash "$P/scripts/mktux-profile.sh" name          # laravel, node, python — ou exit 1
 bash "$P/scripts/mktux-profile.sh" test-cmd      # o que o portão 2 e o test-runner rodam
 bash "$P/scripts/mktux-profile.sh" notes test-runner
 ```
 
-### Projetos sem perfil (Node, Python, Go, Rust)
+### Perfis Node.js e Python
+
+- **Node.js:** prefere o gate completo `scripts.check` do projeto e cai para
+  `npm test`; exige `node`, `npm`, o major declarado em `.node-version` /
+  `.nvmrc` e dependências instaladas. As notas do
+  `test-runner` preservam o separador `--` do npm e nunca trocam scripts por
+  `npx` ou binário global.
+- **Python:** preserva o wrapper do ambiente (`uv run`, `poetry run` ou o
+  ambiente ativo), confere que pytest já está disponível sem instalar nada e
+  aponta `uv sync --extra dev` quando o projeto declara pytest nesse extra.
+
+Os dois perfis param de propósito na mecânica de teste/lint. Não impõem
+framework, layout de diretório, banco ou arquitetura web.
+
+### Projetos sem perfil (Go, Rust e outros)
 
 Rodam pelo caminho genérico — o harness inteiro, menos as regras da stack:
 
 - o portão 2 e o `test-runner` usam a detecção por manifest (veja
-  [Comando de teste](#comando-de-teste-portão-2)): `npm test`; `pytest`, ou
-  `uv run pytest` com `uv.lock` e `poetry run pytest` com `poetry.lock`;
-  `go test ./...`; `cargo test`. Sobreponha com `--test-cmd` ou `RALPH_TEST_CMD`;
+  [Comando de teste](#comando-de-teste-portão-2)): `go test ./...`,
+  `cargo test` ou um script de manifest suportado. Sobreponha com `--test-cmd`
+  ou `RALPH_TEST_CMD`;
 - as skills de planejamento seguem só o seu `CLAUDE.md` / `AGENTS.md` e o código
   que existe — então é lá que suas convenções vão;
 - o `security-auditor` aplica o checklist web genérico;
@@ -756,6 +774,12 @@ plugins/mktux-harness/
 │   ├── profile.sh                 detecção, comando de teste, preflight, notas do prompt, mapa de hooks
 │   ├── agents/test-runner.md      notas que só o test-runner lê
 │   └── hooks/                     sail-guard, pint-and-test
+├── profiles/node/
+│   ├── profile.sh                 gate npm, preflight de dependências, notas do prompt
+│   └── agents/test-runner.md      regras de argumentos npm e gate completo
+├── profiles/python/
+│   ├── profile.sh                 comando pytest, preflight do ambiente, notas do prompt
+│   └── agents/test-runner.md      regras de arquivo/filtro pytest e wrapper
 ├── skills/<skill>/references/laravel.md
 │                                  convenções que uma skill carrega (schema, fases, segurança)
 └── scripts/
@@ -801,8 +825,8 @@ tabela de perfis e toda seção *Perfis de stack*:
 
 Ele também checa que todo hook, reference e arquivo de notas que um perfil
 aponta existe, e que todo reference citado num bloco de registro tem seu
-`profiles/<nome>/`. A skill e os agents `ai-context` ficam fora da guarda até
-pararem de assumir Sail e Boost.
+`profiles/<nome>/`. A skill `ai-context` carrega do reference correspondente as
+regras específicas de wrapper e posse, então seu núcleo entra na mesma guarda.
 
 ### Atualizando a partir da 0.3
 
@@ -822,6 +846,10 @@ Nada muda nos seus projetos. O que passa a se comportar diferente:
 - Projetos **Python** com `uv.lock` ou `poetry.lock` passam a rodar
   `uv run pytest` / `poetry run pytest`, em vez de um `pytest` puro que falhava no
   host.
+- **Node.js e Python** agora são perfis de primeira classe, com preflight de
+  dependências, notas de implementação e sintaxe própria do runner.
+- O **`ai-context`** não assume mais wrapper de container nem ferramenta dona do
+  arquivo no núcleo; o contrato Laravel só carrega quando `artisan` casa.
 - Um plugin instalado no **escopo de projeto** não acompanha o update do escopo
   de usuário. Liste as instalações com `claude plugin list` e atualize cada uma de
   escopo de projeto de dentro do projeto:
