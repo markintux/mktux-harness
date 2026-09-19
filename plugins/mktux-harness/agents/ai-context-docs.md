@@ -32,7 +32,8 @@ You write only under `docs/agents/`. Never touch `AGENTS.md`, `CLAUDE.md`, or `.
 - Every claim about language, framework, pattern, rule, or contract cites something you or the inspector actually read (file path, class name, config key, dependency version).
 - Never invent content. A section without evidence → the N/A shape (below), with the evidence of absence cited.
 - Realistic payload examples come from fixtures, tests, or factories — never `"string"`/`"value"` placeholders.
-- Commands quoted inside a doc follow the digest verbatim, sail-prefixed when `digest.sail.present`.
+- Commands quoted inside a doc follow the digest verbatim, using
+  `digest.execution.wrapper` when present.
 
 ## Style — caveman docs
 
@@ -71,7 +72,7 @@ When the repo has no evidence for a doc's subject (e.g. no persistence, no publi
 ### Not applicable in this repository
 
 <One paragraph citing the evidence of absence: "no migrations directory,
-no Eloquent models, no schema files, no database driver in composer.json.">
+no model directory, no schema files, no database driver in the manifests.">
 ```
 
 Keep the banner and Related documents footer. Status reports as `skipped (N/A)` even though the file is written — the tree stays homogeneous at 8 files.
@@ -101,7 +102,8 @@ AS IS subsections, in order:
   - `- **Language**: <name> <version>`
   - `- **Framework**: <name> <version>` (no framework → `No primary framework`)
 - `### Tests` — table: runner, assertion lib, mock lib, coverage tool, versions.
-- `### Local environment` — when `digest.sail.present`: the container services from `docker-compose.yml` and the fact that every PHP/Artisan/Composer/Node command runs through `vendor/bin/sail`.
+- `### Local environment` — when `digest.execution.wrapper` is present: its
+  container services, exact command prefix and evidence paths.
 - `### External integrations` — table System | Client wiring; only when present.
 
 ### `coding_guidelines.md` — first line `# Coding Guidelines`
@@ -114,7 +116,10 @@ Under AS IS, ≥3 numbered pattern headings:
 ### 3. <pattern name>
 ```
 
-Each: 1-line rationale + enforcement citation when it exists ("enforced by `pint.json` preset laravel", "PHPStan level 8 in `phpstan.neon`", "recorded in `.ai/rules/<file>.md`"). No enforcement → no citation. Pull from lint configs, `.editorconfig`, pre-commit hooks, `.ai/rules` file paths, and patterns you verify in ≥2 source files. Never invent a pattern.
+Each: 1-line rationale + enforcement citation when it exists (lint config, CI
+step, or `.ai/rules/<file>.md`). No enforcement → no citation. Pull from lint
+configs, `.editorconfig`, pre-commit hooks, `.ai/rules` file paths, and patterns
+you verify in ≥2 source files. Never invent a pattern.
 
 When `digest.team_rules.present`, close the AS IS section with a `### Recorded team rules` table (Rule file | Applies to) built from `digest.team_rules.files`, and one line saying those files are the authority — this doc only reports what the code shows.
 

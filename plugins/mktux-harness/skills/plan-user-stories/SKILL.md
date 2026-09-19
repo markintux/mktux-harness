@@ -73,20 +73,20 @@ for the period I selected, so I can work on the numbers in a spreadsheet.
 Regras dos criterios:
 
 - Cada bullet e uma afirmacao. Se um teste nao pode falhar nela, nao e criterio.
-- Nomeie rotas reais, nomes de arquivo reais, flash messages reais, labels de
-  enum reais.
+- Nomeie entrypoints reais, nomes de arquivo reais, mensagens de feedback reais
+  e valores de dominio reais.
 - Caminho de falha vive dentro da story relevante, nao como story separada.
 - Nao use `- [ ]` — nada rastreia isso e envelhece.
 
 ### Grupos obrigatorios de story
 Toda feature precisa, no minimo, de stories cobrindo:
 
-- **Authorization** — o que cada papel pode e nao pode fazer, incluindo quem esta
-  excluido.
-- **Plan gate**, quando a feature e limitada por plano — o que um plano bloqueado
-  ve, e que o backend recusa uma requisicao direta, nao so esconde o botao.
-- **Tenant isolation** — o tenant A nunca alcanca o dado do tenant B. (Pule so se
-  o projeto genuinamente nao for multi-tenant.)
+- **Authorization**, quando existe fronteira de acesso — o que cada ator pode e
+  nao pode fazer, incluindo quem esta excluido.
+- **Entitlement gate**, quando a feature e limitada por plano, flag ou capacidade
+  — o que um ator bloqueado ve e como a operacao direta e recusada.
+- **Ownership isolation**, quando ha dados de mais de um ator ou tenant — um
+  proprietario nunca alcanca o dado de outro.
 - **Validation and error paths** — o que e recusado, e o que o usuario ve.
 - **Regression** — um grupo final dizendo o que tem que continuar se comportando
   exatamente como antes. E isso que impede uma feature de reescrever em silencio
@@ -98,8 +98,9 @@ Toda feature precisa, no minimo, de stories cobrindo:
   que nao esta la.
 - Todo criterio tem que ser testavel de forma independente — nunca "works
   correctly".
-- Referencie convencoes existentes onde couber: escopo de propriedade, isolamento
-  de tenant, 404 vs 403, flash messages, diretivas `@can`, labels de enum.
+- Referencie convencoes existentes onde couber: escopo de propriedade,
+  isolamento, resposta de ausente vs proibido, mensagens de feedback, guards de
+  autorizacao na interface e valores de dominio.
 - Ids sao estaveis depois de escritos. O `project-phases.md` cita eles.
 - Sem tabela de status, sem coluna de prioridade — envelhecem e nenhum agente le.
 - Tudo em ingles.

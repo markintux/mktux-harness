@@ -189,7 +189,8 @@ fi
 header "5. mktux-profile.sh"
 MP="$PLUGIN/scripts/mktux-profile.sh"
 fx="$TMP/fx"
-mkdir -p "$fx/sail/vendor/bin" "$fx/sail/app/Http" "$fx/comp" "$fx/bare" "$fx/node" "$fx/none" \
+mkdir -p "$fx/sail/vendor/bin" "$fx/sail/app/Http" "$fx/comp" "$fx/bare" "$fx/node" "$fx/node-check" "$fx/none" \
+         "$fx/node-version/node_modules" "$fx/node-nested" "$fx/node-pytool" \
          "$fx/mono repo/backend/vendor/bin" "$fx/mono repo/backend/app"
 touch "$fx/sail/artisan" "$fx/comp/artisan" "$fx/bare/artisan" "$fx/mono repo/backend/artisan"
 printf '#!/bin/sh\n' > "$fx/sail/vendor/bin/sail"
@@ -197,14 +198,34 @@ chmod +x "$fx/sail/vendor/bin/sail"
 cp "$fx/sail/vendor/bin/sail" "$fx/mono repo/backend/vendor/bin/sail"
 printf '{ "scripts": { "test": "phpunit" } }\n' > "$fx/comp/composer.json"
 printf '{ "scripts": { "test": "vitest" } }\n' > "$fx/node/package.json"
+printf '{ "scripts": { "check": "tsc && vitest" }, "devDependencies": { "vitest": "1" } }\n' > "$fx/node-check/package.json"
+printf '{ "scripts": { "test": "vitest" }, "devDependencies": { "check": "1" } }\n' > "$fx/node-nested/package.json"
+printf '{ "scripts": { "test": "vitest" } }\n' > "$fx/node-pytool/package.json"
+printf '[tool.ruff]\nline-length = 100\n' > "$fx/node-pytool/pyproject.toml"
+touch "$fx/node-check/package-lock.json"
+cp "$fx/node-check/package.json" "$fx/node-version/package.json"
+printf '24.21.0\n' > "$fx/node-version/.node-version"
 # Python: pytest.ini, ou pyproject.toml com [tool.pytest...]. pyproject sem
 # config de pytest nao basta (pode ser so empacotamento).
-mkdir -p "$fx/py-ini" "$fx/py-proj" "$fx/py-noconf" "$fx/py-uv" "$fx/py-poetry"
+mkdir -p "$fx/py-ini" "$fx/py-proj" "$fx/py-pytestonly" "$fx/py-noconf" "$fx/py-uv" "$fx/py-poetry"
 printf '[pytest]\ntestpaths = tests\n' > "$fx/py-ini/pytest.ini"
 printf '[project]\nname = "x"\n\n[tool.pytest.ini_options]\ntestpaths = ["tests"]\n' > "$fx/py-proj/pyproject.toml"
+printf '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n' > "$fx/py-pytestonly/pyproject.toml"
 printf '[project]\nname = "x"\n\n[tool.ruff]\nline-length = 100\n' > "$fx/py-noconf/pyproject.toml"
 # Com lock do uv/poetry o pytest mora no virtualenv do projeto, nao no host.
-cp "$fx/py-proj/pyproject.toml" "$fx/py-uv/pyproject.toml" && touch "$fx/py-uv/uv.lock"
+cat > "$fx/py-uv/pyproject.toml" <<'EOF'
+[project]
+name = "x"
+
+[project.optional-dependencies]
+"dev" = [
+  "pytest>=8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+EOF
+touch "$fx/py-uv/uv.lock"
 cp "$fx/py-ini/pytest.ini" "$fx/py-poetry/pytest.ini" && touch "$fx/py-poetry/poetry.lock"
 
 mp() { env -u RALPH_TEST_CMD bash "$MP" --dir "$fx/$1" "${@:2}" 2> /dev/null; }
@@ -213,17 +234,19 @@ assert_eq "laravel" "$(mp sail name)" "name: artisan -> laravel"
 assert_eq "vendor/bin/sail artisan test --compact" "$(mp sail test-cmd)" "test-cmd: Laravel com Sail"
 assert_eq "composer test" "$(mp comp test-cmd)" "test-cmd: Laravel sem Sail, com composer test"
 assert_eq "php artisan test" "$(mp bare test-cmd)" "test-cmd: Laravel sem Sail nem composer test"
-assert_eq "npm test" "$(mp node test-cmd)" "test-cmd: sem perfil -> manifest"
+assert_eq "node" "$(mp node name)" "name: package.json -> node"
+assert_eq "npm test" "$(mp node test-cmd)" "test-cmd: Node com scripts.test"
+assert_eq "npm run check" "$(mp node-check test-cmd)" "test-cmd: Node prefere o gate scripts.check"
+assert_eq "npm test" "$(mp node-nested test-cmd)" "test-cmd: chave check fora de scripts nao engana o perfil"
+assert_eq "node" "$(mp node-pytool name)" "name: pyproject apenas de ferramenta nao toma projeto Node"
 assert_eq "pytest" "$(mp py-ini test-cmd)" "test-cmd: Python com pytest.ini -> pytest"
+assert_eq "python" "$(mp py-proj name)" "name: pyproject.toml -> python"
 assert_eq "pytest" "$(mp py-proj test-cmd)" "test-cmd: Python com [tool.pytest] no pyproject -> pytest"
+assert_eq "python" "$(mp py-pytestonly name)" "name: pyproject apenas com config pytest -> python"
 rc=0; mp py-noconf test-cmd > /dev/null || rc=$?
 assert_eq 1 "$rc" "test-cmd: pyproject sem config de pytest -> nada resolvido"
 assert_eq "uv run pytest" "$(mp py-uv test-cmd)" "test-cmd: Python com uv.lock -> uv run pytest"
 assert_eq "poetry run pytest" "$(mp py-poetry test-cmd)" "test-cmd: Python com poetry.lock -> poetry run pytest"
-rc=0; mp py-proj name > /dev/null || rc=$?
-assert_eq 1 "$rc" "name: Python ainda sem perfil -> exit 1"
-rc=0; mp node name > /dev/null || rc=$?
-assert_eq 1 "$rc" "name: sem perfil -> exit 1"
 rc=0; mp none test-cmd > /dev/null || rc=$?
 assert_eq 1 "$rc" "test-cmd: nada resolvido -> exit 1"
 assert_eq "cd $(printf '%q' "$fx/sail") && vendor/bin/sail artisan test --compact" "$(mp sail/app/Http test-cmd)" \
@@ -237,8 +260,60 @@ rc=0; mp sail hook evento-inexistente > /dev/null || rc=$?
 assert_eq 1 "$rc" "hook: evento sem script -> exit 1"
 mp sail notes test-runner > "$TMP/notes.out"
 assert_contains "$TMP/notes.out" "Sail is not running" "notes: perfil com notas para o agent -> conteudo"
-rc=0; out=$(mp node notes test-runner) || rc=$?
-assert_eq "0:" "$rc:$out" "notes: sem perfil -> nada, exit 0"
+mp node notes test-runner > "$TMP/notes.out"
+assert_contains "$TMP/notes.out" "separator" "notes: Node ensina passagem de argumentos do npm"
+mp py-proj notes test-runner > "$TMP/notes.out"
+assert_contains "$TMP/notes.out" "pytest syntax" "notes: Python ensina arquivo e filtro do pytest"
+
+# Preflight nao prepara ambiente: para antes da 1a sessao e diz qual setup falta.
+preflight() { # preflight <perfil> <projeto> <comando> -> exit code; stderr em $TMP/preflight.err
+  local rc=0
+  (
+    cd "$2" || exit 1
+    # shellcheck disable=SC1090
+    . "$PLUGIN/profiles/$1/profile.sh"
+    fail() { echo "$*" >&2; }
+    profile_preflight "$3"
+  ) 2> "$TMP/preflight.err" || rc=$?
+  echo "$rc"
+}
+
+assert_eq 1 "$(preflight node "$fx/node-check" "npm run check")" "preflight Node: dependencias ausentes -> aborta"
+assert_contains "$TMP/preflight.err" "npm ci" "preflight Node: lockfile -> sugere npm ci"
+mkdir -p "$fx/node-check/node_modules"
+assert_eq 0 "$(preflight node "$fx/node-check" "npm run check")" "preflight Node: dependencias presentes -> passa"
+
+mkdir -p "$TMP/node-bin"
+cat > "$TMP/node-bin/node" <<'EOF'
+#!/bin/sh
+echo "${NODE_FAKE_MAJOR:-22}"
+EOF
+chmod +x "$TMP/node-bin/node"
+assert_eq 1 "$(PATH="$TMP/node-bin:/usr/bin:/bin" preflight node "$fx/node" "npm test")" \
+  "preflight Node: npm ausente -> aborta"
+assert_contains "$TMP/preflight.err" "npm nao esta no PATH" "preflight Node: explica npm ausente"
+assert_eq 1 "$(PATH="$TMP/node-bin:$PATH" NODE_FAKE_MAJOR=22 preflight node "$fx/node-version" "npm run check")" \
+  "preflight Node: major diferente do .node-version -> aborta"
+assert_contains "$TMP/preflight.err" "pede Node 24" "preflight Node: informa o major exigido"
+assert_eq 0 "$(PATH="$TMP/node-bin:$PATH" NODE_FAKE_MAJOR=24 preflight node "$fx/node-version" "npm run check")" \
+  "preflight Node: major do projeto -> passa"
+
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/uv" <<'EOF'
+#!/bin/sh
+[ "${UV_OK:-0}" = 1 ]
+EOF
+chmod +x "$TMP/bin/uv"
+PATH="$TMP/bin:$PATH" assert_eq 1 "$(PATH="$TMP/bin:$PATH" preflight python "$fx/py-uv" "uv run pytest")" \
+  "preflight Python: pytest fora do ambiente uv -> aborta"
+assert_contains "$TMP/preflight.err" "uv sync --extra dev" "preflight Python: extra dev -> instrucao exata"
+PATH="$TMP/bin:$PATH" UV_OK=1 assert_eq 0 "$(PATH="$TMP/bin:$PATH" UV_OK=1 preflight python "$fx/py-uv" "uv run pytest")" \
+  "preflight Python: ambiente uv pronto -> passa"
+assert_eq 0 "$(PATH="$TMP/bin:$PATH" preflight python "$fx/py-uv" "uv run unittest")" \
+  "preflight Python: override sem pytest nao exige o extra dev"
+assert_eq 1 "$(PATH="/usr/bin:/bin" preflight python "$fx/py-poetry" "poetry run pytest")" \
+  "preflight Python: poetry ausente -> aborta"
+assert_contains "$TMP/preflight.err" "poetry nao esta no PATH" "preflight Python: explica poetry ausente"
 
 # ---------------------------------------------------------------------------
 # 6. Core sem nome de stack
@@ -250,10 +325,7 @@ header "6. core sem nome de stack"
 # <!-- perfis --> e <!-- /perfis -->. `composer` fica de fora de proposito: e
 # manifest, par de npm e cargo nas listas que cobrem varios stacks.
 STACK_TERMS='laravel|artisan|sail|php[a-z]*|pint|pest|eloquent|blade|livewire|inertia|horizon'
-# Fora do guard ate o passo 4 do roadmap de perfis: no ai-context o Laravel e
-# comportamento (prefixo do Sail, Boost dono do CLAUDE.md), nao texto, e
-# generalizar pede um projeto nao-Laravel para validar.
-CORE_SKIP='skills/ai-context/SKILL.md agents/ai-context-core.md agents/ai-context-docs.md agents/ai-context-inspector.md'
+CORE_SKIP=''
 
 # core_stack_leaks <raiz do plugin> -> "arquivo:linha:texto" de cada nome de
 # stack fora do bloco de perfis, e "arquivo: bloco ... sem fechamento" (bloco
@@ -274,14 +346,6 @@ core_stack_leaks() {
   done < <(find "$root/skills" "$root/agents" "$root/hooks" "$root/scripts" \
              -type f ! -name '.*' ! -name 'test-*.sh' 2> /dev/null | LC_ALL=C sort)
 }
-
-for rel in $CORE_SKIP; do
-  if [ -f "$PLUGIN/$rel" ]; then
-    echo -e "  ${YELLOW}skip${NC} $rel (ai-context: passo 4)"
-  else
-    bad "CORE_SKIP cita $rel, que nao existe"
-  fi
-done
 
 leaks=$(core_stack_leaks "$PLUGIN")
 if [ -z "$leaks" ]; then
@@ -304,7 +368,7 @@ while IFS= read -r skill; do
   done <<< "$refs"
 done < <(find "$PLUGIN/skills" -name SKILL.md | sort)
 
-for skill in plan-database-schema plan-project-phases review-phases; do
+for skill in ai-context plan-database-schema plan-project-phases review-phases; do
   assert_contains "$PLUGIN/skills/$skill/SKILL.md" \
     '**nao leia nenhum' \
     "$skill: sem marcador nao abre reference de perfil"

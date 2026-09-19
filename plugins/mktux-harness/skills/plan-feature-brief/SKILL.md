@@ -49,9 +49,10 @@ Nao pergunte o que da pra detectar. Antes da primeira pergunta, leia:
 
 - `CLAUDE.md` / `AGENTS.md` do projeto — convencoes, arquitetura, stack.
 - `docs/agents/*.md`, se existir — o que o codigo ja faz.
-- Papeis do dominio: enums de role, tabela de usuarios, policies, middleware de
-  gating. Voce vai propor a lista de papeis, nao pedir pro dev inventar.
-- Sinal de plano / feature flag: config, middleware, colunas de assinatura.
+- Atores e fronteiras de acesso: declaracoes de papel, armazenamento de
+  identidade, verificacoes de autorizacao e guards. Voce vai propor a lista de
+  atores, nao pedir pro dev inventar.
+- Sinal de entitlement / feature flag: config, guards e estado persistido.
 - Telas e fluxos vizinhos ao que a ideia toca — a materia-prima do `Do not touch`.
 
 Projeto vazio ou pre-codigo: registre isso e derive tudo da intencao declarada.
