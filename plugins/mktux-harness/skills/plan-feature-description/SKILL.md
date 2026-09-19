@@ -45,14 +45,16 @@ Calcule com `shasum -a 256 <arquivo> | cut -c1-12`.
 ## Como este documento e consumido
 
 Nao e documento que humano le uma vez e arquiva. E **documento de contexto do
-ralph**: o `ralph.sh` passa o caminho dele para toda sessao de implementacao, e o
-`project-phases.md` cita ele por nome de secao
-(`**Read first:** feature-description.md next to this file, section "PII Rules"`).
+ralph**: o `project-phases.md` cita ele por nome de secao e id de regra
+(`**Read first:** feature-description.md next to this file, section "PII Rules"`;
+`BR-02`), e o `ralph.sh` recorta exatamente esses trechos para a sessao da fase.
+O documento inteiro fica so para consulta pontual.
 
 Duas consequencias:
 
 - **Titulo de secao e endereco.** De nomes estaveis e especificos que uma fase
-  consiga apontar. Uma fase nunca deve dizer "veja a descricao da feature" sem
+  consiga apontar. O recorte casa o titulo exato: renomear secao quebra a fase
+  que a cita. Uma fase nunca deve dizer "veja a descricao da feature" sem
   nomear onde.
 - **Decisao tem que ficar registrada, nao implicita.** A sessao verificadora
   (gate 3) nunca ve este arquivo, e toda sessao de implementacao e fria. Decisao
@@ -84,9 +86,17 @@ plano x capacidade, mais o metodo/config exato e a chave de middleware
 envolvidos, e o que um plano bloqueado ve.
 
 ### Business Rules
-Lista **numerada** das regras de dominio que governam a feature — numerada para
-que stories e fases possam citar. Explicito: edge cases, restricoes, limites,
-regras de validacao. Referencie conceitos existentes do dominio quando couber.
+Lista **numerada** das regras de dominio que governam a feature, cada uma com id
+estavel — e por ele que stories e fases citam, e o ralph recorta a regra citada
+para a sessao da fase:
+
+```markdown
+1. **BR-01 — Business plan only:** only tenants on the Business plan can export.
+2. **BR-02 — Masked national ID:** the national ID never leaves the server unmasked.
+```
+
+Explicito: edge cases, restricoes, limites, regras de validacao. Referencie
+conceitos existentes do dominio quando couber.
 
 ### Key Concepts
 Defina qualquer termo de dominio ou entidade nova que a feature introduz e que

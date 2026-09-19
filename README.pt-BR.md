@@ -110,6 +110,11 @@ TASK 3: NOT-CODE — needs a human to run `sail npm run build`
 `INCOMPLETE` reprova a fase e dispara um ciclo de correção. `NOT-CODE` não
 reprova — vira pendência manual no relatório.
 
+Task que o plano tipa como `- [ ] (manual) …` — rodar o formatador, o build de
+assets, conferir num celular de verdade — nunca chega ao verificador. O ralph a
+tira da lista numerada, descarta qualquer veredito sobre ela e a lista em
+*Pendencias manuais* no fim do run: o checklist de quem abre o PR.
+
 ---
 
 ## Instalação
@@ -429,12 +434,13 @@ total-spent calculation must behave exactly as before.
     swallows the literal segment
 - [ ] No file under `app/`, `routes/` or `resources/views/` references the
       identifier `cpf` in the export path.
-
-  Automated tests to generate:
-    - `tests/Feature/Customer/ExportCustomersTest.php` — Business downloads,
-      filters respected, CPF absent (US-1.1)
-    - `tests/Feature/Customer/ExportCustomersPlanGateTest.php` — Starter and Pro
-      get 403 on direct POST (US-3.1)
+- [ ] `tests/Feature/Customer/ExportCustomersTest.php` (new file) covers these scenarios, one test case each:
+  - Business tenant exports → CSV download with one row per customer (US-1.1)
+  - export with a name filter → only the matching customers in the CSV (US-1.1)
+  - Business tenant exports → header row has no `cpf` column (US-1.1)
+- [ ] `tests/Feature/Customer/ExportCustomersPlanGateTest.php` (new file) covers these scenarios, one test case each:
+  - Starter tenant POSTs to `customers.export` → 403 (US-3.1)
+  - Pro tenant POSTs to `customers.export` → 403 (US-3.1)
 
 **Completion criteria:** `ExportCustomersAction` exists and is covered.
 `tests/Feature/Customer/CustomerListTest.php` still passes **unmodified** — if it
@@ -444,7 +450,7 @@ instead.
 ---
 ```
 
-Note três coisas, todas deliberadas:
+Note quatro coisas, todas deliberadas:
 
 1. **A fase repete os próprios guards.** O `Do not touch` está dentro da fase, não
    num preâmbulo — porque o `ralph` descarta tudo que não está entre headings de
@@ -452,13 +458,28 @@ Note três coisas, todas deliberadas:
 
 2. **A última task é um estado, não um comando.** "No file references `cpf`" o
    verificador consegue checar com Grep. "Confirme com `grep -rn cpf app/`" ele
-   não consegue — sai `NOT-CODE` e vira pendência manual.
+   não consegue — sai `NOT-CODE` e vira pendência manual. Procedimento de
+   verdade (formatador, build de assets) entra como `- [ ] (manual) …`, fora do
+   portão 3 por construção.
 
 3. **A primeira linha de cada task se sustenta sozinha.** O `ralph` conta os
    checkboxes e entrega ao verificador uma lista numerada com a primeira linha de
    cada task, então o verificador nunca conta lendo. Detalhe vai em sub-bullet
    `-` simples: todo `- [ ]`, em qualquer indentação, vira task com veredito
    próprio.
+
+4. **Cada arquivo de teste é uma task, com lista fechada de cenários.** O
+   verificador confere se cada cenário listado tem um caso de teste — e não pede
+   nada fora da lista. "Tests prove every precondition" não dá o que fechar: num
+   run real ele remontou a própria lista a cada ciclo, e a correção perseguiu um
+   alvo que mudava sem o plano mudar.
+
+O `ralph` lê a linha `Read first:` e os ids que a fase cita, e entrega à sessão
+**só esses trechos** — a seção nomeada, a regra `BR-NN`, a story `US-N.N`, a
+tabela — mais os caminhos dos documentos, para consulta pontual. Mandar a sessão
+"ler os documentos de contexto" fazia 25 de 26 sessões de um run real lerem
+todos, inteiros: uns 19k tokens no contexto de todo turno seguinte. Por isso
+cite pelo título exato e pelo id: "veja a descrição" não é endereço.
 
 **Leia esse arquivo com atenção.** É o último ponto barato de correção. Depois
 daqui, cada erro custa uma sessão.
@@ -513,7 +534,7 @@ ralph docs/features/customer-export/project-phases.md --from 3
 
 Sai um relatório com três seções: violações de convenção contra o `CLAUDE.md` do
 projeto, auditoria de segurança do subagent `security-auditor`, e as pendências
-`NOT-CODE` que o portão 3 deixou para você.
+manuais — tasks `(manual)` e vereditos `NOT-CODE` — que ficaram para você.
 
 ---
 
@@ -1005,7 +1026,8 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | `Contrato de formato violado` no preflight | heading `## Phase` fora de `## Phase N: <título>`. Uma fase com heading torto **some silenciosamente** do run |
 | portão 3 reprova por `cobertura incompleta` ou índice fora da faixa | o verificador ignorou a lista numerada do prompt. Leia o veredito (`verify-M.last.txt` no Codex, `verify-M.log` no Claude); se repetir, troque `RALPH_VERIFY_MODEL` |
 | preflight aborta com `.harness/ esta versionado` | a telemetria foi commitada. `git rm -r --cached .harness` e commit |
-| task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do código |
+| task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do código, ou marque `(manual)` se for mesmo procedimento |
+| fase de fechamento reprova sem nada de errado no código | task de procedimento sem `(manual)`: o verificador tenta julgar o que não tem como ler. Marque `(manual)` |
 | fase reprova em todo ciclo até esgotar | task com escape condicional (*"faça X, mas se ficar estranho, deixe"*). Na dúvida, o verificador escolhe INCOMPLETE |
 | portão 2 sempre vermelho no primeiro run | Laravel: Sail parado, ou `.env.testing` ausente. Outras stacks: o ambiente de desenvolvimento nunca foi preparado (dependências, virtualenv) |
 | o ralph ou o `test-runner` escolhe o comando de teste errado | confira com `mktux-profile.sh test-cmd` (veja [Perfis de stack](#perfis-de-stack)); sobreponha com `--test-cmd` ou `RALPH_TEST_CMD` |

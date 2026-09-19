@@ -45,7 +45,9 @@
 #     2. .spec/project-phases.md         (repos pre-init, com aviso)
 #
 #   Os .md irmaos do input (feature-description, user-stories, database-schema,
-#   ...) entram automaticamente no prompt como documentos de contexto.
+#   ...) entram no prompt: o recorte do que a fase cita (secoes, regras BR,
+#   tabelas, stories US — scripts/lib/phase-context.sh) e os caminhos, para
+#   consulta pontual.
 #
 # Contrato de formato do input (validado no preflight):
 #   - >= 1 heading `## Phase N: <titulo>`
@@ -252,6 +254,8 @@ if [ ! -f "$RALPH_LIB" ]; then
 fi
 # shellcheck disable=SC1090
 . "$RALPH_LIB"
+# shellcheck disable=SC1091
+. "$(dirname "$RALPH_LIB")/phase-context.sh"
 
 format_duration() {
   local total_seconds=$1
@@ -844,6 +848,8 @@ state_init() {
       TSK_SEQ[$TSK_N]="$seq"
       TSK_IDX[$TSK_N]="$idx"
       TSK_STATUS[$TSK_N]="pending"
+      # (manual) nasce pendente de quem conduz: nenhum gate vai julga-la.
+      case "$line" in "(manual)"*) TSK_STATUS[$TSK_N]="manual" ;; esac
       TSK_TEXT[$TSK_N]="$(printf '%s' "${line:0:200}" | tr '\t' ' ')"
     done < <(phase_task_lines "$file" | sed 's/\*\*//g')
   done < <(manifest_entries)
@@ -971,11 +977,16 @@ state_run_status() {
 }
 
 # Marca todas as tasks de uma fase de uma vez (fase concluida ou re-iniciada).
+# Pendencia manual ((manual) ou NOT-CODE) nao vira "done" com o commit: o
+# codigo fechou, o procedimento continua por fazer.
 state_tasks_all() {
   local seq="$1" status="$2" i
   [ "$TSK_N" -gt 0 ] || return 0
   for ((i = 1; i <= TSK_N; i++)); do
     if [ "${TSK_SEQ[$i]}" = "$seq" ]; then
+      if [ "$status" = "done" ] && [ "${TSK_STATUS[$i]}" = "manual" ]; then
+        continue
+      fi
       TSK_STATUS[$i]="$status"
     fi
   done
@@ -1063,13 +1074,14 @@ stop_dashboard() {
 # ---------------------------------------------------------------------------
 
 context_preamble() {
+  local phase_file="$1"
+
   cat <<'PREAMBLE'
 ## Descubra a stack e as convencoes antes de escrever codigo
 Este projeto pode ser de qualquer linguagem ou framework. NAO assuma nenhuma
-stack. Antes de comecar, LEIA os que existirem, nesta ordem:
+stack. Antes de comecar, LEIA:
 1. AGENTS.md ou CLAUDE.md — convencoes, comandos e regras do projeto
-2. os documentos de contexto listados abaixo, se houver
-3. os documentos citados no proprio texto da fase
+2. o contexto desta fase, recortado abaixo pelo ralph, se houver
 Use os comandos de build, teste e execucao definidos por esses documentos e pelo
 tooling ja presente no repositorio.
 
@@ -1083,21 +1095,40 @@ PREAMBLE
   # Listar os que EXISTEM de verdade, derivados do input, em vez de caminhos
   # fixos: um caminho hardcoded que nao existe faz TODA sessao — implementacao e
   # cada ciclo de correcao — queimar tool calls procurando arquivo fantasma.
-  local doc_dir sibling found=0
+  #
+  # "Leia antes de escrever codigo" fazia a sessao ler todos, inteiros, e o
+  # arquivo de fases junto: ~19k tokens no contexto de cada turno, em 25 de 26
+  # sessoes de um run real. Agora o ralph recorta o que a fase cita, e os
+  # caminhos ficam para consulta pontual. O feature-brief e o rascunho humano
+  # que o feature-description substitui: entra no recorte quando citado, fora da
+  # lista de consulta.
+  local doc_dir sibling extract docs=""
   doc_dir="$(dirname "$INPUT_FILE")"
   for sibling in "$doc_dir"/*.md; do
     [ -f "$sibling" ] || continue
-    if [ "$(basename "$sibling")" = "$(basename "$INPUT_FILE")" ]; then
-      continue
-    fi
-    if [ "$found" -eq 0 ]; then
-      echo
-      echo "## Documentos de contexto deste plano"
-      echo "Estao ao lado do arquivo de fases. Leia antes de escrever codigo:"
-      found=1
-    fi
-    echo "  - $sibling"
+    case "$(basename "$sibling")" in
+      "$(basename "$INPUT_FILE")"|feature-brief.md) continue ;;
+    esac
+    docs="${docs}  - ${sibling}"$'\n'
   done
+
+  extract=$(phase_context "$PHASES_DIR/$phase_file" "$doc_dir" "$INPUT_FILE")
+  if [ -n "$extract" ]; then
+    echo
+    echo "## Contexto desta fase"
+    echo "O ralph recortou dos documentos do plano o que esta fase cita — secoes,"
+    echo "regras, tabelas, stories. Parta daqui."
+    printf '%s\n' "$extract"
+  fi
+
+  if [ -n "$docs" ]; then
+    echo
+    echo "## Documentos do plano (consulta pontual)"
+    echo "Nao leia inteiros, e nao abra o arquivo de fases: a fase abaixo e toda a sua"
+    echo "tarefa. Precisou de algo que nao esta no contexto acima? Busque pelo id ou"
+    echo "pelo titulo (ex: rg -n 'US-2.3' <arquivo>) e leia so aquele trecho."
+    printf '%s' "$docs"
+  fi
 
   # O gate 2 roda ESTE comando. Se o agente rodar outro (ex: o runner no host em
   # vez de dentro do container), ele ve verde e o gate ve vermelho.
@@ -1131,7 +1162,7 @@ build_impl_prompt() {
   {
     echo "Voce e um desenvolvedor senior implementando uma fase deste projeto."
     echo
-    context_preamble
+    context_preamble "$phase_file"
     cat <<'TASK'
 
 ## Sua tarefa agora
@@ -1139,7 +1170,8 @@ Implemente COMPLETAMENTE a fase descrita abaixo.
 
 Para cada item:
 1. Implemente o codigo completo (nao deixe TODOs ou placeholders)
-2. Crie os testes listados, seguindo o framework de testes do projeto
+2. Crie os testes listados, seguindo o framework de testes do projeto: um caso
+   de teste por cenario listado, com nome que descreva o cenario
 3. Rode SO os testes desse item (teste focado, pelo runner do projeto)
 4. Se um teste falhar, corrija o codigo e rode novamente
 5. So passe pro proximo item quando esses testes passarem
@@ -1153,6 +1185,9 @@ quebrar.
 - Testes e fixtures/factories devem criar todas as dependencias necessarias
 - Nomes de classes, arquivos e metodos devem seguir EXATAMENTE o que esta descrito
 - Nao pule nenhum item marcado com [ ]
+- Item "(manual)" e procedimento de quem conduz o PR e nenhum gate o verifica.
+  Rode-o se for um comando deste repositorio que voce consegue rodar aqui; se
+  exige uma pessoa ou um aparelho, siga em frente
 
 ## Fase a implementar
 TASK
@@ -1171,7 +1206,7 @@ build_fix_prompt() {
   {
     echo "Voce e um desenvolvedor senior corrigindo uma fase parcialmente implementada."
     echo
-    context_preamble
+    context_preamble "$phase_file"
     cat <<'INTRO'
 
 ## Situacao
@@ -1205,6 +1240,22 @@ phase_task_lines() {
   sed -n 's/^[[:space:]]*- \[[ x]\][[:space:]]*//p' "$PHASES_DIR/$1"
 }
 
+# Task `- [ ] (manual) ...`: procedimento de quem conduz o PR (formatador, build,
+# aparelho real). Tipada no plano, fica fora do gate 3 por construcao: nenhum
+# veredito pedido, nenhum aceito. Deixar o verificador classificar NOT-CODE
+# sozinho fazia o destino da fase depender dele acertar toda vez — e com o codigo
+# byte-identico ele ja trocou NOT-CODE por INCOMPLETE ("aguardando a suite").
+# Mantem a posicao na fase: o <n> do veredito, do painel e do prompt de correcao
+# continua o mesmo, so com lacunas.
+# Negrito fora antes de casar, como no painel: `**(manual)**` tambem vale.
+phase_judged_positions() {
+  phase_task_lines "$1" | sed 's/\*\*//g' | awk '!/^\(manual\)/ { print NR }'
+}
+
+phase_manual_positions() {
+  phase_task_lines "$1" | sed 's/\*\*//g' | awk '/^\(manual\)/ { print NR }'
+}
+
 # Arquivos que a fase mexeu ate aqui: a arvore contra HEAD, que e o commit da
 # fase anterior. Vazio quando a fase ja estava implementada.
 phase_changed_files() {
@@ -1214,13 +1265,15 @@ phase_changed_files() {
 build_verify_prompt() {
   local phase_file="$1" cycle="$2"
   local prompt_file="$PROMPT_DIR/${phase_file%.md}.verify-${cycle}.txt"
-  local tasks n changed n_changed
+  local tasks n n_all judged changed n_changed
 
   # O ralph numera as tasks. Contando sozinho, lendo o markdown, o verificador
   # errava: num run real emitiu TASK 9 numa fase de 8, e o ralph reprovou uma
   # fase completa, com a suite verde, por indice fora da faixa.
   tasks=$(phase_task_lines "$phase_file")
-  n=$(printf '%s\n' "$tasks" | grep -c . || true)
+  n_all=$(printf '%s\n' "$tasks" | grep -c . || true)
+  judged=$(phase_judged_positions "$phase_file")
+  n=$(printf '%s\n' "$judged" | grep -c . || true)
   changed=$(phase_changed_files)
   n_changed=$(printf '%s\n' "$changed" | grep -c . || true)
 
@@ -1233,10 +1286,17 @@ Seu unico trabalho e ler o codigo real e dizer o que esta feito e o que nao esta
 VERIFY
     echo
     echo "## Tasks a julgar"
-    echo "O ralph numerou as $n tasks da fase abaixo, na ordem em que aparecem. Use"
-    echo "EXATAMENTE estes numeros, de 1 a $n: um veredito por numero, nem mais nem menos."
+    if [ "$n" -eq "$n_all" ]; then
+      echo "O ralph numerou as $n tasks da fase abaixo, na ordem em que aparecem. Use"
+      echo "EXATAMENTE estes numeros, de 1 a $n: um veredito por numero, nem mais nem menos."
+    else
+      echo "O ralph numerou as tasks da fase abaixo, na ordem em que aparecem, e tirou"
+      echo "desta lista as marcadas (manual): sao procedimento de quem conduz o PR, sem"
+      echo "veredito. Julgue EXATAMENTE estes $n numeros: $(printf '%s\n' "$judged" | paste -sd, - | sed 's/,/, /g')."
+      echo "Um veredito por numero, nem mais nem menos."
+    fi
     echo
-    printf '%s\n' "$tasks" | awk '{ t = $0; if (length(t) > 300) t = substr(t, 1, 300) "..."; print NR ". " t }'
+    printf '%s\n' "$tasks" | awk '{ l = $0; gsub(/\*\*/, "", l) } l ~ /^\(manual\)/ { next } { t = $0; if (length(t) > 300) t = substr(t, 1, 300) "..."; print NR ". " t }'
     cat <<'VERIFY'
 
 Para cada uma, confira os acceptance criteria (na fase completa, abaixo) contra
@@ -1261,6 +1321,17 @@ o que ela exige de quem for executa-la.
 
 NOT-CODE e sobre a NATUREZA da task, nunca sobre a sua confianca: task de codigo
 que voce nao conseguiu confirmar e INCOMPLETE, nao NOT-CODE.
+
+Task de teste com cenarios listados (sub-bullets "situacao → resultado"): a
+lista e fechada. DONE quando cada cenario listado tem um caso de teste que monta
+aquela situacao e verifica aquele resultado. Nao exija cenario, classe ou camada
+que a lista nao pede. INCOMPLETE cita o cenario que falta pelo texto do bullet.
+VERIFY
+    # Sem lista fechada o verificador monta a dele a cada ciclo: num run real, a
+    # mesma task de teste reprovou no ciclo 1 por tres gates e, com eles
+    # cobertos, no ciclo 2 por um teste "direto" de outra classe que o plano
+    # nunca pediu. Citar o bullet da a correcao um alvo que nao se move.
+    cat <<'VERIFY'
 
 ## Onde olhar
 VERIFY
@@ -1691,11 +1762,21 @@ gate3_verify_uncached() {
       ;;
   esac
 
-  local expected
-  expected=$(grep -cE '^[[:space:]]*- \[[ x]\]' "$PHASES_DIR/$phase_file" || true)
+  local total expected judged manual n_manual=0
+  total=$(grep -cE '^[[:space:]]*- \[[ x]\]' "$PHASES_DIR/$phase_file" || true)
+  judged=$(phase_judged_positions "$phase_file")
+  expected=$(printf '%s\n' "$judged" | grep -c . || true)
+  manual=$(phase_manual_positions "$phase_file")
+  [ -n "$manual" ] && n_manual=$(printf '%s\n' "$manual" | grep -c .)
+
+  if [ "$total" -eq 0 ]; then
+    warn "Gate 3 pulado: a fase nao declara nenhuma task '- [ ]'"
+    state_gate 3 skip
+    return 0
+  fi
 
   if [ "$expected" -eq 0 ]; then
-    warn "Gate 3 pulado: a fase nao declara nenhuma task '- [ ]'"
+    warn "Gate 3 pulado: toda task da fase ($total) e (manual) — nada no codigo a julgar"
     state_gate 3 skip
     return 0
   fi
@@ -1739,18 +1820,29 @@ gate3_verify_uncached() {
     }
     END { for (n in seen) { print n": "seen[n] } }' | sort -n)
 
+  # Veredito para task (manual) nao foi pedido: descarta, nunca reprova. Mesmo
+  # listada fora, o verificador ve a fase inteira e as vezes julga assim mesmo.
+  if [ -n "$manual" ]; then
+    verdicts=$(printf '%s\n' "$verdicts" | awk -v man=" $(printf '%s ' $manual)" '{
+        n = $1; sub(":", "", n);
+        if (index(man, " " (n + 0) " ") == 0) { print }
+      }')
+  fi
+
   local parsed
   parsed=$(printf '%s\n' "$verdicts" | grep -c . || true)
 
-  # Task fora de 1..expected e emissao malformada: o verificador inventou indice.
+  # Task fora da lista pedida e emissao malformada: o verificador inventou indice.
   local out_of_range
-  out_of_range=$(printf '%s\n' "$verdicts" | awk -v max="$expected" '{
+  out_of_range=$(printf '%s\n' "$verdicts" | awk -v ok=" $(printf '%s ' $judged)" '{
       n = $1; sub(":", "", n);
-      if (n + 0 < 1 || n + 0 > max) { print }
+      if (n != "" && index(ok, " " (n + 0) " ") == 0) { print }
     }')
 
   if [ -n "$out_of_range" ]; then
-    GATE_CAUSE="O verificador emitiu indices de task fora do intervalo 1..$expected:"$'\n'"$out_of_range"$'\n'"Linhas originais:"$'\n'"$task_lines"
+    local asked="1..$total"
+    [ "$n_manual" -gt 0 ] && asked=$(printf '%s\n' "$judged" | paste -sd, - | sed 's/,/, /g')
+    GATE_CAUSE="O verificador emitiu indices de task fora da lista pedida ($asked):"$'\n'"$out_of_range"$'\n'"Linhas originais:"$'\n'"$task_lines"
     state_gate 3 fail
     return 1
   fi
@@ -1788,8 +1880,11 @@ gate3_verify_uncached() {
     return 1
   fi
 
+  local manual_note=""
+  [ "$n_manual" -gt 0 ] && manual_note=" (+$n_manual manual, fora do gate)"
+
   if [ -n "$not_code" ]; then
-    success "Gate 3 — $((parsed - n_not_code))/$expected tasks confirmadas no codigo"
+    success "Gate 3 — $((parsed - n_not_code))/$expected tasks confirmadas no codigo$manual_note"
     warn "Gate 3 — $n_not_code task(s) fora do codigo, pendentes de quem conduz:"
     local task_num
     while read -r task_num; do
@@ -1797,7 +1892,7 @@ gate3_verify_uncached() {
       printf '%s\n' "$task_lines" | grep -m1 -E "^TASK $task_num: NOT-CODE" | sed 's/^/    /' || true
     done <<< "$not_code"
   else
-    success "Gate 3 — $parsed/$expected tasks confirmadas no codigo"
+    success "Gate 3 — $parsed/$expected tasks confirmadas no codigo$manual_note"
   fi
 
   state_gate 3 pass
@@ -2211,6 +2306,20 @@ main() {
     for phase in "${failed_phases[@]}"; do printf '    %b%s%b\n' "$RED" "$phase" "$NC"; done
     echo ""
     fail "Verifique os logs em $LOG_DIR/"
+  fi
+
+  # Checklist de quem abre o PR: tasks (manual) do plano e vereditos NOT-CODE,
+  # so das fases concluidas. Sem isto elas ficavam espalhadas no log por fase.
+  local i pending=()
+  for ((i = 1; i <= TSK_N; i++)); do
+    [ "${TSK_STATUS[$i]}" = "manual" ] || continue
+    [ "${PH_STATUS[${TSK_SEQ[$i]}]}" = "done" ] || continue
+    pending+=("Phase ${PH_NUM[${TSK_SEQ[$i]}]}: ${TSK_TEXT[$i]#(manual) }")
+  done
+  if [ ${#pending[@]} -gt 0 ]; then
+    echo ""
+    warn "Pendencias manuais (${#pending[@]}) — de quem conduz, antes do PR:"
+    for phase in "${pending[@]}"; do printf '    %s\n' "$phase"; done
   fi
 
   echo ""

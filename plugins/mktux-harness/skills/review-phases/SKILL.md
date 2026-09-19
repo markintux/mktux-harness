@@ -118,11 +118,11 @@ Retorne um relatorio Markdown com exatamente estas secoes:
 
 <relatorio do security-auditor>
 
-## Pendencias NOT-CODE
+## Pendencias manuais
 
-<as tasks que o gate 3 marcou NOT-CODE nesta fase, se houver — leia
-.phases/logs/phase-$1.verify-*.log. Sao as tasks procedurais que ainda precisam
-de um humano antes do PR.>
+<as tasks `(manual)` da fase (.phases/phase-$1.md) e as que o gate 3 marcou
+NOT-CODE (.phases/logs/phase-$1.verify-*.log), se houver. Sao os procedimentos
+que ainda precisam de quem conduz antes do PR.>
 ```
 
 ## Restricoes

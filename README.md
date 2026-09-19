@@ -110,6 +110,11 @@ TASK 3: NOT-CODE — needs a human to run `sail npm run build`
 `INCOMPLETE` fails the phase and triggers a fix cycle. `NOT-CODE` does not fail —
 it becomes a manual pending item in the report.
 
+A task the plan types as `- [ ] (manual) …` — run the formatter, build assets,
+check on a real phone — never reaches the verifier. ralph leaves it out of the
+numbered list, drops any verdict on it, and lists it under *Pendencias manuais*
+at the end of the run: the checklist for whoever opens the PR.
+
 ---
 
 ## Installation
@@ -430,12 +435,13 @@ total-spent calculation must behave exactly as before.
     swallows the literal segment
 - [ ] No file under `app/`, `routes/` or `resources/views/` references the
       national ID column in the export path.
-
-  Automated tests to generate:
-    - `tests/Feature/Customer/ExportCustomersTest.php` — Business downloads,
-      filters respected, ID absent (US-1.1)
-    - `tests/Feature/Customer/ExportCustomersPlanGateTest.php` — Starter and Pro
-      get 403 on direct POST (US-3.1)
+- [ ] `tests/Feature/Customer/ExportCustomersTest.php` (new file) covers these scenarios, one test case each:
+  - Business tenant exports → CSV download with one row per customer (US-1.1)
+  - export with a name filter → only the matching customers in the CSV (US-1.1)
+  - Business tenant exports → header row has no national ID column (US-1.1)
+- [ ] `tests/Feature/Customer/ExportCustomersPlanGateTest.php` (new file) covers these scenarios, one test case each:
+  - Starter tenant POSTs to `customers.export` → 403 (US-3.1)
+  - Pro tenant POSTs to `customers.export` → 403 (US-3.1)
 
 **Completion criteria:** `ExportCustomersAction` exists and is covered.
 `tests/Feature/Customer/CustomerListTest.php` still passes **unmodified** — if it
@@ -445,7 +451,7 @@ instead.
 ---
 ```
 
-Three things there are deliberate:
+Four things there are deliberate:
 
 1. **The phase repeats its own guards.** The `Do not touch` block lives inside the
    phase, not in a preamble — because `ralph` discards everything that is not
@@ -453,12 +459,28 @@ Three things there are deliberate:
 
 2. **The last task is a state, not a command.** "No file references the ID column"
    is something the verifier can check with Grep. "Confirm with `grep -rn` that…"
-   is not — that comes back `NOT-CODE` and becomes a manual pending item.
+   is not — that comes back `NOT-CODE` and becomes a manual pending item. A real
+   procedure (formatter, asset build) goes in as `- [ ] (manual) …`, out of
+   gate 3 by construction.
 
 3. **Each task's first line stands on its own.** `ralph` counts the checkboxes and
    hands the verifier a numbered list of first lines, so the verifier never
    counts by reading. Details go in plain `-` sub-bullets: every `- [ ]`, at any
    indentation, becomes a task with its own verdict.
+
+4. **Each test file is its own task, with a closed scenario list.** The verifier
+   checks that every listed scenario has a test case — and asks for nothing
+   beyond the list. "Tests prove every precondition" gives it nothing to close:
+   in a real run it rebuilt its own list each cycle, and the fix session chased
+   a target that moved while the plan stayed the same.
+
+`ralph` reads the `Read first:` line and the ids the phase cites, and hands the
+session **only those excerpts** — the named section, the `BR-NN` rule, the
+`US-N.N` story, the table — plus the documents' paths for a targeted lookup.
+Telling the session to "read the context documents" made 25 of 26 sessions in a
+real run read all of them end to end, some 19k tokens riding in the context of
+every later turn. So cite by exact heading and by id: "see the description" is
+not an address.
 
 **Read this file carefully.** It is the last cheap correction point. After this,
 every mistake costs a session.
@@ -512,8 +534,8 @@ ralph docs/features/customer-export/project-phases.md --from 3
 ```
 
 You get a report with three sections: convention violations against the project's
-`CLAUDE.md`, the `security-auditor` subagent's audit, and the `NOT-CODE` pending
-items gate 3 left for you.
+`CLAUDE.md`, the `security-auditor` subagent's audit, and the manual pending
+items — `(manual)` tasks and `NOT-CODE` verdicts — left for you.
 
 ---
 
@@ -1003,7 +1025,8 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | `Contrato de formato violado` in preflight | a `## Phase` heading outside `## Phase N: <title>`. A malformed heading makes the phase **vanish silently** from the run |
 | gate 3 fails on `cobertura incompleta` or an out-of-range index | the verifier ignored the numbered list in its prompt. Read the verdict (`verify-M.last.txt` on Codex, `verify-M.log` on Claude); if it repeats, change `RALPH_VERIFY_MODEL` |
 | preflight aborts with `.harness/ esta versionado` | the telemetry was committed. `git rm -r --cached .harness` and commit |
-| a task always comes back `NOT-CODE` | it is worded as a command (`run`, `confirm with git diff`). Reword it as a code state |
+| a task always comes back `NOT-CODE` | it is worded as a command (`run`, `confirm with git diff`). Reword it as a code state, or tag it `(manual)` if it really is a procedure |
+| a close-out phase fails with nothing wrong in the code | a procedure task without `(manual)`: the verifier tries to judge what it cannot read. Tag it `(manual)` |
 | phase fails every cycle until exhausted | a task with a conditional escape hatch (*"do X, but if it feels awkward, leave it"*). In doubt, the verifier picks INCOMPLETE |
 | gate 2 red on the very first run | Laravel: Sail is down, or `.env.testing` is missing. Other stacks: the dev environment was never set up (dependencies, virtualenv) |
 | ralph or `test-runner` picks the wrong test command | check with `mktux-profile.sh test-cmd` (see [Stack profiles](#stack-profiles)); override with `--test-cmd` or `RALPH_TEST_CMD` |

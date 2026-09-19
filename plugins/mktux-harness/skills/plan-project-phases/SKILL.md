@@ -99,13 +99,27 @@ sabendo que nenhum agente vai ver.
 
 | Sessao | Recebe |
 |---|---|
-| implementacao / correcao | preambulo de stack + **os caminhos** dos `.md` irmaos (`feature-description.md`, `user-stories.md`, `database-schema.md`) + o comando de teste do projeto + aquela fase |
+| implementacao / correcao | preambulo de stack + o **recorte** do que a fase cita nos `.md` irmaos (`feature-description.md`, `user-stories.md`, `database-schema.md`) + os caminhos deles, so para consulta pontual + o comando de teste do projeto + aquela fase |
 | verificador (gate 3) | aquela fase + a lista numerada das tasks (a primeira linha de cada) + os arquivos alterados na fase. **Nenhum doc irmao** |
 
-Os docs irmaos chegam como *caminho*, nao como conteudo — a sessao precisa
-escolher abrir. Entao uma fase que depende de decisao registrada em outro lugar
-tem que dizer:
-`**Read first:** feature-description.md next to this file, section "<nome>"`.
+O ralph recorta, mecanicamente, o que a fase cita — e so isso chega como
+conteudo. O resto chega como caminho, com a instrucao de nao ler inteiro. Entao
+o que a fase precisa tem que estar citado de um jeito que o recorte ache:
+
+| Cite | Como | O ralph recorta |
+|---|---|---|
+| secao | no **Read first:**, depois do arquivo: `` `feature-description.md` next to this file, section "PII Rules" `` — titulo exato, entre aspas duplas | a secao, ate o proximo titulo do mesmo nivel |
+| tabela | no **Read first:**, depois de `` `database-schema.md` ``: `` table `orders` `` | o `` ### `orders` `` ou o bloco DBML `Table orders {…}` |
+| regra | `BR-07`, ou a faixa `BR-07 through BR-14`, em qualquer ponto da fase | o item da lista de Business Rules |
+| story | `US-2.1`, ou a faixa `US-2.1 through US-2.5`, em qualquer ponto da fase | a story com os criterios |
+
+Citacao vaga — *"all CLI-facing stories"*, *"the relevant rules"*, *"see the
+description"* — nao e recortada: escreva os ids e os titulos.
+
+Isso nao e estetica. Num run real, "leia os documentos de contexto" fazia 25 de
+26 sessoes — correcao inclusive — lerem todos os docs irmaos inteiros, e trechos
+do arquivo de fases: ~19k tokens que ficam no contexto em todo turno seguinte. O
+recorte das mesmas fases fica entre 3 e 10 KB.
 
 O verificador nao recebe doc irmao nenhum. Qualquer coisa que ele precise pra
 julgar uma task tem que estar **dentro da task** ou nos criterios de conclusao da
@@ -163,6 +177,9 @@ Por fase, em ordem. Todos verdes → commit. Qualquer vermelho → ciclo de corr
   - `TASK n: NOT-CODE — <o que precisa de um humano>` → nao reprova, e reportado
     como pendencia manual
 
+  Task marcada `(manual)` (1.6) nao entra no gate 3: nenhum veredito pedido,
+  nenhum aceito.
+
 ## 1.6 Escreva task como estado, nao como comando
 
 Esta e a regra de maior alavancagem do documento inteiro.
@@ -188,7 +205,22 @@ Prefira a forma de estado toda vez que a exigencia for legivel a partir do
 repositorio.
 
 **Task genuinamente procedural continua pertencendo ao plano** — alguem tem que
-rodar antes do PR. Essas ficam `NOT-CODE` e isso esta correto:
+rodar antes do PR. Marque-a com `(manual)`, literal e minusculo, logo depois do
+checkbox:
+
+```markdown
+- [ ] (manual) Run `<project formatter>` on the files this feature touched.
+- [ ] (manual) Open the export screen on a real phone, portrait and landscape.
+```
+
+O ralph tira toda task `(manual)` do gate 3 **por construcao**: ela nao entra na
+lista numerada do verificador, veredito que ele emita para ela e descartado, e
+ela sai no fim do run em "Pendencias manuais" — o checklist de quem abre o PR. A
+posicao dela na fase continua contando: a task seguinte mantem o mesmo `<n>`. A
+sessao de implementacao roda a task `(manual)` quando e um comando do repo que
+ela consegue rodar (formatador, build); o que exige pessoa ou aparelho fica.
+
+Sao `(manual)`:
 
 - rodar o formatador do projeto;
 - rodar a suite completa pelo subagent `test-runner`;
@@ -199,37 +231,31 @@ rodar antes do PR. Essas ficam `NOT-CODE` e isso esta correto:
 Escreva o comando exato de cada procedimento — o do perfil de stack, ou o que o
 `CLAUDE.md` / `AGENTS.md` do projeto define.
 
-**Nunca escreva uma fase 100% procedural.** Custa uma sessao inteira e uma passada
-de verificador pra confirmar `0/N` tasks em codigo. Uma fase de fechamento mistura
-afirmacoes legiveis (nenhuma migration perdida, nenhum identificador residual,
-nenhum codigo proibido em arquivo protegido) com os poucos procedimentos reais.
+Task de estado **nunca** leva `(manual)`: ela sairia do gate 3 e ninguem mais a
+confirmaria.
 
-### Fase com task procedural deve se declarar operacional
+**Nunca escreva uma fase 100% `(manual)`.** Custa uma sessao inteira sem nada
+que um gate confirme. Uma fase de fechamento mistura afirmacoes legiveis
+(nenhuma migration perdida, nenhum identificador residual, nenhum codigo
+proibido em arquivo protegido) com os poucos procedimentos reais.
 
-Toda fase que carrega task `NOT-CODE` MUST trazer, logo abaixo do heading, numa
-linha sozinha:
+### Por que tipar, em vez de deixar o verificador classificar
 
-```markdown
-## Phase 12: Close out — format, build, and prove nothing else moved
-
-**Operational phase**
-```
-
-O ralph le esse marcador e faz o gate 3 **reportar sem reprovar** naquela fase. O
-gate 2 continua rodando a suite de verdade, fora do agente: a corretude nao fica
-sem guarda.
-
-Sem o marcador, o destino da fase passa a depender de o verificador classificar
-`NOT-CODE` corretamente todas as vezes — e ele nao classifica. Num run real, uma
-fase de fechamento com 7 tasks (4 de estado, 3 procedurais) reprovou duas vezes
+Sem a marca, o destino da fase depende de o verificador classificar `NOT-CODE`
+corretamente todas as vezes — e ele nao classifica. Num run real, uma fase de
+fechamento com 7 tasks (4 de estado, 3 procedurais) reprovou duas vezes
 seguidas: no primeiro ciclo o verificador marcou 3 tasks como `NOT-CODE` e uma
 quarta como `INCOMPLETE` por nao conseguir confirmar; no segundo, com o codigo
 byte-identico, marcou duas daquelas como `DONE` e uma como `INCOMPLETE` dizendo
 que estava "aguardando o resultado da suite" — numa sessao onde a ferramenta de
-shell esta bloqueada. Nao havia nada errado com o codigo.
+shell esta bloqueada. Nao havia nada errado com o codigo. Com `(manual)`, nao ha
+o que classificar.
 
-O marcador nao dispensa nada do resto desta secao: continue preferindo a forma de
-estado, e continue sem escrever fase 100% procedural.
+Planos antigos trazem `**Operational phase**` numa linha logo abaixo do heading:
+o gate 3 da fase inteira passa a reportar sem reprovar. O ralph continua
+honrando o marcador, mas nao o escreva em plano novo — ele tira o poder de
+reprovar tambem das tasks de estado, que sao justamente o que a fase de
+fechamento precisa provar. `(manual)` tira so o procedimento.
 
 ## 1.7 Ambiguidade e loop infinito
 
@@ -239,6 +265,10 @@ deixe como esta"* — nunca pode ser confirmada, entao reprova em todo ciclo ate
 fase esgotar.
 
 Decida, e escreva a decisao. Uma instrucao, um resultado.
+
+Task de teste com quantificador — *"prove every precondition"* — e o mesmo loop
+por outro caminho: o verificador inventa a lista, e cada ciclo inventa outra. A
+Parte 5.1 fecha isso.
 
 ## 1.8 Re-rodar
 
@@ -270,10 +300,10 @@ phase live and how they are named, when it is not obvious>.
 **Tasks:**
 - [ ] One task, stated as a code state, naming the exact class/file path.
   - detail bullet, plain `-`, never a checkbox
+- [ ] `<test file path, in the stack's layout>` (new file) covers these scenarios, one test case each:
+  - <situation> → <observable result> (US-N.N)
+  - <situation> → <observable result> (US-N.N)
 - [ ] Next task
-
-  Automated tests to generate:
-    - `<test file path, in the stack's layout>` — the scenarios it covers (US-N.N)
 
 **Completion criteria:** Specific, verifiable conditions — what exists, what
 passes, and which existing tests must still pass **unmodified**.
@@ -333,19 +363,54 @@ Duas regras que importam mais que a ordem:
 
 # Parte 5 — Especificacao de testes
 
-Toda task nao-trivial lista os testes automatizados a gerar ao lado dela, como
-sub-bullets `-` simples sob `Automated tests to generate:`.
-
 O framework de teste, o tipo de teste preferido e o comando que cria o arquivo
 vem do perfil de stack; sem perfil, do `CLAUDE.md` / `AGENTS.md` do projeto.
 Rode pelo subagent `test-runner`, nunca direto.
 
-Para cada teste, especifique:
+## 5.1 Um arquivo de teste, uma task, uma lista fechada de cenarios
 
-- o caminho do arquivo, no layout de testes do stack;
-- os cenarios que cobre, cada um rastreado a um id de story (`US-N.N`);
-- se **estende um arquivo existente** — e se sim, diga explicitamente
-  "add cases; do not rewrite the file and do not delete existing cases".
+Teste e task. Cada arquivo de teste que a fase cria ou estende e **uma** task
+propria (`- [ ]`), logo depois da task cujo codigo ele cobre. A primeira linha
+nomeia o arquivo e diz se e novo ou existente; os cenarios vem embaixo, um por
+sub-bullet `-` simples:
+
+```markdown
+- [ ] `<test dir>/orders/cancel-order` (new file) covers these scenarios, one test case each:
+  - owner cancels a pending order → status becomes `cancelled` (US-2.1)
+  - owner cancels a shipped order → validation error, status unchanged (US-2.3)
+  - user from another tenant cancels → not found, status unchanged (US-2.4)
+- [ ] `<test dir>/orders/order-list` (existing file — add cases; do not rewrite the file and do not delete existing cases) covers these scenarios, one test case each:
+  - list after a cancellation → the cancelled order shows the `cancelled` badge (US-2.1)
+```
+
+Cada cenario e `<situacao> → <resultado observavel> (US-N.N)`: o que o teste
+monta e o que ele verifica. O verificador julga a task confirmando que **cada
+cenario listado** tem um caso de teste que monta aquela situacao e verifica
+aquele resultado — e nada alem da lista.
+
+Por isso a lista e o contrato, e tem que ser fechada:
+
+- **Nenhum quantificador sem lista.** "every precondition", "all CHECK
+  constraints", "each pause category" nao sao cenarios: sao um convite pro
+  verificador inventar a lista. Escreva os itens: um cenario por precondicao,
+  constraint, categoria.
+- **Um arquivo por task.** Nunca "Domain, application and CLI tests prove …" com
+  tres arquivos embaixo: vira uma task com tres alvos e um veredito so.
+- **Diga a camada quando ela importa.** Se o cenario tem que exercitar uma classe
+  especifica, e nao um chamador dela, o arquivo de teste e o texto do cenario
+  dizem qual.
+- **Ate 8 cenarios por task.** Mais que isso, divida o arquivo por
+  comportamento.
+
+Isso nao e estetica. Num run real de 15 fases, 8 das 9 fases que voltaram pra
+correcao reprovaram no gate 3 numa task de teste unica que juntava 3 a 5 arquivos
+e prometia "prove every precondition", "all CHECK constraints", "every pause
+category". Sem lista, o verificador monta a dele a cada ciclo, e o alvo muda sem
+uma linha do plano mudar: numa mesma fase, o ciclo 1 reprovou por faltarem tres
+gates especificos; com esses cobertos, o ciclo 2 reprovou por faltar teste
+"direto" de outra classe, que ninguem tinha pedido.
+
+## 5.2 Cobertura
 
 Cobertura obrigatoria para toda feature:
 
@@ -355,6 +420,10 @@ Cobertura obrigatoria para toda feature:
 - **Validation** — campos obrigatorios, comprimentos, valores de enum
 - **Happy path** — create, read, update, delete, conforme aplicavel
 - **Edge cases** nomeados nas business rules do `feature-description.md`
+
+Cada item acima vira cenario **escrito** na lista de algum arquivo de teste
+(5.1). "Cada papel pode e nao pode executar cada acao" significa um cenario por
+par papel × acao que importa, nao a frase copiada para o plano.
 
 Quando um refactor tem que preservar comportamento, nomeie nos criterios de
 conclusao os arquivos de teste existentes que precisam passar **sem modificacao**,
@@ -401,6 +470,13 @@ awk '/^## Phase [0-9]+: /{p=$0; order[++n]=p; c[p]=0}
 
 # Tudo acima da Phase 1 e descartado — confirme que nada estrutural mora la
 sed -n "1,/^## Phase 1: /p" "$f"
+
+# Procedimento sem (manual) (1.6) — toda linha impressa ganha a marca ou vira estado
+grep -nE '^[[:space:]]*- \[[ x]\][[:space:]]+(Run|Execute|Build|Confirm|Verify|Check|Ask)\b' "$f"
+
+# Quantificador em task ou cenario (1.7, 5.1). Linha de teste impressa: vira
+# itens escritos. Linha de codigo: o conjunto tem que estar listado na propria task.
+grep -nwiE 'every|all|each|any' "$f" | grep -E '^[0-9]+:[[:space:]]*- '
 ```
 
 Depois releia e confirme:
@@ -409,10 +485,17 @@ Depois releia e confirme:
 - [ ] A primeira linha de cada task diz sozinha do que ela trata.
 - [ ] Toda fase que toca codigo compartilhado ou arriscado carrega a propria linha **Do not touch**.
 - [ ] Nenhuma task esta escrita como comando de shell quando a mesma exigencia e legivel do repo.
-- [ ] Nenhuma fase e 100% procedural.
+- [ ] Todo procedimento (formatador, build, suite, aparelho real, pergunta) leva
+      `(manual)`; nenhuma task de estado leva.
+- [ ] Nenhuma fase e 100% `(manual)`.
 - [ ] Nenhuma task tem escape condicional.
 - [ ] Sub-bullets de detalhe sao `-` simples, nao `- [ ]`.
-- [ ] Todo bullet de teste rastreia a pelo menos um `US-N.N`.
+- [ ] Todo arquivo de teste e uma task propria, com no maximo 8 cenarios
+      `<situacao> → <resultado observavel>`, nenhum quantificador sem lista.
+- [ ] Todo cenario rastreia a pelo menos um `US-N.N`.
+- [ ] Todo nome entre aspas no **Read first:** e o titulo exato de uma secao do
+      arquivo citado antes dele; regra e story sao citadas por id, nunca por
+      descricao vaga.
 - [ ] Os criterios de conclusao nomeiam os testes existentes que passam sem modificacao.
 - [ ] `[x]` aparece so em task confirmada lendo o codigo.
 - [ ] Se um perfil casou, o reference dele foi lido, e comandos, caminhos de

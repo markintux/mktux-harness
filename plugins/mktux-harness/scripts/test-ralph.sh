@@ -183,7 +183,17 @@ if [ "$verify" -eq 1 ]; then
   fi
 
   emit_tasks() {
-    if [ "$scenario" = "verify-incomplete-once" ] && [ "$n" -eq 1 ]; then
+    if [ "$scenario" = "verify-manual-incomplete" ]; then
+      # Julga a task (manual) mesmo sem ela estar na lista pedida.
+      local i=0 l
+      while IFS= read -r l; do
+        i=$((i + 1))
+        case "$l" in
+          *"(manual)"*) echo "TASK $i: INCOMPLETE — aguardando o formatador" ;;
+          *) echo "TASK $i: DONE" ;;
+        esac
+      done < <(grep -E '^[[:space:]]*- \[[ x]\]' <<< "$prompt")
+    elif [ "$scenario" = "verify-incomplete-once" ] && [ "$n" -eq 1 ]; then
       echo "TASK 1: INCOMPLETE — o arquivo nao foi criado"
       for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
     else
@@ -1039,10 +1049,57 @@ fi
 if case_enabled sibling-docs; then
   header "32. docs irmaos do input entram no prompt"
   d=$(new_case sibling-docs)
-  mkdir -p "$d/repo/docs/features/barcode"
-  printf '%s' "$PHASES_FIXTURE" > "$d/repo/docs/features/barcode/project-phases.md"
-  echo "# stories" > "$d/repo/docs/features/barcode/user-stories.md"
-  echo "# schema" > "$d/repo/docs/features/barcode/database-schema.md"
+  fd="$d/repo/docs/features/barcode"
+  mkdir -p "$fd"
+  cat > "$fd/project-phases.md" <<'PLAN'
+# Barcode — Project Phases
+
+<!-- inputs: x -->
+
+## Phase 1: Foundation
+
+**Read first:** `feature-description.md` next to this file, section "Overview"; rule BR-02; `database-schema.md`, table `sales`.
+
+- [ ] **Task:** cria o arquivo A
+- [ ] `tests/scan` (new file) covers these scenarios, one test case each:
+  - cashier scans → item added (US-1.1)
+
+## Phase 2: Feature
+
+- [ ] **Task:** cria o arquivo C
+PLAN
+  cat > "$fd/user-stories.md" <<'DOC'
+# User Stories
+
+### 1. Barcode
+
+**US-1.1** — As a cashier, I want to scan.
+
+- Given a product
+- Then it is added
+
+**US-1.2** — As a manager, I want reports.
+
+- Given sales
+DOC
+  cat > "$fd/feature-description.md" <<'DOC'
+# Feature Description
+
+## Overview
+
+Visao geral da feature.
+
+## Business Rules
+
+1. **BR-01 — Scan unico:** um scan por item.
+2. **BR-02 — Sem duplicado:** nada duplicado.
+
+## UI
+
+Tela de caixa.
+DOC
+  printf '# schema\n\n## New Tables\n\n```dbml\nTable sales {\n  id int [pk]\n}\n\nTable refunds {\n  id int [pk]\n}\n```\n' > "$fd/database-schema.md"
+  echo "# brief" > "$fd/feature-brief.md"
   git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: feature docs"
 
   rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh" docs/features/barcode/project-phases.md)
@@ -1052,6 +1109,23 @@ if case_enabled sibling-docs; then
   assert_contains "$prompt" "docs/features/barcode/database-schema.md" "database-schema irmao listado"
   assert_not_contains "$prompt" "docs/features/barcode/project-phases.md" "o proprio plano nao se auto-lista"
   assert_not_contains "$prompt" ".spec/init/project-description.md" "sem caminho fantasma do layout antigo"
+
+  # Contexto sob demanda: so o que a fase cita, recortado; o resto so por caminho.
+  # Mandar ler os docs fazia 25 de 26 sessoes lerem todos, inteiros (~19k tokens).
+  assert_contains "$prompt" "## Contexto desta fase" "recorte do que a fase cita"
+  assert_contains "$prompt" "Visao geral da feature." "secao citada no Read first"
+  assert_contains "$prompt" "**BR-02 — Sem duplicado:**" "regra citada"
+  assert_not_contains "$prompt" "BR-01 — Scan unico" "regra nao citada fica fora"
+  assert_contains "$prompt" "**US-1.1** — As a cashier" "story citada no cenario de teste"
+  assert_not_contains "$prompt" "US-1.2** — As a manager" "story nao citada fica fora"
+  assert_not_contains "$prompt" "Tela de caixa." "secao nao citada fica fora"
+  assert_contains "$prompt" "Table sales {" "tabela citada: bloco DBML"
+  assert_not_contains "$prompt" "Table refunds {" "tabela nao citada fica fora"
+  assert_contains "$prompt" "Nao leia inteiros" "docs completos so para consulta pontual"
+  assert_not_contains "$prompt" "docs/features/barcode/feature-brief.md" "brief fora da lista de consulta"
+  p2="$d/repo/.phases/prompts/phase-02.cycle-1.txt"
+  assert_not_contains "$p2" "## Contexto desta fase" "fase sem citacao: sem recorte"
+  assert_contains "$p2" "## Documentos do plano" "fase sem citacao: caminhos para consulta"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1461,6 +1535,11 @@ if case_enabled verify-prompt; then
   assert_not_contains "$vp" ".phases/" "estado do run fora da lista"
   assert_contains "$vp" "NAO rode build, testes, typecheck nem lint" "proibe rodar build e teste"
   assert_contains "$vp" "node_modules" "proibe ler dependencias de terceiros"
+  # Task de teste: lista de cenarios fechada. Sem isso o verificador inventa a
+  # lista a cada ciclo e o alvo da correcao muda sem o plano mudar.
+  assert_contains "$vp" "Nao exija cenario, classe ou camada" "task de teste: so os cenarios listados"
+  assert_contains "$vp" "INCOMPLETE cita o cenario que falta" "task de teste: INCOMPLETE aponta o bullet"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "de teste por cenario listado" "impl: um caso de teste por cenario"
 
   d=$(new_case verify-prompt-head)
   mkdir -p "$d/repo/src"
@@ -1549,6 +1628,49 @@ if case_enabled harness-exclude; then
   assert_eq 1 "$rc" "versionada: exit 1"
   assert_contains "$d/out.log" "git rm -r --cached .harness" "diz como tirar do git"
   test -f "$d/state/impl_calls" && bad "nenhuma sessao iniciada" || ok "nenhuma sessao iniciada"
+fi
+
+# ---------------------------------------------------------------------------
+# 47. Task (manual): fora do gate 3 por construcao. Mantem a posicao (o <n> do
+#     veredito e do painel nao muda), veredito para ela e descartado, e ela sai
+#     no relatorio final como pendencia de quem conduz o PR.
+# ---------------------------------------------------------------------------
+MANUAL_FIXTURE='# Test Project — Project Phases
+
+<!-- inputs: project-description.md@sha256:000000000000 -->
+
+## Phase 1: Foundation
+
+- [ ] **Task:** cria o arquivo A
+- [ ] (manual) rode o formatador do projeto
+- [ ] **Task:** cria o arquivo B
+
+## Phase 2: Close out
+
+- [ ] **(manual)** confira a tela num aparelho real
+'
+
+if case_enabled manual-task; then
+  header "47. task (manual) fica fora do gate 3 e vira pendencia no relatorio"
+  d=$(new_case manual-task)
+  printf '%s' "$MANUAL_FIXTURE" > "$d/repo/.spec/init/project-phases.md"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: fixture manual"
+  rc=$(run_ralph "$d" verify-manual-incomplete --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "INCOMPLETE numa task (manual) nao reprova: exit 0"
+  assert_contains "$d/repo/.phases/logs/phase-01.verify-1.log" "TASK 2: INCOMPLETE" "o verificador julgou a (manual) e o ralph descartou"
+  vp="$d/repo/.phases/prompts/phase-01.verify-1.txt"
+  assert_contains "$vp" "Julgue EXATAMENTE estes 2 numeros: 1, 3." "verificador recebe so as posicoes julgadas"
+  assert_contains "$vp" "3. **Task:** cria o arquivo B" "posicao mantida depois da lacuna"
+  assert_not_contains "$vp" "2. (manual)" "(manual) fora da lista numerada"
+  assert_contains "$d/out.log" "(+1 manual, fora do gate)" "gate 3 conta a manual a parte"
+  assert_contains "$d/out.log" "toda task da fase (1) e (manual)" "fase so de (manual): gate 3 pulado"
+  assert_contains "$d/out.log" "Pendencias manuais (2)" "relatorio final lista as pendencias"
+  assert_contains "$d/out.log" "Phase 1: rode o formatador do projeto" "pendencia com fase e texto, sem o prefixo"
+  assert_contains "$d/out.log" "Phase 2: confira a tela num aparelho real" "pendencia da fase so de (manual)"
+  state="$d/repo/.phases/state/run.tsv"
+  assert_contains "$state" "$(printf 'TASK\t1\t2\tmanual')" "painel: (manual) continua manual apos o commit"
+  assert_contains "$state" "$(printf 'TASK\t1\t3\tdone')" "painel: task julgada vira done"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" 'Item "(manual)" e procedimento' "impl: sabe o que fazer com (manual)"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
