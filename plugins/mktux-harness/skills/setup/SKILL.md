@@ -49,11 +49,7 @@ O harness nao copia arquivo para dentro do projeto. O que o projeto precisa ter:
 **Recomendado**
 
 - `docs/features/` para os specs. Para mudar a raiz, defina `MKTUX_SPEC_DIR`.
-- Laravel: containers do Sail de pe, e um `.env.testing` proprio.
-
-  > Sem `.env.testing`, rodar a suite com `--env=testing` cai no `.env` de
-  > desenvolvimento, e um `migrate:fresh` apaga o banco de dev. Verifique que o
-  > arquivo existe **antes** do primeiro run.
+- O que o perfil de stack do projeto pede (ver *Perfis de stack*).
 
 **Ignorar no git**
 
@@ -112,13 +108,30 @@ do ai-memory, porque o SessionStart deles consome handoffs. Detalhes na skill
 | `log-event` | todo evento | grava o evento em `.harness/events.jsonl` com timestamp e branch |
 | `log-tokens` | fim da sessao | grava consumo por modelo em `.harness/tokens.jsonl`, com `vendor` para comparar Claude e Codex |
 
-Scripts do perfil Laravel (`profiles/laravel/hooks/`), chamados pelo `profile-hook`:
+`log-tokens` e os scripts de perfil ligados a `claude-post-edit` / `codex-stop`
+sao **deliberadamente diferentes por engine** — o Codex nao tem hook de Edit e
+le tokens do rollout em `~/.codex/sessions/`, enquanto o Claude le o transcript
+da sessao. Nao unifique esses pares.
+
+## Perfis de stack
+
+Cada perfil mora em `profiles/<nome>/`. O `profile-hook` repassa o evento ao
+script que o perfil declara.
+
+<!-- perfis -->
+### Laravel
+
+Detectado por `artisan`. Recomendado: containers do Sail de pe, e um
+`.env.testing` proprio.
+
+> Sem `.env.testing`, rodar a suite com `--env=testing` cai no `.env` de
+> desenvolvimento, e um `migrate:fresh` apaga o banco de dev. Verifique que o
+> arquivo existe **antes** do primeiro run.
+
+Scripts (`profiles/laravel/hooks/`):
 
 | Script | Evento | O que faz |
 |---|---|---|
 | `sail-guard` | `pre-bash` | bloqueia comando que rodaria PHP/DB no host quando o projeto usa Sail, e devolve ao agente a forma correta |
 | `pint-and-test` | `claude-post-edit` · `codex-stop` | roda Pint e os testes afetados |
-
-`pint-and-test` e `log-tokens` sao **deliberadamente diferentes por engine** — o
-Codex nao tem hook de Edit e le tokens do rollout em `~/.codex/sessions/`,
-enquanto o Claude le o transcript da sessao. Nao unifique esses dois.
+<!-- /perfis -->

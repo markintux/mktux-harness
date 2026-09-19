@@ -52,8 +52,9 @@ Opcoes que mais importam:
 - Raiz de um repositorio git, com a **arvore de trabalho limpa**.
 - Codex: `npm install -g @openai/codex` + `OPENAI_API_KEY`
 - Claude: `npm install -g @anthropic-ai/claude-code` + `ANTHROPIC_API_KEY`
-- Perfil Laravel com Sail: containers **de pe**. Parados → abort no preflight,
-  porque todo gate 2 falharia e queimaria os ciclos de correcao a toa.
+- Ambiente do perfil de stack **de pe** (ver *Perfis de stack*). Parado → abort
+  no preflight, porque todo gate 2 falharia e queimaria os ciclos de correcao a
+  toa.
 
 ## Os quatro gates
 
@@ -103,12 +104,8 @@ Primeira regra que resolver vence:
 1. `--test-cmd "<cmd>"`
 2. `RALPH_TEST_CMD`
 3. o **perfil de stack** do diretorio de onde o ralph roda
-   (`profiles/<nome>/profile.sh`; nao sobe diretorios):
-
-   | Perfil | Detectado por | Comando |
-   |---|---|---|
-   | Laravel | `artisan` | `vendor/bin/sail artisan test --compact` com Sail; senao `composer test` se houver `scripts.test`; senao `php artisan test` |
-
+   (`profiles/<nome>/profile.sh`; nao sobe diretorios). O comando de cada
+   perfil esta em *Perfis de stack*, abaixo.
 4. deteccao por manifest:
 
    | Detectado | Comando |
@@ -121,8 +118,7 @@ Primeira regra que resolver vence:
 
 5. nada resolvido → aviso alto e gate 2 pulado (o gate 3 segura sozinho)
 
-O perfil tambem valida o ambiente no preflight (Laravel: Sail parado → abort,
-porque a suite roda dentro do container) e acrescenta notas ao prompt de
+O perfil tambem valida o ambiente no preflight e acrescenta notas ao prompt de
 implementacao. O comando resolvido vai para as sessoes em `RALPH_TEST_CMD`: o
 subagent `test-runner` roda exatamente o que o gate 2 roda.
 
@@ -131,6 +127,19 @@ Para ver o que o ralph vai resolver num projeto, sem rodar nada:
 ```bash
 bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd   # Codex: $PLUGIN_ROOT
 ```
+
+## Perfis de stack
+
+<!-- perfis -->
+### Laravel
+
+- **Detectado por:** `artisan` na raiz.
+- **Comando (gate 2):** `vendor/bin/sail artisan test --compact` com Sail; senao
+  `composer test` se houver `scripts.test`; senao `php artisan test`.
+- **Preflight:** Sail parado → abort, porque a suite roda dentro do container.
+- **Gate 2 sempre vermelho no primeiro run:** Sail parado, ou `.env.testing`
+  ausente.
+<!-- /perfis -->
 
 ## Variaveis de ambiente
 
@@ -178,7 +187,7 @@ no `.gitignore` do projeto.
 | fase de fechamento reprova sem nada de errado no codigo | falta o marcador `**Operational phase**`. Sem ele o gate 3 reprova por task procedural que nao tem como julgar |
 | `gate 0 vermelho` e o relatorio manda revisar as tasks | leia o FIM do `phase-NN.cycle-M.log` antes de mexer no plano: engine que morre por cota, rede ou crash cai no mesmo lugar. Task correta nao e a causa mais provavel |
 | fase reprova em todo ciclo ate esgotar | task com escape condicional (*"faca X, mas se ficar estranho, deixe"*). O verificador escolhe INCOMPLETE na duvida |
-| gate 2 sempre vermelho no primeiro run | Sail parado, ou `.env.testing` ausente |
+| gate 2 sempre vermelho no primeiro run | ambiente do perfil incompleto. A causa de cada perfil esta em *Perfis de stack* |
 | o run reinicia da fase 1 depois de voce editar o plano | editar o `project-phases.md` invalida o stamp e zera `.progress`. Use `--from N` |
 | preflight aborta com `Hooks do ai-memory em ... sem jq` | os hooks do ai-memory estao na config de usuario e o isolamento precisa do `jq`. Instale o `jq`; `RALPH_HOOK_ISOLATION=0` so se aceitar que as sessoes consumam handoffs |
 | `Falha ao gravar no ai-memory` | leia `.phases/logs/phase-NN.memory.log`. Servidor caiu no meio do run: `ai-memory status`; no macOS, `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. A fase continua valida |
