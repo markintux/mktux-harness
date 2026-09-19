@@ -12,7 +12,7 @@
         "matcher": "Bash",
         "hooks": [
           { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/shared/log-event.sh\"" },
-          { "type": "command", "command": "bash \"${PLUGIN_ROOT}/profiles/laravel/hooks/shared/sail-guard.sh\"", "timeout": 5 }
+          { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/shared/profile-hook.sh\" pre-bash", "timeout": 5 }
         ]
       }
     ],
@@ -28,7 +28,7 @@
       {
         "hooks": [
           { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/shared/log-event.sh\"" },
-          { "type": "command", "command": "bash \"${PLUGIN_ROOT}/profiles/laravel/hooks/codex/pint-and-test.sh\"", "timeout": 300 },
+          { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/shared/profile-hook.sh\" codex-stop", "timeout": 300 },
           { "type": "command", "command": "bash \"${PLUGIN_ROOT}/hooks/codex/log-tokens.sh\"" }
         ]
       }

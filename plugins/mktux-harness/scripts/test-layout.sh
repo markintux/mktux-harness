@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
-# test-layout.sh — checa o layout do plugin: todo caminho que um manifest ou
-# uma skill cita existe, e os hooks do perfil Laravel ainda se comportam.
+# test-layout.sh — checa o layout do plugin: todo caminho que um manifest, um
+# perfil ou uma skill cita existe; os hooks, pelo dispatcher de perfil, ainda se
+# comportam; e o mktux-profile.sh responde o que os agents perguntam.
 #
 # A test-ralph.sh cobre o ralph.sh; nada cobria hooks nem skills. Um hook movido
 # sem atualizar o hooks.json some calado (o engine so loga o erro), e um
@@ -12,7 +13,6 @@
 set -uo pipefail
 
 PLUGIN="$(cd "$(dirname "$0")/.." && pwd)"
-LARAVEL_HOOKS="$PLUGIN/profiles/laravel/hooks"
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -52,10 +52,22 @@ for manifest in "$PLUGIN/hooks/hooks.json" "$PLUGIN/hooks/codex-hooks.json"; do
   done <<< "$paths"
 done
 
+# Eventos do contrato (scripts/lib/profile.sh). Um evento com erro de digitacao
+# no manifest nunca casa com o perfil e o hook some calado.
+EVENTS="pre-bash claude-post-edit codex-stop"
+for manifest in "$PLUGIN/hooks/hooks.json" "$PLUGIN/hooks/codex-hooks.json"; do
+  name="${manifest#"$PLUGIN/"}"
+  events=$(grep -oE 'profile-hook\.sh\\" [A-Za-z0-9_-]+' "$manifest" | awk '{print $2}')
+  while IFS= read -r e; do
+    [ -z "$e" ] && continue
+    if [[ " $EVENTS " == *" $e "* ]]; then ok "$name: evento $e"; else bad "$name: evento desconhecido '$e' (contrato: $EVENTS)"; fi
+  done <<< "$events"
+done
+
 # O dispatcher so acha o script de um evento pelo profile_hook do perfil.
 for profile_sh in "$PLUGIN"/profiles/*/profile.sh; do
   pname=$(basename "$(dirname "$profile_sh")")
-  for event in pre-bash claude-post-edit codex-stop; do
+  for event in $EVENTS; do
     rel=$( . "$profile_sh" && profile_hook "$event" )
     [ -z "$rel" ] && continue
     if [ -f "$PLUGIN/profiles/$pname/$rel" ]; then ok "perfil $pname: $event -> $rel"; else bad "perfil $pname: $event -> $rel (nao existe)"; fi
@@ -102,49 +114,61 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 4. Hooks do perfil Laravel (smoke)
+# 4. Hooks pelo dispatcher de perfil (o caminho real: hooks.json -> dispatcher)
 # ---------------------------------------------------------------------------
-header "4. hooks do perfil Laravel"
+header "4. hooks pelo dispatcher de perfil"
+DISPATCH="$PLUGIN/hooks/shared/profile-hook.sh"
 if ! command -v jq > /dev/null 2>&1; then
   echo "  (sem jq: smoke dos hooks pulado — os hooks dependem dele)"
 else
-  # sail-guard: projeto com Sail bloqueia PHP no host e devolve a forma via Sail
+  # Laravel com Sail, Laravel sem Sail de pe, projeto sem perfil, e Laravel numa
+  # subpasta de monorepo.
   sail_proj="$TMP/sail-proj"
-  mkdir -p "$sail_proj/vendor/bin" && touch "$sail_proj/vendor/bin/sail"
-  guard_in() { jq -nc --arg cwd "$1" --arg cmd "$2" '{cwd: $cwd, tool_input: {command: $cmd}}'; }
-
-  rc=0; guard_in "$sail_proj" "php artisan migrate" \
-    | bash "$LARAVEL_HOOKS/shared/sail-guard.sh" 2> "$TMP/guard.err" || rc=$?
-  assert_eq 2 "$rc" "sail-guard: php artisan no host de projeto Sail -> bloqueia"
-  assert_contains "$TMP/guard.err" "./vendor/bin/sail artisan migrate" "sail-guard: sugere a forma via Sail"
-
-  rc=0; guard_in "$sail_proj" "./vendor/bin/sail artisan migrate" \
-    | bash "$LARAVEL_HOOKS/shared/sail-guard.sh" 2> /dev/null || rc=$?
-  assert_eq 0 "$rc" "sail-guard: comando ja via Sail -> passa"
-
+  mkdir -p "$sail_proj/vendor/bin" && touch "$sail_proj/artisan" "$sail_proj/vendor/bin/sail"
+  laravel_proj="$TMP/laravel-proj"
+  mkdir -p "$laravel_proj" && touch "$laravel_proj/artisan" && git -C "$laravel_proj" init -q
   plain_proj="$TMP/plain-proj"
-  mkdir -p "$plain_proj"
-  rc=0; guard_in "$plain_proj" "php artisan migrate" \
-    | bash "$LARAVEL_HOOKS/shared/sail-guard.sh" 2> /dev/null || rc=$?
-  assert_eq 0 "$rc" "sail-guard: projeto sem Sail -> passa"
+  mkdir -p "$plain_proj" && git -C "$plain_proj" init -q
+  mono="$TMP/mono"
+  mkdir -p "$mono/backend/vendor/bin" "$mono/backend/app" && touch "$mono/backend/artisan" "$mono/backend/vendor/bin/sail"
 
-  # pint-and-test (Claude): fora de .php, ou sem Sail de pe, nunca bloqueia
+  guard_in() { jq -nc --arg cwd "$1" --arg cmd "$2" '{cwd: $cwd, tool_input: {command: $cmd}}'; }
+  pre_bash() { # pre_bash <cwd> <cmd> -> exit code; stderr em $TMP/guard.err
+    local rc=0
+    guard_in "$1" "$2" | bash "$DISPATCH" pre-bash 2> "$TMP/guard.err" > /dev/null || rc=$?
+    echo "$rc"
+  }
+
+  # pre-bash -> sail-guard
+  assert_eq 2 "$(pre_bash "$sail_proj" "php artisan migrate")" "pre-bash: php artisan no host de projeto Sail -> bloqueia"
+  assert_contains "$TMP/guard.err" "./vendor/bin/sail artisan migrate" "pre-bash: sugere a forma via Sail"
+  assert_eq 0 "$(pre_bash "$sail_proj" "./vendor/bin/sail artisan migrate")" "pre-bash: comando ja via Sail -> passa"
+  assert_eq 0 "$(pre_bash "$plain_proj" "php artisan migrate")" "pre-bash: projeto sem perfil -> passa"
+  assert_eq 2 "$(pre_bash "$mono/backend/app" "php artisan migrate")" "pre-bash: Laravel em subpasta de monorepo -> bloqueia"
+  assert_eq 0 "$(pre_bash "$mono" "php artisan migrate")" "pre-bash: raiz do monorepo, fora do Laravel -> passa"
+
+  # claude-post-edit -> pint-and-test (Claude): fora de .php ou sem Sail de pe, nunca bloqueia
   edit_in() { jq -nc --arg f "$1" '{tool_input: {file_path: $f}}'; }
+  post_edit() { # post_edit <projeto> <arquivo> -> exit code
+    local rc=0
+    edit_in "$1/$2" | CLAUDE_PROJECT_DIR="$1" bash "$DISPATCH" claude-post-edit > /dev/null 2>&1 || rc=$?
+    echo "$rc"
+  }
+  assert_eq 0 "$(post_edit "$laravel_proj" src/app.ts)" "claude-post-edit: arquivo nao-PHP -> passa"
+  assert_eq 0 "$(post_edit "$laravel_proj" app/Foo.php)" "claude-post-edit: PHP sem Sail de pe -> passa"
+  assert_eq 0 "$(post_edit "$plain_proj" app/Foo.php)" "claude-post-edit: projeto sem perfil -> passa"
 
-  rc=0; edit_in "$plain_proj/src/app.ts" \
-    | CLAUDE_PROJECT_DIR="$plain_proj" bash "$LARAVEL_HOOKS/claude/pint-and-test.sh" 2> /dev/null || rc=$?
-  assert_eq 0 "$rc" "pint-and-test (claude): arquivo nao-PHP -> passa"
-
-  rc=0; edit_in "$plain_proj/app/Foo.php" \
-    | CLAUDE_PROJECT_DIR="$plain_proj" bash "$LARAVEL_HOOKS/claude/pint-and-test.sh" 2> /dev/null || rc=$?
-  assert_eq 0 "$rc" "pint-and-test (claude): PHP sem Sail de pe -> passa"
-
-  # pint-and-test (Codex): sem Sail de pe, deixa o turno encerrar
-  git -C "$plain_proj" init -q
-  rc=0; out=$(cd "$plain_proj" && echo '{"stop_hook_active": false}' \
-    | bash "$LARAVEL_HOOKS/codex/pint-and-test.sh" 2> /dev/null) || rc=$?
-  assert_eq 0 "$rc" "pint-and-test (codex): exit 0"
-  assert_eq '{"continue": true}' "$out" "pint-and-test (codex): sem Sail -> continue, sem block"
+  # codex-stop -> pint-and-test (Codex): o Codex le JSON do stdout do Stop
+  codex_stop() { # codex_stop <projeto> -> stdout (exit code em $TMP/stop.rc)
+    local rc=0 out
+    out=$(cd "$1" && echo '{"stop_hook_active": false}' | env -u CLAUDE_PROJECT_DIR bash "$DISPATCH" codex-stop 2> /dev/null) || rc=$?
+    echo "$rc" > "$TMP/stop.rc"
+    printf '%s' "$out"
+  }
+  assert_eq '{"continue": true}' "$(codex_stop "$laravel_proj")" "codex-stop: Laravel sem Sail de pe -> continue, sem block"
+  assert_eq 0 "$(cat "$TMP/stop.rc")" "codex-stop: exit 0"
+  assert_eq "" "$(codex_stop "$plain_proj")" "codex-stop: projeto sem perfil -> sem saida"
+  assert_eq 0 "$(cat "$TMP/stop.rc")" "codex-stop sem perfil: exit 0"
 fi
 
 # ---------------------------------------------------------------------------

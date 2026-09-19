@@ -11,7 +11,7 @@
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/profiles/laravel/hooks/shared/sail-guard.sh\"", "timeout": 5 }
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/shared/profile-hook.sh\" pre-bash", "timeout": 5 }
         ]
       },
       {
@@ -25,7 +25,7 @@
       {
         "matcher": "Edit|Write",
         "hooks": [
-          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/profiles/laravel/hooks/claude/pint-and-test.sh\"", "timeout": 300 }
+          { "type": "command", "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/shared/profile-hook.sh\" claude-post-edit", "timeout": 300 }
         ]
       },
       {
