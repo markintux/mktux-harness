@@ -12,7 +12,7 @@
     {
       "name": "mktux",
       "source": "./plugins/mktux-harness",
-      "description": "Da ideia ao codigo rodando: especificacao em quatro artefatos, planejamento em fases e execucao autonoma com quatro gates mecanicos. Laravel/Sail em primeiro lugar.",
+      "description": "Da ideia ao codigo rodando: especificacao em quatro artefatos, planejamento em fases e execucao autonoma com quatro gates mecanicos. Core agnostico de stack, com Laravel/Sail como primeiro perfil.",
       "version": "0.5.0"
     }
   ]

@@ -9,6 +9,10 @@ at every decision point.
 
 One repository, two engines, zero files copied into your projects.
 
+One stack-agnostic core, with stack profiles on top: Laravel (Sail) is the first
+one; Node, Python, Go and Rust projects run on the generic path. See
+[Stack profiles](#stack-profiles).
+
 ---
 
 ## Table of contents
@@ -20,6 +24,7 @@ One repository, two engines, zero files copied into your projects.
 - [The pipeline in detail](#the-pipeline-in-detail)
 - [ralph in detail](#ralph-in-detail)
 - [Hooks and telemetry](#hooks-and-telemetry)
+- [Stack profiles](#stack-profiles)
 - [Long-term memory (ai-memory)](#long-term-memory-ai-memory)
 - [What your project needs](#what-your-project-needs)
 - [Command reference](#command-reference)
@@ -205,6 +210,14 @@ To point `ralph` at your own clone instead of the installed plugin:
 
 ```bash
 export MKTUX_HARNESS_ROOT=~/Documents/Code/ai/mktux-harness/plugins/mktux-harness
+```
+
+The harness's own suites run offline, with mock engines and no tokens spent:
+
+```bash
+cd plugins/mktux-harness
+scripts/test-ralph.sh      # ralph: gates, cycles, limits, dashboard, profiles
+scripts/test-layout.sh     # manifests, profiles, skill references, hooks, mktux-profile
 ```
 
 ---
@@ -669,6 +682,135 @@ Add to your project's `.gitignore`:
 
 ---
 
+## Stack profiles
+
+The harness core — the planning skills, `ralph`, the four gates, the hooks, the
+subagents — does not know any stack. What belongs to one stack lives in a
+**stack profile**: the test command and how to check that the environment can
+run it, the conventions a cold session must follow instead of inventing its own,
+the hooks that guard the host, and the stack's security checklist.
+
+That split is what lets one harness serve Laravel, Node and Python without
+diluting any of them. Laravel's opinionated rules — PHP enums over lookup
+tables, `created_by`/`updated_by`, never editing an executed migration, Sail for
+everything — are exactly what keeps a cold session from improvising. They stay
+intact; they just load only where they apply.
+
+### What a profile decides
+
+| Where | Without a profile | With the Laravel profile |
+|---|---|---|
+| ralph gate 2 — test command | manifest detection | `vendor/bin/sail artisan test --compact` with Sail; else `composer test`; else `php artisan test` |
+| ralph preflight | — | Sail containers down → abort before the first session |
+| ralph implementation prompt | the test command | + "artisan, composer, php and tests run INSIDE the container" |
+| hook before every Bash call | no-op | `sail-guard` blocks PHP/DB on the host and hands back the Sail form |
+| hook after an edit (Claude) / end of turn (Codex) | no-op | `pint-and-test`: Pint on the change, then the affected tests |
+| `plan-database-schema` | your `CLAUDE.md`/`AGENTS.md` and the existing schema | + the Laravel database conventions |
+| `plan-project-phases` | your commands, test framework and layout | + Sail commands, PHPUnit and `tests/Feature` paths, the Laravel phase order, Single Action Controllers, Blade |
+| `test-runner` subagent | the resolved command | + artisan file/filter syntax, never on the host, the exact "Sail is not running" error |
+| `security-auditor` / `review-phases` | the generic web checklist | + `route:list`, FormRequest, `$fillable`, `$request->all()`, `@csrf`, Actions not reading `request()` |
+
+Your project's `CLAUDE.md` / `AGENTS.md` always wins over the profile: if Boost
+says the project uses Pest, the plan uses Pest.
+
+### How a profile is detected
+
+A profile applies when its marker is present. Laravel's marker is `artisan`.
+
+- **ralph** looks only at the directory it runs from: the paths a profile
+  returns (`vendor/bin/sail`) are relative to that root.
+- **Hooks and subagents** walk up from the current directory, so a Laravel app in
+  a monorepo subfolder is still guarded while you work inside it.
+- **Skills** check for `artisan` at the project root and load their
+  `references/laravel.md`.
+
+To see what applies to a project, without running anything:
+
+```bash
+P="$CLAUDE_PLUGIN_ROOT"                          # Codex: $PLUGIN_ROOT
+bash "$P/scripts/mktux-profile.sh" name          # laravel — or exit 1: no profile
+bash "$P/scripts/mktux-profile.sh" test-cmd      # what gate 2 and test-runner run
+bash "$P/scripts/mktux-profile.sh" notes test-runner
+```
+
+### Projects without a profile (Node, Python, Go, Rust)
+
+They run on the generic path — the whole harness, minus the stack rules:
+
+- gate 2 and `test-runner` use manifest detection (see
+  [Test command](#test-command-gate-2)): `npm test`; `pytest`, or
+  `uv run pytest` with `uv.lock` and `poetry run pytest` with `poetry.lock`;
+  `go test ./...`; `cargo test`. Override with `--test-cmd` or `RALPH_TEST_CMD`;
+- the planning skills follow only your `CLAUDE.md` / `AGENTS.md` and the code
+  that exists — so that is where your conventions go;
+- `security-auditor` applies the generic web checklist;
+- the stack hooks do nothing.
+
+`test-runner` never prepares an environment: it does not install dependencies,
+sync a virtualenv or start services. A missing dependency comes back as an
+`ERROR:` line naming what to set up (for a uv project, `uv sync --extra dev`).
+
+### Where a profile lives
+
+```
+plugins/mktux-harness/
+├── profiles/laravel/
+│   ├── profile.sh                 detection, test command, preflight, prompt notes, hook map
+│   ├── agents/test-runner.md      notes only test-runner reads
+│   └── hooks/                     sail-guard, pint-and-test
+├── skills/<skill>/references/laravel.md
+│                                  conventions a skill loads (schema, phases, security)
+└── scripts/
+    ├── lib/profile.sh             the contract, detection, manifest fallback
+    └── mktux-profile.sh           the profile, answered for subagents
+```
+
+Conventions a skill loads live **next to the skill**, not under `profiles/`:
+that is the one path both Claude Code and Codex resolve. A subagent that needs
+the same text (the security checklist) reads it from there.
+
+### Adding a profile
+
+A profile is a `profiles/<name>/profile.sh` defining five functions (the contract
+is in `scripts/lib/profile.sh`):
+
+| Function | Answers |
+|---|---|
+| `profile_detect <dir>` | does this profile apply to `<dir>`? |
+| `profile_test_cmd` | the default test command, from the project root |
+| `profile_preflight <cmd>` | can the environment run `<cmd>`? `exit 1` with a message if not |
+| `profile_prompt_notes` | extra lines for ralph's implementation prompt |
+| `profile_hook <event>` | the script for `pre-bash`, `claude-post-edit` or `codex-stop`, if any |
+
+Then, as the stack needs them: hook scripts under `profiles/<name>/hooks/`,
+subagent notes under `profiles/<name>/agents/`, and a `references/<name>.md`
+next to each skill that should carry conventions for it (plus the detection
+line in that skill). `scripts/test-layout.sh` checks that every hook, reference
+and notes file a profile points at exists.
+
+### Upgrading from 0.3
+
+Nothing to change in your projects. What behaves differently:
+
+- **Hooks** go through `profile-hook`, which calls the Laravel scripts only in a
+  Laravel project. Other projects no longer run `sail-guard` or `pint-and-test`
+  at all.
+- **`test-runner`** resolves the command instead of hard-coding
+  `sail artisan test`. Inside a ralph run it receives the gate 2 command through
+  `RALPH_TEST_CMD`, so the two always agree.
+- **Planning skills** stop pushing Laravel conventions onto Node and Python
+  projects. In a Laravel project the plans come out the same — checked A/B on a
+  real feature.
+- **`review-phases` on Codex** now audits with the Laravel security checklist,
+  instead of an unspecified "equivalent agent".
+- **Python** projects with `uv.lock` or `poetry.lock` get `uv run pytest` /
+  `poetry run pytest` instead of a bare `pytest` that failed on the host.
+- A plugin installed at **project scope** does not follow the user-scope update.
+  List installs with `claude plugin list`, and update each project-scoped one
+  from inside that project: `claude plugin update mktux@mktux-harness -s project`.
+
+---
+
 ## Long-term memory (ai-memory)
 
 The harness uses [ai-memory](https://github.com/akitaonrails/ai-memory) for
@@ -758,16 +900,21 @@ hand-written content.
 - A git repository, with a **clean** working tree when ralph runs.
 - `CLAUDE.md` and/or `AGENTS.md` with the project's conventions. Ralph's sessions
   are cold: what is not there does not exist for them.
-- A test suite that runs from a single command.
+- A test suite that runs from a single command — detected automatically (see
+  [Stack profiles](#stack-profiles)), or set with `--test-cmd` / `RALPH_TEST_CMD`.
 
 **Recommended**
 
 - `docs/features/` for the specs.
-- Laravel: Sail containers up, and a dedicated `.env.testing`.
+- Laravel profile: Sail containers up, and a dedicated `.env.testing`.
 
   > ⚠️ Without `.env.testing`, running the suite with `--env=testing` falls back
   > to the development `.env` — and a `migrate:fresh` wipes the dev database.
   > Confirm the file exists **before** the first run.
+
+- Other stacks: the dev environment set up once (`npm install`,
+  `uv sync --extra dev`, ...). ralph and `test-runner` run the tests; they never
+  install anything.
 
 ---
 
@@ -802,7 +949,10 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | phase fails with every verdict `DONE` | task count mismatch. The phase needs the `**This phase has exactly N tasks.**` line |
 | a task always comes back `NOT-CODE` | it is worded as a command (`run`, `confirm with git diff`). Reword it as a code state |
 | phase fails every cycle until exhausted | a task with a conditional escape hatch (*"do X, but if it feels awkward, leave it"*). In doubt, the verifier picks INCOMPLETE |
-| gate 2 red on the very first run | Sail is down, or `.env.testing` is missing |
+| gate 2 red on the very first run | Laravel: Sail is down, or `.env.testing` is missing. Other stacks: the dev environment was never set up (dependencies, virtualenv) |
+| ralph or `test-runner` picks the wrong test command | check with `mktux-profile.sh test-cmd` (see [Stack profiles](#stack-profiles)); override with `--test-cmd` or `RALPH_TEST_CMD` |
+| `test-runner` returns `ERROR:` about a missing dependency | the environment is not set up. It never installs on its own: run the setup the line names (e.g. `uv sync --extra dev`) |
+| the Laravel hooks do not fire | there is no `artisan` at or above the current directory — check with `mktux-profile.sh name` |
 | the run restarts from phase 1 after you edit the plan | editing `project-phases.md` invalidates the stamp. Use `--from N` |
 | `ralph: command not found` | run installation step 3, and check `~/.local/bin` is on your PATH |
 | `mktux-harness: não encontrei ralph.sh` | the plugin is not installed on that machine, or point `MKTUX_HARNESS_ROOT` at a clone |
