@@ -1139,7 +1139,8 @@ Implemente COMPLETAMENTE a fase descrita abaixo.
 
 Para cada item:
 1. Implemente o codigo completo (nao deixe TODOs ou placeholders)
-2. Crie os testes listados, seguindo o framework de testes do projeto
+2. Crie os testes listados, seguindo o framework de testes do projeto: um caso
+   de teste por cenario listado, com nome que descreva o cenario
 3. Rode SO os testes desse item (teste focado, pelo runner do projeto)
 4. Se um teste falhar, corrija o codigo e rode novamente
 5. So passe pro proximo item quando esses testes passarem
@@ -1261,6 +1262,17 @@ o que ela exige de quem for executa-la.
 
 NOT-CODE e sobre a NATUREZA da task, nunca sobre a sua confianca: task de codigo
 que voce nao conseguiu confirmar e INCOMPLETE, nao NOT-CODE.
+
+Task de teste com cenarios listados (sub-bullets "situacao → resultado"): a
+lista e fechada. DONE quando cada cenario listado tem um caso de teste que monta
+aquela situacao e verifica aquele resultado. Nao exija cenario, classe ou camada
+que a lista nao pede. INCOMPLETE cita o cenario que falta pelo texto do bullet.
+VERIFY
+    # Sem lista fechada o verificador monta a dele a cada ciclo: num run real, a
+    # mesma task de teste reprovou no ciclo 1 por tres gates e, com eles
+    # cobertos, no ciclo 2 por um teste "direto" de outra classe que o plano
+    # nunca pediu. Citar o bullet da a correcao um alvo que nao se move.
+    cat <<'VERIFY'
 
 ## Onde olhar
 VERIFY

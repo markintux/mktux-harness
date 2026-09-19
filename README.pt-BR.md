@@ -429,12 +429,13 @@ total-spent calculation must behave exactly as before.
     swallows the literal segment
 - [ ] No file under `app/`, `routes/` or `resources/views/` references the
       identifier `cpf` in the export path.
-
-  Automated tests to generate:
-    - `tests/Feature/Customer/ExportCustomersTest.php` — Business downloads,
-      filters respected, CPF absent (US-1.1)
-    - `tests/Feature/Customer/ExportCustomersPlanGateTest.php` — Starter and Pro
-      get 403 on direct POST (US-3.1)
+- [ ] `tests/Feature/Customer/ExportCustomersTest.php` (new file) covers these scenarios, one test case each:
+  - Business tenant exports → CSV download with one row per customer (US-1.1)
+  - export with a name filter → only the matching customers in the CSV (US-1.1)
+  - Business tenant exports → header row has no `cpf` column (US-1.1)
+- [ ] `tests/Feature/Customer/ExportCustomersPlanGateTest.php` (new file) covers these scenarios, one test case each:
+  - Starter tenant POSTs to `customers.export` → 403 (US-3.1)
+  - Pro tenant POSTs to `customers.export` → 403 (US-3.1)
 
 **Completion criteria:** `ExportCustomersAction` exists and is covered.
 `tests/Feature/Customer/CustomerListTest.php` still passes **unmodified** — if it
@@ -444,7 +445,7 @@ instead.
 ---
 ```
 
-Note três coisas, todas deliberadas:
+Note quatro coisas, todas deliberadas:
 
 1. **A fase repete os próprios guards.** O `Do not touch` está dentro da fase, não
    num preâmbulo — porque o `ralph` descarta tudo que não está entre headings de
@@ -459,6 +460,12 @@ Note três coisas, todas deliberadas:
    cada task, então o verificador nunca conta lendo. Detalhe vai em sub-bullet
    `-` simples: todo `- [ ]`, em qualquer indentação, vira task com veredito
    próprio.
+
+4. **Cada arquivo de teste é uma task, com lista fechada de cenários.** O
+   verificador confere se cada cenário listado tem um caso de teste — e não pede
+   nada fora da lista. "Tests prove every precondition" não dá o que fechar: num
+   run real ele remontou a própria lista a cada ciclo, e a correção perseguiu um
+   alvo que mudava sem o plano mudar.
 
 **Leia esse arquivo com atenção.** É o último ponto barato de correção. Depois
 daqui, cada erro custa uma sessão.

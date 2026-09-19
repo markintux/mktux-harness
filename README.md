@@ -430,12 +430,13 @@ total-spent calculation must behave exactly as before.
     swallows the literal segment
 - [ ] No file under `app/`, `routes/` or `resources/views/` references the
       national ID column in the export path.
-
-  Automated tests to generate:
-    - `tests/Feature/Customer/ExportCustomersTest.php` — Business downloads,
-      filters respected, ID absent (US-1.1)
-    - `tests/Feature/Customer/ExportCustomersPlanGateTest.php` — Starter and Pro
-      get 403 on direct POST (US-3.1)
+- [ ] `tests/Feature/Customer/ExportCustomersTest.php` (new file) covers these scenarios, one test case each:
+  - Business tenant exports → CSV download with one row per customer (US-1.1)
+  - export with a name filter → only the matching customers in the CSV (US-1.1)
+  - Business tenant exports → header row has no national ID column (US-1.1)
+- [ ] `tests/Feature/Customer/ExportCustomersPlanGateTest.php` (new file) covers these scenarios, one test case each:
+  - Starter tenant POSTs to `customers.export` → 403 (US-3.1)
+  - Pro tenant POSTs to `customers.export` → 403 (US-3.1)
 
 **Completion criteria:** `ExportCustomersAction` exists and is covered.
 `tests/Feature/Customer/CustomerListTest.php` still passes **unmodified** — if it
@@ -445,7 +446,7 @@ instead.
 ---
 ```
 
-Three things there are deliberate:
+Four things there are deliberate:
 
 1. **The phase repeats its own guards.** The `Do not touch` block lives inside the
    phase, not in a preamble — because `ralph` discards everything that is not
@@ -459,6 +460,12 @@ Three things there are deliberate:
    hands the verifier a numbered list of first lines, so the verifier never
    counts by reading. Details go in plain `-` sub-bullets: every `- [ ]`, at any
    indentation, becomes a task with its own verdict.
+
+4. **Each test file is its own task, with a closed scenario list.** The verifier
+   checks that every listed scenario has a test case — and asks for nothing
+   beyond the list. "Tests prove every precondition" gives it nothing to close:
+   in a real run it rebuilt its own list each cycle, and the fix session chased
+   a target that moved while the plan stayed the same.
 
 **Read this file carefully.** It is the last cheap correction point. After this,
 every mistake costs a session.

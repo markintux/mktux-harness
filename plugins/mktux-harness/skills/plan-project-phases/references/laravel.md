@@ -14,8 +14,8 @@ Comandos exatos dos procedimentos tipicos num projeto Laravel com Sail:
 ## Caminho de teste no template (Parte 2)
 
 ```markdown
-  Automated tests to generate:
-    - `tests/Feature/[Context]/[Resource]/SomeTest.php` — the scenarios it covers (US-N.N)
+- [ ] `tests/Feature/[Context]/[Resource]/SomeTest.php` (new file) covers these scenarios, one test case each:
+  - <situation> → <observable result> (US-N.N)
 ```
 
 ## Ordem das fases (Parte 3)

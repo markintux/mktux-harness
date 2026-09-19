@@ -1461,6 +1461,11 @@ if case_enabled verify-prompt; then
   assert_not_contains "$vp" ".phases/" "estado do run fora da lista"
   assert_contains "$vp" "NAO rode build, testes, typecheck nem lint" "proibe rodar build e teste"
   assert_contains "$vp" "node_modules" "proibe ler dependencias de terceiros"
+  # Task de teste: lista de cenarios fechada. Sem isso o verificador inventa a
+  # lista a cada ciclo e o alvo da correcao muda sem o plano mudar.
+  assert_contains "$vp" "Nao exija cenario, classe ou camada" "task de teste: so os cenarios listados"
+  assert_contains "$vp" "INCOMPLETE cita o cenario que falta" "task de teste: INCOMPLETE aponta o bullet"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "de teste por cenario listado" "impl: um caso de teste por cenario"
 
   d=$(new_case verify-prompt-head)
   mkdir -p "$d/repo/src"
