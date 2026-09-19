@@ -11,11 +11,18 @@ Slug vem do argumento. Diretorio: `${MKTUX_SPEC_DIR:-docs/features}/<slug>/`.
 
 ## Antes de escrever
 
-**Perfil de stack.** Se existe `artisan` na raiz do projeto, o stack e Laravel:
-leia `references/laravel.md`, ao lado desta skill, **antes** de escrever. Ele
-completa as Partes 1.6, 2, 3, 4, 5 e 6 com os comandos, caminhos, framework de
-teste e a ordem de fases do Laravel. Sem `artisan` nao ha perfil: tire comandos,
-caminhos e framework de teste do `CLAUDE.md` / `AGENTS.md` do projeto.
+**Perfil de stack.** O primeiro marcador da tabela que existir na raiz do
+projeto define o perfil. Leia o reference dele, ao lado desta skill, **antes**
+de escrever. Ele completa as Partes 1.6, 2, 3, 4, 5 e 6 com os comandos,
+caminhos, framework de teste e a ordem de fases do perfil. Nenhum marcador na
+raiz, nenhum perfil: tire comandos, caminhos e framework de teste do
+`CLAUDE.md` / `AGENTS.md` do projeto.
+
+<!-- perfis -->
+| Perfil | Marcador na raiz | Reference |
+|---|---|---|
+| Laravel | `artisan` | `references/laravel.md` |
+<!-- /perfis -->
 
 Leia:
 
@@ -418,8 +425,8 @@ Depois releia e confirme:
 - [ ] Todo bullet de teste rastreia a pelo menos um `US-N.N`.
 - [ ] Os criterios de conclusao nomeiam os testes existentes que passam sem modificacao.
 - [ ] `[x]` aparece so em task confirmada lendo o codigo.
-- [ ] Se existe `artisan` na raiz, `references/laravel.md` foi lido, e comandos,
-      caminhos de teste e ordem de fases do plano seguem ele.
+- [ ] Se um perfil casou, o reference dele foi lido, e comandos, caminhos de
+      teste e ordem de fases do plano seguem ele.
 
 ---
 

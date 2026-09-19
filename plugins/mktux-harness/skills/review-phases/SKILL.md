@@ -11,9 +11,16 @@ nada**, so reporta.
 O numero da fase vem do argumento. Sem argumento, liste as fases commitadas e
 pergunte qual.
 
-**Perfil de stack.** Se existe `artisan` na raiz do projeto, o stack e Laravel:
-leia `references/laravel.md`, ao lado desta skill. Ele lista as pastas
-relevantes a seguranca e traz a secao de auditoria de seguranca do Laravel.
+**Perfil de stack.** O primeiro marcador da tabela que existir na raiz do
+projeto define o perfil. Leia o reference dele, ao lado desta skill. Ele lista
+as pastas relevantes a seguranca e traz a secao de auditoria de seguranca do
+perfil.
+
+<!-- perfis -->
+| Perfil | Marcador na raiz | Reference |
+|---|---|---|
+| Laravel | `artisan` | `references/laravel.md` |
+<!-- /perfis -->
 
 ## 1. Localize o commit da fase
 

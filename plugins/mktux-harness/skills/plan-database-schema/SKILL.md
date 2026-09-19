@@ -11,11 +11,17 @@ Slug vem do argumento. Diretorio: `${MKTUX_SPEC_DIR:-docs/features}/<slug>/`.
 
 ## Antes de escrever
 
-**Perfil de stack.** Se existe `artisan` na raiz do projeto, o stack e Laravel:
-leia `references/laravel.md`, ao lado desta skill, **antes** de inspecionar o
-banco. Ele diz como inspecionar o schema e traz as convencoes de banco do
-perfil. Sem `artisan` nao ha perfil: siga so as regras do `CLAUDE.md` /
-`AGENTS.md` do projeto.
+**Perfil de stack.** O primeiro marcador da tabela que existir na raiz do
+projeto define o perfil. Leia o reference dele, ao lado desta skill, **antes**
+de inspecionar o banco. Ele diz como inspecionar o schema e traz as convencoes
+de banco do perfil. Nenhum marcador na raiz, nenhum perfil: siga so as regras do
+`CLAUDE.md` / `AGENTS.md` do projeto.
+
+<!-- perfis -->
+| Perfil | Marcador na raiz | Reference |
+|---|---|---|
+| Laravel | `artisan` | `references/laravel.md` |
+<!-- /perfis -->
 
 Leia `<dir>/feature-description.md`, `<dir>/user-stories.md` e a documentacao do
 projeto. Depois inspecione o banco **que ja existe**:
@@ -95,14 +101,13 @@ ilimitada, diga, e diga por que e aceitavel.
 ## Convencoes de banco
 
 Ajuste ao que o `CLAUDE.md` / `AGENTS.md` do projeto define. Na ausencia de regra
-do projeto, siga as convencoes do perfil de stack (`references/laravel.md` no
-Laravel). Sem perfil e sem regra do projeto, siga o padrao que o schema
-existente ja usa.
+do projeto, siga as convencoes do reference do perfil de stack. Sem perfil e
+sem regra do projeto, siga o padrao que o schema existente ja usa.
 
 ## Instrucoes
 
-- Se existe `artisan` na raiz e voce ainda nao leu `references/laravel.md`, pare
-  e leia antes de gravar o documento.
+- Se um perfil casou e voce ainda nao leu o reference dele, pare e leia antes
+  de gravar o documento.
 - Inspecione o schema existente primeiro. Nao redefina nada que ja esta la.
 - Baseie o schema estritamente em `feature-description.md` e `user-stories.md`.
   Nao adicione tabela para funcionalidade fora de escopo.
