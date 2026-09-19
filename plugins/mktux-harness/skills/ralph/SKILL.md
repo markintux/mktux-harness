@@ -76,7 +76,15 @@ Roda em toda fase por default (`RALPH_VERIFY=always`). Usa modelo barato (claude
 haiku; codex: gpt-5.6-luna com esforco baixo) — e leitura e checklist, nao precisa
 do modelo de implementacao.
 
-O verificador tem `Read`, `Glob` e `Grep`. **Nao tem Bash, nem shell, nem git.**
+O ralph numera as tasks da fase no prompt do verificador e lista os arquivos
+alterados na fase como ponto de partida. As ferramentas dependem da engine:
+
+- **claude:** so `Read`, `Glob` e `Grep` (`--tools`), sem MCP e sem skills.
+  **Nao tem Bash, nem shell, nem git.**
+- **codex:** shell em sandbox read-only, instruido a nao rodar build, teste,
+  typecheck ou lint e a nao ler dependencias de terceiros. O veredito sai da
+  mensagem final (`-o`, em `phase-NN.verify-M.last.txt`).
+
 Para cada task ele emite exatamente uma linha:
 
 - `TASK n: DONE`
@@ -119,8 +127,10 @@ Primeira regra que resolver vence:
 5. nada resolvido → aviso alto e gate 2 pulado (o gate 3 segura sozinho)
 
 O perfil tambem valida o ambiente no preflight e acrescenta notas ao prompt de
-implementacao. O comando resolvido vai para as sessoes em `RALPH_TEST_CMD`: o
-subagent `test-runner` roda exatamente o que o gate 2 roda.
+implementacao, incluindo como rodar um teste focado. O prompt pede teste focado
+durante o trabalho e o comando completo uma vez, no fim: a suite inteira a cada
+item custava minutos por item. O comando resolvido vai para as sessoes em
+`RALPH_TEST_CMD`: o subagent `test-runner` roda exatamente o que o gate 2 roda.
 
 Para ver o que o ralph vai resolver num projeto, sem rodar nada:
 
@@ -173,6 +183,10 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd   # Codex: $PLUGIN_
 | `RALPH_MEMORY` | pagina por fase no ai-memory (`ralph/<feature>/phase-NN.md`, pos-commit, sem LLM); `0` desliga. Sem o binario ou com o servidor fora do ar, desliga sozinha |
 | `RALPH_MEMORY_BIN` | binario do ai-memory (default `ai-memory` no PATH) |
 | `RALPH_HOOK_ISOLATION` | `0` deixa os hooks do ai-memory rodarem nas sessoes do ralph. Default `1`: isola, porque o SessionStart deles consome handoffs e contamina a sessao fria e o gate 3 |
+
+No codex, toda sessao do ralph (smoke, implementacao, gate 3) roda com
+`-c features.memories=false`: a memoria nativa traria o historico de sessoes
+anteriores para dentro da sessao fria.
 | `RALPH_VERBOSE` | `1` espelha a saida da engine na tela |
 | `RALPH_DASHBOARD` | `1` liga o painel embutido |
 
@@ -188,19 +202,25 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd   # Codex: $PLUGIN_
     ├── run.log                 log linear do run inteiro
     ├── phase-NN.cycle-M.log    sessao de implementacao
     ├── phase-NN.test-M.log     saida do gate 2
-    ├── phase-NN.verify-M.log   veredito task a task do gate 3
+    ├── phase-NN.verify-M.log   sessao do gate 3
+    ├── phase-NN.verify-M.last.txt  veredito final do gate 3 (codex)
     └── phase-NN.memory.log     saida do `ai-memory write-page`
 ```
 
-`.phases/` e registrado em `.git/info/exclude` automaticamente — o ralph nao mexe
-no `.gitignore` do projeto.
+`.phases/` e `.harness/` (telemetria dos hooks) sao registrados em
+`.git/info/exclude` automaticamente — o ralph nao mexe no `.gitignore` do
+projeto. `.harness/` ja versionado aborta o preflight: a telemetria muda a cada
+tool call, entraria no commit de toda fase e o gate 1 veria escrita em toda
+sessao.
 
 ## Diagnostico
 
 | Sintoma | Causa provavel |
 |---|---|
 | `Contrato de formato violado` no preflight | heading `## Phase` fora de `## Phase N: <titulo>`. Uma fase com heading torto **some silenciosamente** do run |
-| fase reprova com todos os vereditos `DONE` | contagem de tasks divergente. A fase precisa da linha `**This phase has exactly N tasks.**` |
+| gate 3 reprova por `cobertura incompleta` ou indice fora da faixa | o verificador ignorou a lista numerada do prompt. Leia o veredito (`verify-M.last.txt` no codex, `verify-M.log` no claude); se repetir, troque `RALPH_VERIFY_MODEL` |
+| o verificador julga sub-item como task propria | sub-bullet de detalhe escrito como `- [ ]`: o ralph conta todo checkbox como task. Troque por `-` simples |
+| preflight aborta com `.harness/ esta versionado` | a telemetria foi commitada. `git rm -r --cached .harness` e commit |
 | task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do codigo, ou declare a fase com `**Operational phase**` se ela for mesmo de fechamento |
 | fase de fechamento reprova sem nada de errado no codigo | falta o marcador `**Operational phase**`. Sem ele o gate 3 reprova por task procedural que nao tem como julgar |
 | `gate 0 vermelho` e o relatorio manda revisar as tasks | leia o FIM do `phase-NN.cycle-M.log` antes de mexer no plano: engine que morre por cota, rede ou crash cai no mesmo lugar. Task correta nao e a causa mais provavel |
@@ -211,7 +231,8 @@ no `.gitignore` do projeto.
 | `Falha ao gravar no ai-memory` | leia `.phases/logs/phase-NN.memory.log`. Servidor caiu no meio do run: `ai-memory status`; no macOS, `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. A fase continua valida |
 
 Quando uma fase falhar, leia nesta ordem:
-`.phases/logs/phase-NN.verify-M.log` (o que o verificador reprovou) →
+`.phases/logs/phase-NN.verify-M.log` (o que o verificador reprovou; no codex, o
+veredito limpo esta em `phase-NN.verify-M.last.txt`) →
 `.phases/logs/phase-NN.test-M.log` (o que a suite reprovou) →
 `.phases/logs/phase-NN.cycle-M.log` (o que a sessao tentou fazer).
 
