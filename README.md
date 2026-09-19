@@ -817,7 +817,7 @@ mktux-harness/
     │   ├── plan-feature-brief/          step 0: interview + brief template
     │   ├── plan-feature-description/
     │   ├── plan-user-stories/
-    │   ├── plan-database-schema/
+    │   ├── plan-database-schema/      references/laravel.md: DB conventions
     │   ├── plan-project-phases/        ralph's contract
     │   ├── ralph/                      operation and troubleshooting
     │   ├── review-phases/

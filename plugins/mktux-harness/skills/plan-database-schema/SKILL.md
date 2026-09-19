@@ -11,11 +11,17 @@ Slug vem do argumento. Diretorio: `${MKTUX_SPEC_DIR:-docs/features}/<slug>/`.
 
 ## Antes de escrever
 
+**Perfil de stack.** Se existe `artisan` na raiz do projeto, o stack e Laravel:
+leia `references/laravel.md`, ao lado desta skill, **antes** de inspecionar o
+banco. Ele diz como inspecionar o schema e traz as convencoes de banco do
+perfil. Sem `artisan` nao ha perfil: siga so as regras do `CLAUDE.md` /
+`AGENTS.md` do projeto.
+
 Leia `<dir>/feature-description.md`, `<dir>/user-stories.md` e a documentacao do
 projeto. Depois inspecione o banco **que ja existe**:
 
-- Use a ferramenta `database-schema` (Laravel Boost) quando disponivel; senao leia
-  as migrations em `database/migrations/`.
+- Use o meio de inspecao que o perfil indica; sem perfil, leia os arquivos de
+  schema e de migration do proprio projeto.
 - Identifique de quais tabelas existentes a feature le ou em quais escreve.
 - **Nunca redefina tabela existente.** So documente tabelas novas ou colunas novas
   adicionadas a tabelas existentes.
@@ -86,33 +92,17 @@ Decisoes de indice, constraints, e os limites de toda leitura ilimitada (teto de
 periodo, paginacao, limite de linhas). Quando uma leitura for genuinamente
 ilimitada, diga, e diga por que e aceitavel.
 
-## Convencoes de banco (Laravel)
+## Convencoes de banco
 
 Ajuste ao que o `CLAUDE.md` / `AGENTS.md` do projeto define. Na ausencia de regra
-do projeto, siga estas:
-
-- **Use PHP Enums, nao lookup table.** Cast do enum no model, enum em
-  `app/Enums/`. Nao crie tabela auxiliar para campo de status.
-- Toda tabela tem `created_by bigint [null, ref: > users.id]` e
-  `updated_by bigint [null, ref: > users.id]` — **exceto** tabela de ledger
-  imutavel, que tem so `created_by`.
-- Tabela de ledger imutavel (transacoes, log de resgate) **nunca** tem coluna
-  `updated_at`. So `created_at`.
-- Se o projeto e multi-tenant, toda tabela escopada por tenant tem
-  `tenant_id bigint [not null, ref: > tenants.id]` com indice em `tenant_id`.
-- Dinheiro: `decimal(10,2)` — **nunca** `float`. Se o projeto usa centavos
-  inteiros, siga o projeto e diga isso no documento.
-- Quantidade inteira e sempre `integer`.
-- `varchar(255)` para string padrao, salvo comprimento diferente justificado.
-- Nome de coluna de chave estrangeira segue Laravel: `{model}_id`.
-- Sempre defina indice explicito para chave estrangeira e para coluna usada em
-  `WHERE`.
-- **Nunca edite migration ja executada** — sempre adicione outra.
-- Ao modificar uma coluna, a migration nova tem que reafirmar **todos** os
-  atributos que a coluna ja tinha, ou eles sao descartados.
+do projeto, siga as convencoes do perfil de stack (`references/laravel.md` no
+Laravel). Sem perfil e sem regra do projeto, siga o padrao que o schema
+existente ja usa.
 
 ## Instrucoes
 
+- Se existe `artisan` na raiz e voce ainda nao leu `references/laravel.md`, pare
+  e leia antes de gravar o documento.
 - Inspecione o schema existente primeiro. Nao redefina nada que ja esta la.
 - Baseie o schema estritamente em `feature-description.md` e `user-stories.md`.
   Nao adicione tabela para funcionalidade fora de escopo.

@@ -813,7 +813,7 @@ mktux-harness/
     │   ├── plan-feature-brief/          passo 0: entrevista + template do brief
     │   ├── plan-feature-description/
     │   ├── plan-user-stories/
-    │   ├── plan-database-schema/
+    │   ├── plan-database-schema/      references/laravel.md: convenções de banco
     │   ├── plan-project-phases/        o contrato do ralph
     │   ├── ralph/                      operação e diagnóstico
     │   ├── review-phases/
