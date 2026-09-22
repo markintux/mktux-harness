@@ -115,6 +115,12 @@ assets, conferir num celular de verdade — nunca chega ao verificador. O ralph 
 tira da lista numerada, descarta qualquer veredito sobre ela e a lista em
 *Pendencias manuais* no fim do run: o checklist de quem abre o PR.
 
+Fase marcada `**Check-only phase**` — o fechamento que só afirma estado — não
+abre sessão de cara. O ralph roda os gates 2 e 3 contra HEAD: verde fecha a fase
+sem sessão e sem commit; vermelho abre o ciclo 1 como correção, já com o
+veredito. Num run real, uma fase assim abriu sessão, não escreveu nada e gastou
+2,4M tokens de input para chegar no mesmo veredito.
+
 ---
 
 ## Instalação
@@ -450,7 +456,7 @@ instead.
 ---
 ```
 
-Note quatro coisas, todas deliberadas:
+Note cinco coisas, todas deliberadas:
 
 1. **A fase repete os próprios guards.** O `Do not touch` está dentro da fase, não
    num preâmbulo — porque o `ralph` descarta tudo que não está entre headings de
@@ -473,6 +479,13 @@ Note quatro coisas, todas deliberadas:
    nada fora da lista. "Tests prove every precondition" não dá o que fechar: num
    run real ele remontou a própria lista a cada ciclo, e a correção perseguiu um
    alvo que mudava sem o plano mudar.
+
+5. **Regra que atravessa camadas é citada em toda fase onde cai.** "Escreva tudo
+   antes de trocar a coluna; se falhar, mantenha a coluna e mostre ao admin um
+   erro de validação" é uma cláusula da action *e* uma do controller. Cada fase
+   que recebe uma cláusula cita a `BR-NN` e carrega task e cenário para ela. Num
+   run real só a fase da action citou a regra: as duas fases passaram nos quatro
+   gates, e o upload que falhava ainda chegava ao admin como erro 500.
 
 O `ralph` lê a linha `Read first:` e os ids que a fase cita, e entrega à sessão
 **só esses trechos** — a seção nomeada, a regra `BR-NN`, a story `US-N.N`, a
@@ -687,7 +700,7 @@ Os hooks vêm do plugin. Não há nada para configurar por projeto.
 |---|---|---|
 | `profile-hook` | antes de todo Bash · Claude: após Edit/Write · Codex: no fim do turno | acha o perfil de stack subindo do diretório do evento e repassa o evento ao script do perfil; sem perfil, não faz nada |
 | `log-event` | todo evento | grava em `.harness/events.jsonl` com timestamp e branch |
-| `log-tokens` | fim da sessão | grava consumo por modelo em `.harness/tokens.jsonl`, com campo `vendor` para comparar Claude e Codex no mesmo gráfico |
+| `log-tokens` | fim da sessão | grava consumo por modelo em `.harness/tokens.jsonl`, com campo `vendor` para comparar Claude e Codex no mesmo gráfico. Cada subagent ganha linha própria, com `parent` |
 
 Scripts do perfil Laravel (`profiles/laravel/hooks/`), chamados pelo `profile-hook`:
 

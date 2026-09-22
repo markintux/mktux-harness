@@ -387,6 +387,49 @@ assert_eq "agents/aberto.md: bloco <!-- perfis --> sem fechamento
 skills/a/SKILL.md:2:Rode php artisan test.
 skills/a/references/template.md:1:Sail num template" "$(core_stack_leaks "$gx")" "guard: acha vazamento, poupa o permitido, acusa bloco aberto"
 
+# ---------------------------------------------------------------------------
+# 7. log-tokens conta os subagents
+# ---------------------------------------------------------------------------
+# Subagent grava transcript/rollout proprio; o do pai nao inclui o consumo dele.
+# Num run real eram 28 subagents, +26% de input fora do tokens.jsonl.
+header "7. log-tokens conta os subagents"
+
+# Codex: pai, filho, neto, um filho de outra sessao e um rollout anterior ao pai.
+cx="$TMP/codex" && mkdir -p "$cx/sessions/2026/09/19" "$cx/repo"
+git -C "$cx/repo" init -q
+rollout() { # <hora> <id> <parent|-> <input>
+  local src='"exec"'
+  [ "$3" != "-" ] && src="{\"subagent\":{\"thread_spawn\":{\"parent_thread_id\":\"$3\",\"depth\":1}}}"
+  printf '%s\n' \
+    "{\"timestamp\":\"t\",\"type\":\"session_meta\",\"payload\":{\"id\":\"$2\",\"source\":$src}}" \
+    '{"type":"turn_context","payload":{"model":"gpt-x"}}' \
+    "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":1,\"cached_input_tokens\":0,\"output_tokens\":1,\"total_tokens\":2}}}}" \
+    "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":$4,\"cached_input_tokens\":0,\"output_tokens\":1,\"total_tokens\":$(($4 + 1))}}}}" \
+    > "$cx/sessions/2026/09/19/rollout-2026-09-19T$1-$2.jsonl"
+}
+rollout 20-00-00 old-kid    pai -   5
+rollout 21-00-00 pai        -       100
+rollout 21-01-00 filho      pai     20
+rollout 21-02-00 neto       filho   3
+rollout 21-03-00 outro      -       7
+rollout 21-04-00 alheio     outro   9
+(cd "$cx/repo" && echo '{"session_id":"pai"}' | CODEX_HOME="$cx" bash "$PLUGIN/hooks/codex/log-tokens.sh")
+assert_eq "pai - 100
+filho pai 20
+neto filho 3" "$(jq -r '"\(.session_id) \(.parent // "-") \(.input)"' "$cx/repo/.harness/tokens.jsonl")" \
+  "codex: pai, filho e neto com o ultimo token_count; ignora outra arvore e rollout anterior"
+
+# Claude: transcript principal + <transcript>/subagents/agent-*.jsonl
+cl="$TMP/claude" && mkdir -p "$cl/proj" "$cl/t/sess/subagents"
+msg() { printf '{"type":"assistant","message":{"model":"%s","usage":{"input_tokens":%s,"output_tokens":1}}}\n' "$1" "$2"; }
+{ msg opus 10; msg opus 5; } > "$cl/t/sess.jsonl"
+{ msg haiku 3; msg haiku 4; } > "$cl/t/sess/subagents/agent-abc.jsonl"
+echo "{\"transcript_path\":\"$cl/t/sess.jsonl\",\"session_id\":\"sess\"}" \
+  | CLAUDE_PROJECT_DIR="$cl/proj" bash "$PLUGIN/hooks/claude/log-tokens.sh"
+assert_eq "sess - opus 15
+abc sess haiku 7" "$(jq -r '"\(.session_id) \(.parent // "-") \(.model) \(.input)"' "$cl/proj/.harness/tokens.jsonl")" \
+  "claude: sessao e subagent, cada um com a propria soma"
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then
   echo -e "${GREEN}TODOS VERDES: $PASS asserts${NC}"

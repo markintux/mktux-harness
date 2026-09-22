@@ -239,6 +239,16 @@ que um gate confirme. Uma fase de fechamento mistura afirmacoes legiveis
 (nenhuma migration perdida, nenhum identificador residual, nenhum codigo
 proibido em arquivo protegido) com os poucos procedimentos reais.
 
+**Fase que so afirma estado leva `**Check-only phase**`** numa linha sozinha,
+logo abaixo do heading. E a fase de fechamento: nenhuma task dela pede codigo
+novo, toda task de estado ja deveria ser verdade em HEAD, e o resto e
+`(manual)`. O ralph roda os gates 2 e 3 contra HEAD antes de abrir sessao, e so
+abre se reprovarem. Num run real, uma fase assim abriu sessao, nao escreveu
+nada e custou 2,4M tokens de input para chegar no mesmo veredito.
+
+Nao marque fase que cria ou altera arquivo, teste incluido: ela sempre
+reprovaria antes e pagaria verificacao a mais.
+
 ### Por que tipar, em vez de deixar o verificador classificar
 
 Sem a marca, o destino da fase depende de o verificador classificar `NOT-CODE`
@@ -327,7 +337,7 @@ Ordene as fases de modo que cada uma produza um incremento funcional e testavel:
 4. **Routes + handlers** — um contexto por vez
 5. **Views** — telas e componentes, mais o build de assets quando houver
 6. **Regression** — formatador, suite completa, e afirmacoes legiveis de que nada
-   mais se moveu
+   mais se moveu. Marcada `**Check-only phase**` (1.6)
 
 O perfil de stack traz a mesma ordem nos termos do framework — use a dele quando
 houver.
@@ -358,6 +368,27 @@ Duas regras que importam mais que a ordem:
   que** — uma sessao fria vai, caso contrario, anexar no fim e quebrar.
 - Quando uma task modifica codigo existente, diga precisamente o que muda **e o
   que tem que continuar identico**.
+
+## 4.1 Regra que atravessa camadas
+
+Uma business rule muitas vezes tem mais de uma clausula, e cada clausula
+acontece numa camada diferente: *"a geracao escreve tudo antes de trocar a
+coluna; se falhar, apaga o parcial, mantem a coluna e o admin recebe erro de
+validacao"* e escrita atomica na action **e** resposta no controller.
+
+Antes de distribuir as tasks, quebre cada BR nas clausulas dela e decida em que
+fase cada clausula acontece. Toda fase que recebe uma clausula:
+
+- cita o id da BR (`BR-16`) — sem a citacao, o recorte (1.3) nao leva a regra
+  para aquela sessao;
+- carrega a clausula escrita na task do artefato onde ela acontece;
+- tem um cenario de teste para ela (5.1).
+
+Citar a BR so na fase da primeira clausula nao basta. A sessao fria da fase
+seguinte nao ve a regra, e o verificador so julga o que a lista de tasks diz.
+Num run real, a escrita atomica ficou na fase da action, a fase do controller
+nao citou a BR, as duas passaram nos quatro gates, e a falha de geracao chegava
+ao admin como erro 500 — so a revisao humana pegou.
 
 ---
 
@@ -477,6 +508,25 @@ grep -nE '^[[:space:]]*- \[[ x]\][[:space:]]+(Run|Execute|Build|Confirm|Verify|C
 # Quantificador em task ou cenario (1.7, 5.1). Linha de teste impressa: vira
 # itens escritos. Linha de codigo: o conjunto tem que estar listado na propria task.
 grep -nwiE 'every|all|each|any' "$f" | grep -E '^[0-9]+:[[:space:]]*- '
+
+# Fases que citam cada BR (4.1), faixas "BR-a through BR-b" expandidas.
+# BR sem fase e lacuna; BR de varias clausulas numa fase so, confira se as
+# outras clausulas nao acontecem em outra camada.
+d="$(dirname "$f")/feature-description.md"
+grep -oE 'BR-[0-9]+' "$d" | sort -u -t- -k2,2n | while read -r br; do
+  printf '%-7s %s\n' "$br" "$(awk -v n="${br#BR-}" '
+    /^## Phase [0-9]+: /{ph=$3; sub(":","",ph); last=ph}
+    ph!="" {
+      l=$0
+      while (match(l, /BR-[0-9]+ through BR-[0-9]+/)) {
+        r=substr(l, RSTART, RLENGTH); split(r, a, /[^0-9]+/)
+        if (n+0>=a[2]+0 && n+0<=a[3]+0) hit[ph]=1
+        l=substr(l, RSTART+RLENGTH)
+      }
+      if ($0 ~ ("BR-0*" n "([^0-9]|$)")) hit[ph]=1
+    }
+    END{for (p=1; p<=last; p++) if (p in hit) s=s " " p; print (s=="" ? "-- nenhuma fase" : "fases" s)}' "$f")"
+done
 ```
 
 Depois releia e confirme:
@@ -488,11 +538,15 @@ Depois releia e confirme:
 - [ ] Todo procedimento (formatador, build, suite, aparelho real, pergunta) leva
       `(manual)`; nenhuma task de estado leva.
 - [ ] Nenhuma fase e 100% `(manual)`.
+- [ ] Fase que so afirma estado leva `**Check-only phase**`; fase que escreve
+      arquivo, nao.
 - [ ] Nenhuma task tem escape condicional.
 - [ ] Sub-bullets de detalhe sao `-` simples, nao `- [ ]`.
 - [ ] Todo arquivo de teste e uma task propria, com no maximo 8 cenarios
       `<situacao> → <resultado observavel>`, nenhum quantificador sem lista.
 - [ ] Todo cenario rastreia a pelo menos um `US-N.N`.
+- [ ] Toda clausula de toda BR tem task e cenario na fase onde acontece, e essa
+      fase cita o id da BR (4.1).
 - [ ] Todo nome entre aspas no **Read first:** e o titulo exato de uma secao do
       arquivo citado antes dele; regra e story sao citadas por id, nunca por
       descricao vaga.

@@ -115,6 +115,12 @@ check on a real phone — never reaches the verifier. ralph leaves it out of the
 numbered list, drops any verdict on it, and lists it under *Pendencias manuais*
 at the end of the run: the checklist for whoever opens the PR.
 
+A phase marked `**Check-only phase**` — the close-out that only asserts state —
+gets no session up front. ralph runs gates 2 and 3 against HEAD; green closes the
+phase with no session and no commit, red opens cycle 1 as a fix with the verdict
+in hand. In a real run, a phase like that opened a session, wrote nothing and
+spent 2.4M input tokens to reach the same verdict.
+
 ---
 
 ## Installation
@@ -451,7 +457,7 @@ instead.
 ---
 ```
 
-Four things there are deliberate:
+Five things there are deliberate:
 
 1. **The phase repeats its own guards.** The `Do not touch` block lives inside the
    phase, not in a preamble — because `ralph` discards everything that is not
@@ -473,6 +479,14 @@ Four things there are deliberate:
    beyond the list. "Tests prove every precondition" gives it nothing to close:
    in a real run it rebuilt its own list each cycle, and the fix session chased
    a target that moved while the plan stayed the same.
+
+5. **A rule that crosses layers is cited in every phase it lands in.** "Write
+   everything before swapping the column; on failure keep the column and show
+   the admin a validation error" is an action clause *and* a controller clause.
+   Each phase that gets a clause cites the `BR-NN` and carries a task and a
+   scenario for it. In a real run only the action phase cited the rule: both
+   phases passed all four gates, and a failed upload still reached the admin as
+   a 500.
 
 `ralph` reads the `Read first:` line and the ids the phase cites, and hands the
 session **only those excerpts** — the named section, the `BR-NN` rule, the
@@ -688,7 +702,7 @@ Hooks come from the plugin. There is nothing to configure per project.
 |---|---|---|
 | `profile-hook` | before every Bash call · Claude: after Edit/Write · Codex: end of turn | finds the stack profile walking up from the event's directory and hands the event to the profile's script; no profile, no-op |
 | `log-event` | every event | appends to `.harness/events.jsonl` with timestamp and branch |
-| `log-tokens` | end of session | records per-model usage in `.harness/tokens.jsonl`, with a `vendor` field so Claude and Codex land on the same chart |
+| `log-tokens` | end of session | records per-model usage in `.harness/tokens.jsonl`, with a `vendor` field so Claude and Codex land on the same chart. Each subagent gets its own line, with `parent` |
 
 Laravel profile scripts (`profiles/laravel/hooks/`), called by `profile-hook`:
 

@@ -125,6 +125,13 @@ alterou nenhum arquivo nao paga outra sessao de verificacao: o gate 3 e funcao d
 codigo, e os mesmos bytes tem que dar o mesmo veredito. Sem isso um verificador
 barato muda de ideia entre ciclos sobre codigo identico.
 
+**Fase declarada `**Check-only phase**` nao abre sessao de cara.** E a fase de
+fechamento que so afirma estado. O ralph roda os gates 2 e 3 contra HEAD
+(`test-0.log`, `verify-0.log`): verde fecha a fase como **VERIFICADA sem
+sessao**, sem commit; vermelho abre o ciclo 1 ja com o prompt de correcao e a
+causa. O gate 3 mantem o poder de reprovar. Com `--no-verify` o marcador e
+ignorado e a fase segue o fluxo normal.
+
 **Fase declarada `**Operational phase**` nao e reprovada pelo gate 3.** Ele roda e
 reporta, mas perde o poder de reprovar. Marcador de planos antigos, anterior ao
 `(manual)`: continua valendo, mas desliga o gate 3 inclusive para as tasks de
