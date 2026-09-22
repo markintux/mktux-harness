@@ -451,7 +451,7 @@ instead.
 ---
 ```
 
-Four things there are deliberate:
+Five things there are deliberate:
 
 1. **The phase repeats its own guards.** The `Do not touch` block lives inside the
    phase, not in a preamble — because `ralph` discards everything that is not
@@ -473,6 +473,14 @@ Four things there are deliberate:
    beyond the list. "Tests prove every precondition" gives it nothing to close:
    in a real run it rebuilt its own list each cycle, and the fix session chased
    a target that moved while the plan stayed the same.
+
+5. **A rule that crosses layers is cited in every phase it lands in.** "Write
+   everything before swapping the column; on failure keep the column and show
+   the admin a validation error" is an action clause *and* a controller clause.
+   Each phase that gets a clause cites the `BR-NN` and carries a task and a
+   scenario for it. In a real run only the action phase cited the rule: both
+   phases passed all four gates, and a failed upload still reached the admin as
+   a 500.
 
 `ralph` reads the `Read first:` line and the ids the phase cites, and hands the
 session **only those excerpts** — the named section, the `BR-NN` rule, the

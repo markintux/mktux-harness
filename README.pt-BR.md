@@ -450,7 +450,7 @@ instead.
 ---
 ```
 
-Note quatro coisas, todas deliberadas:
+Note cinco coisas, todas deliberadas:
 
 1. **A fase repete os próprios guards.** O `Do not touch` está dentro da fase, não
    num preâmbulo — porque o `ralph` descarta tudo que não está entre headings de
@@ -473,6 +473,13 @@ Note quatro coisas, todas deliberadas:
    nada fora da lista. "Tests prove every precondition" não dá o que fechar: num
    run real ele remontou a própria lista a cada ciclo, e a correção perseguiu um
    alvo que mudava sem o plano mudar.
+
+5. **Regra que atravessa camadas é citada em toda fase onde cai.** "Escreva tudo
+   antes de trocar a coluna; se falhar, mantenha a coluna e mostre ao admin um
+   erro de validação" é uma cláusula da action *e* uma do controller. Cada fase
+   que recebe uma cláusula cita a `BR-NN` e carrega task e cenário para ela. Num
+   run real só a fase da action citou a regra: as duas fases passaram nos quatro
+   gates, e o upload que falhava ainda chegava ao admin como erro 500.
 
 O `ralph` lê a linha `Read first:` e os ids que a fase cita, e entrega à sessão
 **só esses trechos** — a seção nomeada, a regra `BR-NN`, a story `US-N.N`, a
