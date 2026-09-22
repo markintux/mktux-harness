@@ -430,6 +430,31 @@ assert_eq "sess - opus 15
 abc sess haiku 7" "$(jq -r '"\(.session_id) \(.parent // "-") \(.model) \(.input)"' "$cl/proj/.harness/tokens.jsonl")" \
   "claude: sessao e subagent, cada um com a propria soma"
 
+# ---------------------------------------------------------------------------
+# 8. Auto-checagem de BR do plan-project-phases (Parte 7)
+# ---------------------------------------------------------------------------
+# O script mora no SKILL.md; roda ele como esta escrito. Com 10+ fases a
+# comparacao virava texto ("2" <= "11" falso) e so a fase 1 aparecia.
+header "8. auto-checagem de BR do plan-project-phases"
+br="$TMP/br" && mkdir -p "$br"
+awk '/^# Fases que citam/,/^done$/' "$PLUGIN/skills/plan-project-phases/SKILL.md" > "$br/check.sh"
+printf '1. **BR-01 — a**\n2. **BR-02 — b**\n3. **BR-03 — c**\n4. **BR-10 — d**\n' > "$br/feature-description.md"
+{
+  echo "Preambulo cita BR-03, e nao conta."
+  for i in $(seq 1 11); do
+    echo "## Phase $i: fase $i"
+    case $i in
+      2) echo "Rules BR-01 through BR-02." ;;
+      11) echo "Rules BR-01 and BR-10." ;;
+    esac
+  done
+} > "$br/project-phases.md"
+assert_eq "BR-01   fases 2 11
+BR-02   fases 2
+BR-03   -- nenhuma fase
+BR-10   fases 11" "$(f="$br/project-phases.md" bash "$br/check.sh")" \
+  "fases em ordem numerica com 10+ fases, faixa expandida, preambulo ignorado"
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then
   echo -e "${GREEN}TODOS VERDES: $PASS asserts${NC}"

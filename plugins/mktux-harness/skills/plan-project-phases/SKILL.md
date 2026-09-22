@@ -515,7 +515,7 @@ grep -nwiE 'every|all|each|any' "$f" | grep -E '^[0-9]+:[[:space:]]*- '
 d="$(dirname "$f")/feature-description.md"
 grep -oE 'BR-[0-9]+' "$d" | sort -u -t- -k2,2n | while read -r br; do
   printf '%-7s %s\n' "$br" "$(awk -v n="${br#BR-}" '
-    /^## Phase [0-9]+: /{ph=$3; sub(":","",ph); last=ph}
+    /^## Phase [0-9]+: /{ph=$3; sub(":","",ph); last=ph+0}
     ph!="" {
       l=$0
       while (match(l, /BR-[0-9]+ through BR-[0-9]+/)) {
