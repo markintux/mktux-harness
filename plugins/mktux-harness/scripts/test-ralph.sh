@@ -1673,6 +1673,56 @@ if case_enabled manual-task; then
   assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" 'Item "(manual)" e procedimento' "impl: sabe o que fazer com (manual)"
 fi
 
+# ---------------------------------------------------------------------------
+# 48. **Check-only phase**: gates 2 e 3 contra HEAD, sem sessao. Verde fecha a
+#     fase sem sessao; vermelho abre o ciclo 1 ja como correcao, com a causa.
+# ---------------------------------------------------------------------------
+CHECK_FIXTURE='# Test Project — Project Phases
+
+<!-- inputs: project-description.md@sha256:000000000000 -->
+
+## Phase 1: Foundation
+
+- [ ] **Task:** cria o arquivo A
+
+## Phase 2: Prove nothing else moved
+
+**Check-only phase**
+
+- [ ] **Task:** nenhum arquivo fora de src/ mudou
+- [ ] (manual) rode o formatador do projeto
+'
+
+if case_enabled check-only; then
+  header "48. fase **Check-only**: verde sem sessao; vermelho abre correcao"
+  d=$(new_case check-only)
+  printf '%s' "$CHECK_FIXTURE" > "$d/repo/.spec/init/project-phases.md"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: fixture check-only"
+  before=$(commits "$d")
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq 1 "$(cat "$d/state/impl_calls")" "fase check-only verde nao abre sessao"
+  assert_eq 2 "$(cat "$d/state/verify_calls")" "gate 3 rodou nas duas fases"
+  assert_contains "$d/out.log" "VERIFICADA sem sessao" "fase fechada pelos gates contra HEAD"
+  assert_eq $((before + 1)) "$(commits "$d")" "so a fase 1 commita"
+  assert_contains "$d/repo/.phases/.progress" "phase-02.md" "progresso registra a fase check-only"
+  test -f "$d/repo/.phases/logs/phase-02.verify-0.log" && ok "verificacao previa loga como ciclo 0" || bad "verificacao previa loga como ciclo 0"
+  assert_contains "$d/out.log" "Pendencias manuais (1)" "(manual) da fase check-only segue no relatorio"
+
+  d=$(new_case check-only-red)
+  printf '%s' "$CHECK_FIXTURE" | sed '/^## Phase 1:/,/^## Phase 2:/{/^## Phase 2:/!d;}' \
+    | sed 's/^## Phase 2:/## Phase 1:/' > "$d/repo/.spec/init/project-phases.md"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: fixture check-only red"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0 depois da correcao"
+  assert_contains "$d/out.log" "Fase so de verificacao reprovou contra HEAD" "reprovacao previa reportada"
+  assert_eq 1 "$(cat "$d/state/impl_calls")" "uma sessao, ja como correcao"
+  fp="$d/repo/.phases/prompts/phase-01.cycle-1.txt"
+  assert_contains "$fp" "Motivo da falha (gate 3" "ciclo 1 usa o prompt de correcao"
+  assert_contains "$fp" "TASK 1: INCOMPLETE" "com o veredito da verificacao previa"
+  assert_contains "$d/out.log" "COMPLETA" "fase corrigida e commitada"
+fi
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then
   echo -e "${GREEN}TODOS VERDES: $PASS asserts${NC}"

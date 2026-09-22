@@ -115,6 +115,12 @@ check on a real phone — never reaches the verifier. ralph leaves it out of the
 numbered list, drops any verdict on it, and lists it under *Pendencias manuais*
 at the end of the run: the checklist for whoever opens the PR.
 
+A phase marked `**Check-only phase**` — the close-out that only asserts state —
+gets no session up front. ralph runs gates 2 and 3 against HEAD; green closes the
+phase with no session and no commit, red opens cycle 1 as a fix with the verdict
+in hand. In a real run, a phase like that opened a session, wrote nothing and
+spent 2.4M input tokens to reach the same verdict.
+
 ---
 
 ## Installation

@@ -28,7 +28,7 @@ Comandos exatos dos procedimentos tipicos num projeto Laravel com Sail:
 4. **Controllers + Routes** — um contexto por vez
 5. **Views** — views e componentes Blade, mais `vendor/bin/sail npm run build`
 6. **Regression** — formatador, suite completa, e afirmacoes legiveis de que nada
-   mais se moveu
+   mais se moveu. Marcada `**Check-only phase**`
 
 ## Granularidade de task (Parte 4)
 

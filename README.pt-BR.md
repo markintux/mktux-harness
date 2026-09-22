@@ -115,6 +115,12 @@ assets, conferir num celular de verdade — nunca chega ao verificador. O ralph 
 tira da lista numerada, descarta qualquer veredito sobre ela e a lista em
 *Pendencias manuais* no fim do run: o checklist de quem abre o PR.
 
+Fase marcada `**Check-only phase**` — o fechamento que só afirma estado — não
+abre sessão de cara. O ralph roda os gates 2 e 3 contra HEAD: verde fecha a fase
+sem sessão e sem commit; vermelho abre o ciclo 1 como correção, já com o
+veredito. Num run real, uma fase assim abriu sessão, não escreveu nada e gastou
+2,4M tokens de input para chegar no mesmo veredito.
+
 ---
 
 ## Instalação

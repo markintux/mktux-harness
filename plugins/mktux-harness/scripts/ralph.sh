@@ -56,6 +56,8 @@
 #   - qualquer outro `## ` encerra a captura da fase anterior
 #   - `**Operational phase**` numa linha sozinha marca fase de close out: o
 #     gate 3 reporta mas nao reprova (as tasks nao sao afirmacoes sobre codigo)
+#   - `**Check-only phase**` numa linha sozinha marca fase que so afirma estado:
+#     gates 2 e 3 rodam contra HEAD antes de abrir sessao; so abre se reprovar
 #
 # Gates por fase (todos verdes -> commit; qualquer vermelho -> ciclo de correcao):
 #   0. engine terminou de verdade (claude: is_error no JSON; codex: exit code)
@@ -1930,6 +1932,19 @@ phase_is_operational() {
   grep -qE '^[[:space:]]*\*\*Operational phase\*\*' "$PHASES_DIR/$1" 2>/dev/null
 }
 
+# Fase so de verificacao: `**Check-only phase**` numa linha sozinha. E a fase de
+# fechamento que so afirma estado ("nenhuma migration a mais", "o sw.js nao cita
+# storage"): o codigo ja esta em HEAD e nao ha o que escrever. O ralph roda os
+# gates 2 e 3 contra HEAD antes de abrir sessao; so abre se reprovar. Na fase 8
+# de pub-icon-and-logo a sessao nao escreveu nada e custou 2,4M tokens de input,
+# subagents inclusive, para chegar no mesmo veredito.
+#
+# Declarado, nao inferido, pelo mesmo motivo da fase operacional. Diferente
+# dela, o gate 3 mantem o poder de reprovar: a fase so pula a sessao.
+phase_is_check_only() {
+  grep -qE '^[[:space:]]*\*\*Check-only phase\*\*' "$PHASES_DIR/$1" 2>/dev/null
+}
+
 # O gate 3 e uma funcao do codigo: bytes identicos tem que dar o mesmo veredito.
 # Sem memo, um ciclo de correcao que nao escreveu nada paga OUTRA sessao de
 # verificacao para julgar exatamente os mesmos bytes — e verificador fraco muda
@@ -2059,6 +2074,36 @@ run_phase() {
   echo ""
   log "[$seq/$total] Phase $phase_num: $phase_title"
 
+  # Fase so de verificacao: gates 2 e 3 contra HEAD, sem sessao. Verde fecha a
+  # fase como "ja implementada"; vermelho abre o ciclo 1 ja como correcao, com a
+  # causa. Sem gate 3 (--no-verify) nao ha quem confirme as afirmacoes: segue o
+  # fluxo normal. Logs deste passo levam o numero 0 (test-0, verify-0).
+  local precheck_failed=0
+  if phase_is_check_only "$phase_file" && [ "$VERIFY_MODE" != "off" ]; then
+    log "Fase so de verificacao (**Check-only phase**) — gates contra HEAD, sem sessao"
+    state_cycle "$seq" 1
+    state_gate 0 skip
+    state_gate 1 skip
+    if ! gate2_tests_pass "$LOG_DIR/${phase_file%.md}.test-0.log"; then
+      LAST_GATE="gate 2 — suite de testes do projeto"
+      precheck_failed=1
+    elif ! gate3_independent_verify "$phase_file" 0 0; then
+      LAST_GATE="gate 3 — verificacao independente"
+      precheck_failed=1
+    elif [ -z "$(git status --porcelain)" ]; then
+      success "Phase $phase_num: $phase_title — VERIFICADA sem sessao ($(format_duration $(($(date +%s) - phase_start))))"
+      log "Gates 2 e 3 verdes contra o codigo em HEAD; nenhum commit criado."
+      mark_phase_done "$phase_file"
+      state_tasks_all "$seq" done
+      state_phase "$seq" done
+      return 0
+    fi
+    if [ "$precheck_failed" -eq 1 ]; then
+      fail "Fase so de verificacao reprovou contra HEAD ($LAST_GATE) — abrindo sessao de correcao"
+      GATE_CAUSE="Fase so de verificacao: o ralph rodou os gates contra o codigo em HEAD, sem sessao de implementacao, e eles reprovaram. Corrija o que falta."$'\n'"$GATE_CAUSE"
+    fi
+  fi
+
   local cycle=1 cycles_run=0
   while [ "$cycle" -le "$MAX_CYCLES" ]; do
     cycles_run="$cycle"
@@ -2069,7 +2114,7 @@ run_phase() {
     local prompt_file log_file rc=0 sig_before
     log_file="$LOG_DIR/${phase_file%.md}.cycle-${cycle}.log"
 
-    if [ "$cycle" -eq 1 ]; then
+    if [ "$cycle" -eq 1 ] && [ "$precheck_failed" -eq 0 ]; then
       prompt_file=$(build_impl_prompt "$phase_file" "$cycle")
     else
       prompt_file=$(build_fix_prompt "$phase_file" "$cycle" "$LAST_GATE" "$GATE_CAUSE")

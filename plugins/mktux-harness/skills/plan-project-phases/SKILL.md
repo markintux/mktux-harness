@@ -239,6 +239,16 @@ que um gate confirme. Uma fase de fechamento mistura afirmacoes legiveis
 (nenhuma migration perdida, nenhum identificador residual, nenhum codigo
 proibido em arquivo protegido) com os poucos procedimentos reais.
 
+**Fase que so afirma estado leva `**Check-only phase**`** numa linha sozinha,
+logo abaixo do heading. E a fase de fechamento: nenhuma task dela pede codigo
+novo, toda task de estado ja deveria ser verdade em HEAD, e o resto e
+`(manual)`. O ralph roda os gates 2 e 3 contra HEAD antes de abrir sessao, e so
+abre se reprovarem. Num run real, uma fase assim abriu sessao, nao escreveu
+nada e custou 2,4M tokens de input para chegar no mesmo veredito.
+
+Nao marque fase que cria ou altera arquivo, teste incluido: ela sempre
+reprovaria antes e pagaria verificacao a mais.
+
 ### Por que tipar, em vez de deixar o verificador classificar
 
 Sem a marca, o destino da fase depende de o verificador classificar `NOT-CODE`
@@ -327,7 +337,7 @@ Ordene as fases de modo que cada uma produza um incremento funcional e testavel:
 4. **Routes + handlers** — um contexto por vez
 5. **Views** — telas e componentes, mais o build de assets quando houver
 6. **Regression** — formatador, suite completa, e afirmacoes legiveis de que nada
-   mais se moveu
+   mais se moveu. Marcada `**Check-only phase**` (1.6)
 
 O perfil de stack traz a mesma ordem nos termos do framework — use a dele quando
 houver.
@@ -528,6 +538,8 @@ Depois releia e confirme:
 - [ ] Todo procedimento (formatador, build, suite, aparelho real, pergunta) leva
       `(manual)`; nenhuma task de estado leva.
 - [ ] Nenhuma fase e 100% `(manual)`.
+- [ ] Fase que so afirma estado leva `**Check-only phase**`; fase que escreve
+      arquivo, nao.
 - [ ] Nenhuma task tem escape condicional.
 - [ ] Sub-bullets de detalhe sao `-` simples, nao `- [ ]`.
 - [ ] Todo arquivo de teste e uma task propria, com no maximo 8 cenarios
