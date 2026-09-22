@@ -696,7 +696,7 @@ Hooks come from the plugin. There is nothing to configure per project.
 |---|---|---|
 | `profile-hook` | before every Bash call · Claude: after Edit/Write · Codex: end of turn | finds the stack profile walking up from the event's directory and hands the event to the profile's script; no profile, no-op |
 | `log-event` | every event | appends to `.harness/events.jsonl` with timestamp and branch |
-| `log-tokens` | end of session | records per-model usage in `.harness/tokens.jsonl`, with a `vendor` field so Claude and Codex land on the same chart |
+| `log-tokens` | end of session | records per-model usage in `.harness/tokens.jsonl`, with a `vendor` field so Claude and Codex land on the same chart. Each subagent gets its own line, with `parent` |
 
 Laravel profile scripts (`profiles/laravel/hooks/`), called by `profile-hook`:
 
