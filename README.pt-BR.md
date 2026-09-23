@@ -1147,18 +1147,12 @@ mktux-harness/
 
 ## Créditos
 
-O `ralph.sh`, o `ralph-watch.sh` e o `sail-guard.sh` descendem do
-[**Beer and Code Harness**](https://github.com/beerandcodeteam/beer-and-code-harness)
-(MIT © Beer and Code). A cadeia `/init` com stamps de frescor, a ideia do
-roteador de pipeline e o `/ai-context` também vêm de lá — o `/mktux:ai-context`
-é aquele comando portado e adaptado para que o `CLAUDE.md` continue sendo do
-Laravel Boost e o `.ai/rules` continue sendo a camada de convenção do time.
-
-Obrigado ao time do Beer and Code pela mentoria e pelo trabalho original.
-
-O contrato dos quatro portões, o veredito `NOT-CODE` do portão 3, a parada por
-ciclo sem progresso, o painel `ralph-watch` e as regras de escrita de fase da
-skill `plan-project-phases` foram desenvolvidos e endurecidos em runs de produção
-neste harness.
+Começou a partir do
+[Beer and Code Harness](https://github.com/beerandcodeteam/beer-and-code-harness)
+(MIT © Beer and Code) e divergiu desde então: o contrato dos quatro portões, o
+veredito `NOT-CODE` e o julgamento de `RALPH-CONTEST` no portão 3, as fases
+Check-only, o timeout de sessão, os perfis de stack, o suporte ao Codex, o painel
+`ralph-watch` e as regras de escrita de fase foram construídos e endurecidos em
+runs de produção neste harness.
 
 Licença: [MIT](LICENSE).
