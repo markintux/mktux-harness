@@ -225,6 +225,13 @@ fi
 
 # --- sessao de implementacao -------------------------------------------------
 n=$(bump impl_calls)
+# Quem roda a engine: o teste de sinal manda SIGTERM para esse processo.
+echo "$PPID" > "$state/engine_ppid"
+
+# hang-once: a 1a sessao trava (comando esperando input que nunca chega).
+if [ "$scenario" = "hang-once" ] && [ "$n" -eq 1 ]; then
+  sleep 37
+fi
 
 emit_claude_ok()    { echo '{"type":"result","subtype":"success","is_error":false,"result":"implementado"}'; }
 emit_claude_limit() { echo "{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"result\":\"Claude AI usage limit reached|$1\"}"; }
@@ -434,6 +441,7 @@ run_ralph() {
     RALPH_VERIFY_MODEL="${CASE_VERIFY_MODEL:-}" \
     RALPH_VERIFY_EFFORT="${CASE_VERIFY_EFFORT:-}" \
     RALPH_SMOKE="${CASE_SMOKE:-0}" \
+    RALPH_SESSION_TIMEOUT="${CASE_SESSION_TIMEOUT:-}" \
     RALPH_MEMORY="${CASE_MEMORY:-0}" \
     RALPH_MEMORY_BIN="${CASE_MEMORY_BIN:-ai-memory}" \
     RALPH_HOOK_ISOLATION="${CASE_HOOK_ISOLATION:-1}" \
@@ -1721,6 +1729,52 @@ if case_enabled check-only; then
   assert_contains "$fp" "Motivo da falha (gate 3" "ciclo 1 usa o prompt de correcao"
   assert_contains "$fp" "TASK 1: INCOMPLETE" "com o veredito da verificacao previa"
   assert_contains "$d/out.log" "COMPLETA" "fase corrigida e commitada"
+fi
+
+# ---------------------------------------------------------------------------
+# 49. Sessao travada: o watchdog encerra no RALPH_SESSION_TIMEOUT, o gate 0
+#     reprova com a causa e o ciclo de correcao segue. Na fase 9 de
+#     pub-email-alerts a sessao esperou 2h por um prompt de confirmacao.
+# ---------------------------------------------------------------------------
+if case_enabled session-timeout; then
+  header "49. sessao travada -> encerrada no timeout, ciclo de correcao"
+  d=$(new_case session-timeout)
+  started=$(date +%s)
+  rc=$(CASE_SESSION_TIMEOUT=2 run_ralph "$d" hang-once --engine claude --test-cmd "$d/test.sh" --max-cycles 2)
+  assert_eq 0 "$rc" "exit 0 depois do ciclo de correcao"
+  [ $(($(date +%s) - started)) -lt 30 ] && ok "encerrou antes do sleep da sessao (37s)" || bad "encerrou antes do sleep da sessao (37s)"
+  assert_contains "$d/out.log" "Gate 0 vermelho" "gate 0 reprovou a sessao encerrada"
+  fp="$d/repo/.phases/prompts/phase-01.cycle-2.txt"
+  assert_contains "$fp" "passou de RALPH_SESSION_TIMEOUT (2s)" "causa do ciclo diz que foi o timeout"
+  assert_contains "$fp" "stdin fechado" "causa diz como nao travar de novo"
+  assert_contains "$d/repo/.phases/logs/phase-01.cycle-1.log" "[ralph] sessao encerrada" "log da sessao marca o encerramento"
+  pgrep -f 'sleep 37' > /dev/null && bad "arvore da sessao encerrada (sem sleep orfao)" || ok "arvore da sessao encerrada (sem sleep orfao)"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "com stdin fechado" "prompt manda rodar comandos sem stdin"
+  assert_not_contains "$d/out.log" "Terminated" "sem aviso de job control do bash na tela"
+
+  d=$(new_case session-timeout-bad)
+  rc=$(CASE_SESSION_TIMEOUT=1h run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 1 "$rc" "valor invalido: exit 1"
+  assert_contains "$d/out.log" "Valor invalido para RALPH_SESSION_TIMEOUT" "diz o que esta errado"
+fi
+
+# ---------------------------------------------------------------------------
+# 50. Sinal durante a sessao: a engine roda em background (watchdog), e comando
+#     assincrono nao recebe o sinal do terminal. O ralph encerra a arvore e
+#     aborta, em vez de morrer e deixar a engine escrevendo na arvore.
+# ---------------------------------------------------------------------------
+if case_enabled session-signal; then
+  header "50. SIGTERM durante a sessao -> engine encerrada, run abortado"
+  d=$(new_case session-signal)
+  ( CASE_SESSION_TIMEOUT=0 run_ralph "$d" hang-once --engine claude --test-cmd "$d/test.sh" > "$d/rc.txt" ) &
+  bg=$!
+  for _ in $(seq 1 50); do [ -s "$d/state/engine_ppid" ] && break; sleep 0.2; done
+  kill -TERM "$(cat "$d/state/engine_ppid")"
+  wait "$bg"
+  assert_eq 143 "$(cat "$d/rc.txt")" "exit 143"
+  assert_contains "$d/out.log" "Execucao interrompida (sinal 143)" "tratado como interrupcao, nao como falha da fase"
+  pgrep -f 'sleep 37' > /dev/null && bad "engine encerrada junto" || ok "engine encerrada junto"
+  assert_eq 1 "$(cat "$d/state/impl_calls")" "nenhum ciclo de correcao aberto"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

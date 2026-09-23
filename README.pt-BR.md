@@ -89,7 +89,7 @@ agente.**
 
 | Portão | O que verifica | Reprova? |
 |---|---|---|
-| **0** | a engine terminou de verdade, sem erro de protocolo | sim |
+| **0** | a engine terminou de verdade, sem erro de protocolo, dentro de `RALPH_SESSION_TIMEOUT` | sim |
 | **1** | a sessão escreveu código? É **sinal**, não veredito — uma fase já implementada corretamente não escreve nada | não |
 | **2** | a suite de testes do projeto, rodada **pelo ralph**, fora da sessão do agente | sim |
 | **3** | um verificador independente, read-only, que julga **task por task** | sim |
@@ -668,6 +668,7 @@ que o ralph vai resolver num projeto sem rodar nada:
 | `MKTUX_BIN_DIR` | onde instalar os wrappers (default `~/.local/bin`) |
 
 ### Onde o run deixa rastro
+| `RALPH_SESSION_TIMEOUT` | segundos que uma sessão de engine pode durar antes de o ralph encerrá-la, com tudo o que ela abriu (default `3600`, `0` desliga). A sessão encerrada reprova no portão 0 com a causa |
 
 ```
 .phases/
@@ -1058,6 +1059,7 @@ Quando uma fase falhar, leia nesta ordem:
 2. `.phases/logs/phase-NN.test-M.log` — o que a suite reprovou
 3. `.phases/logs/phase-NN.cycle-M.log` — o que a sessão tentou fazer
 
+| portão 0 vermelho com `passou de RALPH_SESSION_TIMEOUT` | um comando dentro da sessão esperou um input que nunca veio — prompt de confirmação, modo watch, servidor em primeiro plano. O prompt pede stdin fechado (`< /dev/null`); corrija o teste ou o comando que pergunta |
 ---
 
 ## O que tem na caixa

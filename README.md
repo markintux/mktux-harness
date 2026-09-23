@@ -90,7 +90,7 @@ agent's exit code.**
 
 | Gate | What it checks | Fails the phase? |
 |---|---|---|
-| **0** | the engine actually finished, no protocol error | yes |
+| **0** | the engine actually finished, no protocol error, within `RALPH_SESSION_TIMEOUT` | yes |
 | **1** | did the session write code? A **signal**, not a verdict — a phase already correctly implemented writes nothing | no |
 | **2** | the project's test suite, run **by ralph**, outside the agent's session | yes |
 | **3** | an independent read-only verifier that judges **task by task** | yes |
@@ -670,6 +670,7 @@ To see what ralph will resolve in a project without running anything:
 | `MKTUX_HARNESS_ROOT` | use a local clone instead of the plugin |
 | `MKTUX_BIN_DIR` | where to install the wrappers (default `~/.local/bin`) |
 
+| `RALPH_SESSION_TIMEOUT` | seconds an engine session may run before ralph kills it and everything it started (default `3600`, `0` disables). The killed session fails gate 0 with the cause |
 ### Where the run leaves its trail
 
 ```
@@ -1057,6 +1058,7 @@ When a phase fails, read in this order:
 1. `.phases/logs/phase-NN.verify-M.log` — what the verifier rejected
 2. `.phases/logs/phase-NN.test-M.log` — what the suite rejected
 3. `.phases/logs/phase-NN.cycle-M.log` — what the session tried to do
+| gate 0 red with `passou de RALPH_SESSION_TIMEOUT` | a command inside the session waited for input that never came — a confirmation prompt, watch mode, a server in the foreground. The prompt asks for stdin closed (`< /dev/null`); fix the test or command that prompts |
 
 ---
 

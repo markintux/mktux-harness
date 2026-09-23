@@ -80,7 +80,7 @@ Por fase, em ordem. Todos verdes → commit. Qualquer vermelho → ciclo de corr
 
 | Gate | O que e | Reprova? |
 |---|---|---|
-| **0** | a engine terminou de verdade (claude: `is_error` no JSON; codex: exit code) | sim |
+| **0** | a engine terminou de verdade (claude: `is_error` no JSON; codex: exit code), dentro de `RALPH_SESSION_TIMEOUT` | sim |
 | **1** | a sessao escreveu codigo? **Sinal, nao veredito** — fase ja implementada faz a engine (corretamente) nao escrever nada | nao |
 | **2** | suite de testes do projeto, rodada **pelo ralph**, fora da sessao do agente | sim |
 | **3** | sessao verificadora independente, read-only, task a task | sim, em `INCOMPLETE` |
@@ -210,6 +210,7 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd   # Codex: $PLUGIN_
 | `RALPH_VERIFY_MODEL` | modelo das sessoes auxiliares |
 | `RALPH_VERIFY_EFFORT` | esforco dessas sessoes |
 | `RALPH_MAX_CYCLES` | ciclos de correcao por fase (default: 3) |
+| `RALPH_SESSION_TIMEOUT` | segundos que uma sessao de engine pode durar (default: 3600; `0` desliga). Passou, o ralph encerra a arvore da sessao e o gate 0 reprova com a causa |
 | `RALPH_MAX_LIMIT_WAITS` | esperas consecutivas por limite, por fase (default: 20) |
 | `RALPH_SMOKE` | `0` desliga o smoke test da engine |
 | `RALPH_MEMORY` | pagina por fase no ai-memory (`ralph/<feature>/phase-NN.md`, pos-commit, sem LLM); `0` desliga. Sem o binario ou com o servidor fora do ar, desliga sozinha |
@@ -256,6 +257,7 @@ sessao.
 | task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do codigo, ou marque `(manual)` se ela for mesmo procedimento |
 | fase de fechamento reprova sem nada de errado no codigo | task procedural sem `(manual)`: o verificador tenta julgar o que nao tem como ler. Marque os procedimentos com `(manual)` |
 | `gate 0 vermelho` e o relatorio manda revisar as tasks | leia o FIM do `phase-NN.cycle-M.log` antes de mexer no plano: engine que morre por cota, rede ou crash cai no mesmo lugar. Task correta nao e a causa mais provavel |
+| gate 0 vermelho com `passou de RALPH_SESSION_TIMEOUT` | um comando da sessao esperou input que nunca veio (prompt de confirmacao, modo watch, servidor em primeiro plano). O prompt ja pede stdin fechado; ache e corrija o teste ou comando que pergunta — o fim do `cycle-M.log` mostra o ultimo comando |
 | fase reprova em todo ciclo ate esgotar | task com escape condicional (*"faca X, mas se ficar estranho, deixe"*). O verificador escolhe INCOMPLETE na duvida |
 | gate 2 sempre vermelho no primeiro run | ambiente do perfil incompleto. A causa de cada perfil esta em *Perfis de stack* |
 | o run reinicia da fase 1 depois de voce editar o plano | editar o `project-phases.md` invalida o stamp e zera `.progress`. Use `--from N` |

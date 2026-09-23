@@ -112,6 +112,9 @@
 #   RALPH_VERIFY_EFFORT      esforco dessas sessoes (default: low no codex; no
 #                            claude fica com o default do modelo)
 #   RALPH_MAX_CYCLES         ciclos de correcao por fase (default: 3)
+#   RALPH_SESSION_TIMEOUT    segundos que uma sessao de engine pode durar antes
+#                            de o ralph encerra-la (default: 3600; 0 desliga).
+#                            Sessao encerrada = gate 0 vermelho, com a causa
 #   RALPH_MAX_LIMIT_WAITS    esperas consecutivas por limite, por fase (default: 20)
 #   RALPH_LIMIT_WAIT_DEFAULT fallback de espera em segundos (default: 1800)
 #   RALPH_LIMIT_BUFFER       segundos extras apos o reset (default: 60)
@@ -215,6 +218,9 @@ RUN_LOG="$LOG_DIR/run.log"
 MAX_LIMIT_WAITS="${RALPH_MAX_LIMIT_WAITS:-20}"
 LIMIT_WAIT_DEFAULT="${RALPH_LIMIT_WAIT_DEFAULT:-1800}"
 LIMIT_BUFFER="${RALPH_LIMIT_BUFFER:-60}"
+SESSION_TIMEOUT="${RALPH_SESSION_TIMEOUT:-3600}"
+# 1 quando o watchdog encerrou a ultima sessao (run_logged). Lido pelo gate 0.
+SESSION_TIMED_OUT=0
 
 TEST_CMD=""
 PROFILE=""
@@ -608,6 +614,11 @@ preflight_checks() {
 
   if ! [[ "$MAX_CYCLES" =~ ^[0-9]+$ ]] || [ "$MAX_CYCLES" -lt 1 ]; then
     fail "Valor invalido para --max-cycles: '$MAX_CYCLES'. Use um inteiro >= 1."
+    exit 1
+  fi
+
+  if ! [[ "$SESSION_TIMEOUT" =~ ^[0-9]+$ ]]; then
+    fail "Valor invalido para RALPH_SESSION_TIMEOUT: '$SESSION_TIMEOUT'. Use segundos (0 desliga)."
     exit 1
   fi
 
@@ -1151,6 +1162,14 @@ PREAMBLE
     echo "  e nao prova nada a mais."
     echo "- Ao terminar, rode o comando acima UMA vez. Nao troque de runner: fora dele"
     echo "  voce pode ver verde onde a validacao ve vermelho."
+    # Stdin fechado: nao ha humano na sessao. Na fase 9 de pub-email-alerts um
+    # teste pediu confirmacao, o runner via container anexou o TTY da sessao, e
+    # a sessao esperou a resposta por 2h.
+    echo "- Rode testes e comandos do projeto com stdin fechado (\`<comando> < /dev/null\`)"
+    echo "  e nunca em modo interativo ou watch: nao ha ninguem para responder um prompt."
+    if [ "$SESSION_TIMEOUT" -gt 0 ]; then
+      echo "  A sessao que passar de $(format_duration "$SESSION_TIMEOUT") e encerrada pelo ralph."
+    fi
     if [ -n "$PROFILE" ]; then
       profile_prompt_notes
     fi
@@ -1533,19 +1552,98 @@ wait_for_reset() {
 # Engine
 # ---------------------------------------------------------------------------
 
+# Encerra um processo e todos os descendentes. Coleta os filhos ANTES de matar o
+# pai: depois, orfaos sao adotados pelo init e `pgrep -P` nao os acha mais.
+kill_tree() {
+  local pid="$1" kid kids
+  kids=$(pgrep -P "$pid" 2> /dev/null || true)
+  kill -TERM "$pid" 2> /dev/null || true
+  for kid in $kids; do
+    kill_tree "$kid"
+  done
+}
+
 # Roda o comando da engine mandando TUDO para o log. O codex streama raciocinio,
 # patches e tool calls no stdout; espelhar isso na tela enterra as linhas do
 # proprio ralph (fases, gates, causa de falha). Com --verbose / RALPH_VERBOSE=1
 # o comportamento antigo volta.
+#
+# run_logged <log_file> <stdin_file> <cmd...>
+#
+# A engine roda em background sob um watchdog: passou de RALPH_SESSION_TIMEOUT,
+# o ralph encerra a arvore inteira e devolve 124. Na fase 9 de pub-email-alerts
+# um teste pediu confirmacao a um TTY que nunca respondeu, e a sessao ficou 2h
+# "aguardando o codigo de saida" ate alguem matar na mao.
+#
+# O stdin vai explicito: comando assincrono sem redirecionamento proprio le de
+# /dev/null, e o codex perderia o prompt.
+#
+# Comando assincrono tambem ignora SIGINT. Sem o trap, Ctrl-C matava o ralph e
+# deixava a engine escrevendo na arvore. O trap encerra a arvore e devolve o
+# codigo do sinal, que o run_engine ja trata como interrupcao.
 run_logged() {
-  local log_file="$1"
-  shift
+  local log_file="$1" stdin_file="$2"
+  shift 2
+
+  local flag="${log_file%.log}.timeout"
+  rm -f "$flag"
+  SESSION_TIMED_OUT=0
 
   if [ "$VERBOSE" -eq 1 ]; then
-    "$@" 2>&1 | tee "$log_file"
+    ( "$@" < "$stdin_file" 2>&1 | tee "$log_file" ) &
   else
-    "$@" > "$log_file" 2>&1
+    "$@" < "$stdin_file" > "$log_file" 2>&1 &
   fi
+  local pid=$! rc=0 signal=0 watchdog=""
+
+  if [ "$SESSION_TIMEOUT" -gt 0 ]; then
+    (
+      elapsed=0
+      while kill -0 "$pid" 2> /dev/null; do
+        sleep 1
+        elapsed=$((elapsed + 1))
+        if [ "$elapsed" -ge "$SESSION_TIMEOUT" ]; then
+          touch "$flag"
+          kill_tree "$pid"
+          break
+        fi
+      done
+    ) &
+    watchdog=$!
+  fi
+
+  local saved_int saved_term
+  saved_int=$(trap -p INT)
+  saved_term=$(trap -p TERM)
+  trap 'signal=130' INT
+  trap 'signal=143' TERM
+
+  wait "$pid" || rc=$?
+  if [ "$signal" -ne 0 ]; then
+    kill_tree "$pid"
+    wait "$pid" 2> /dev/null || true
+    rc=$signal
+  fi
+  # Com a flag gravada o watchdog esta no meio do kill_tree: espera, nunca mata.
+  # Mata-lo ali o interrompia depois do pai e antes dos filhos, e o comando que
+  # travou a sessao ficava orfao. Sem flag, mata: esperar o `sleep 1` dele
+  # custava ate 1s por sessao.
+  if [ -n "$watchdog" ]; then
+    [ -f "$flag" ] || kill "$watchdog" 2> /dev/null || true
+    wait "$watchdog" 2> /dev/null || true
+  fi
+
+  if [ -n "$saved_int" ]; then eval "$saved_int"; else trap - INT; fi
+  if [ -n "$saved_term" ]; then eval "$saved_term"; else trap - TERM; fi
+
+  if [ "$signal" -eq 0 ] && [ -f "$flag" ]; then
+    rm -f "$flag"
+    SESSION_TIMED_OUT=1
+    echo "[ralph] sessao encerrada: passou de RALPH_SESSION_TIMEOUT (${SESSION_TIMEOUT}s)" >> "$log_file"
+    return 124
+  fi
+  rm -f "$flag"
+  return "$rc"
 }
 
 # run_engine <prompt_file> <log_file> <mode: impl|verify>
@@ -1577,17 +1675,17 @@ run_engine() {
       if [[ "$mode" == "verify" ]]; then
         # -o: so a mensagem final, sem o transcript nem o bloco que o `codex
         # exec` reimprime depois do resumo de tokens. O gate 3 le dali.
-        run_logged "$log_file" codex exec --color never --sandbox read-only \
+        run_logged "$log_file" "$prompt_file" codex exec --color never --sandbox read-only \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${model_args[@]+"${model_args[@]}"} \
-          -o "$(verify_last_message_file "$log_file")" - < "$prompt_file" || rc=$?
+          -o "$(verify_last_message_file "$log_file")" - || rc=$?
       else
-        run_logged "$log_file" codex exec --color never --sandbox danger-full-access \
+        run_logged "$log_file" "$prompt_file" codex exec --color never --sandbox danger-full-access \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
-          ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} - < "$prompt_file" || rc=$?
+          ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} - || rc=$?
       fi
     else
-      # < /dev/null: claude -p le stdin quando nao e TTY. Sem o redirect ele
+      # stdin /dev/null: claude -p le stdin quando nao e TTY. Sem o redirect ele
       # consome o stream de quem chamou (ex: o manifest do loop de fases).
       if [[ "$mode" == "verify" ]]; then
         # --disallowedTools, nao --allowedTools: sob --dangerously-skip-permissions
@@ -1600,21 +1698,21 @@ run_engine() {
         # --tools: so essas tres existem na sessao (nem Agent, que abriria um
         # subagent com escrita); o deny fica como segunda trava.
         # --disable-slash-commands: sem a listagem de skills no contexto.
-        run_logged "$log_file" env -u CLAUDECODE claude --dangerously-skip-permissions \
+        run_logged "$log_file" /dev/null env -u CLAUDECODE claude --dangerously-skip-permissions \
           --strict-mcp-config --disable-slash-commands \
           --tools "Read,Glob,Grep" \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${model_args[@]+"${model_args[@]}"} \
           -p "$(cat "$prompt_file")" \
           --disallowedTools "Write,Edit,NotebookEdit,Bash" \
-          --output-format text < /dev/null || rc=$?
+          --output-format text || rc=$?
       else
         # JSON: o exit code do CLI e sinal fraco; o gate 0 le is_error.
-        run_logged "$log_file" env -u CLAUDECODE claude --dangerously-skip-permissions \
+        run_logged "$log_file" /dev/null env -u CLAUDECODE claude --dangerously-skip-permissions \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} \
           -p "$(cat "$prompt_file")" \
-          --output-format json < /dev/null || rc=$?
+          --output-format json || rc=$?
       fi
     fi
 
@@ -1650,8 +1748,20 @@ run_engine() {
 # Preenche GATE_CAUSE quando vermelho.
 GATE_CAUSE=""
 
+session_timeout_cause() {
+  printf '%s' "A sessao passou de RALPH_SESSION_TIMEOUT ($(format_duration "$SESSION_TIMEOUT")) e o ralph a encerrou. Causa mais comum: um comando esperando input que nunca chega (prompt de confirmacao, modo watch, servidor em primeiro plano). Rode testes e comandos do projeto com stdin fechado (< /dev/null) e nunca em modo interativo."
+}
+
 gate0_engine_finished() {
   local log_file="$1" rc="$2"
+
+  # Antes do JSON do claude: a sessao morta pelo watchdog nunca emite resultado,
+  # e "terminou sem emitir um resultado" esconderia o motivo.
+  if [ "$SESSION_TIMED_OUT" -eq 1 ]; then
+    GATE_CAUSE="$(session_timeout_cause) Ultimas linhas do output:"$'\n'"$(engine_tail "$log_file" 40)"
+    state_gate 0 fail
+    return 1
+  fi
 
   if [[ "$ENGINE" == "claude" ]]; then
     if ! grep -qF '"type":"result"' "$log_file" && ! grep -qF '"type": "result"' "$log_file"; then
@@ -1803,7 +1913,9 @@ gate3_verify_uncached() {
   task_lines=$(sed 's/^[[:space:]]*//' "$verdict_src" | grep -E '^TASK [0-9]+: (DONE|INCOMPLETE|NOT-CODE)' || true)
 
   if [ -z "$task_lines" ]; then
-    GATE_CAUSE="O verificador independente nao emitiu nenhuma linha 'TASK <n>: DONE|INCOMPLETE|NOT-CODE' — nao foi possivel confirmar que a fase esta completa. Ultimas linhas do verificador:"$'\n'"$(engine_tail "$verify_log" 40)"
+    GATE_CAUSE=""
+    [ "$SESSION_TIMED_OUT" -eq 1 ] && GATE_CAUSE="$(session_timeout_cause)"$'\n'
+    GATE_CAUSE="${GATE_CAUSE}O verificador independente nao emitiu nenhuma linha 'TASK <n>: DONE|INCOMPLETE|NOT-CODE' — nao foi possivel confirmar que a fase esta completa. Ultimas linhas do verificador:"$'\n'"$(engine_tail "$verify_log" 40)"
     state_gate 3 fail
     return 1
   fi
