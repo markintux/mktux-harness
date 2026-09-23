@@ -457,7 +457,7 @@ instead.
 ---
 ```
 
-Five things there are deliberate:
+Six things there are deliberate:
 
 1. **The phase repeats its own guards.** The `Do not touch` block lives inside the
    phase, not in a preamble — because `ralph` discards everything that is not
@@ -486,7 +486,18 @@ Five things there are deliberate:
    Each phase that gets a clause cites the `BR-NN` and carries a task and a
    scenario for it. In a real run only the action phase cited the rule: both
    phases passed all four gates, and a failed upload still reached the admin as
-   a 500.
+   a 500. A rule that names several artifacts ("birthdays, records and the top
+   5") is several clauses, so a range like `BR-10 through BR-16` only fits a
+   phase where every rule in it lands whole. The plan's self-check prints each
+   rule's text under the phases that cite it, so a gap shows.
+
+6. **Every phase ends with the suite green on its own.** Gate 2 runs the whole
+   suite after each phase. A phase that changes an existing contract — throws
+   where it used to return, changes a signature — updates every caller it breaks
+   in the same phase, or leaves the change to the phase that rewires them. A
+   `Do not touch` never covers a caller the phase itself breaks: in a real run a
+   phase made a method refuse the daily period while its caller was off-limits
+   until three phases later, and the session had no way out.
 
 `ralph` reads the `Read first:` line and the ids the phase cites, and hands the
 session **only those excerpts** — the named section, the `BR-NN` rule, the
@@ -659,6 +670,7 @@ To see what ralph will resolve in a project without running anything:
 | `RALPH_VERIFY_MODEL` | model for the auxiliary sessions |
 | `RALPH_VERIFY_EFFORT` | effort for those sessions |
 | `RALPH_MAX_CYCLES` | fix cycles per phase |
+| `RALPH_SESSION_TIMEOUT` | seconds an engine session may run before ralph kills it and everything it started (default `3600`, `0` disables). The killed session fails gate 0 with the cause |
 | `RALPH_MAX_LIMIT_WAITS` | consecutive limit waits, per phase |
 | `RALPH_SMOKE` | `0` disables the smoke test |
 | `RALPH_MEMORY` | `0` disables the per-phase page in [ai-memory](#long-term-memory-ai-memory). Turns itself off when the binary is missing or the server is down |
@@ -670,7 +682,6 @@ To see what ralph will resolve in a project without running anything:
 | `MKTUX_HARNESS_ROOT` | use a local clone instead of the plugin |
 | `MKTUX_BIN_DIR` | where to install the wrappers (default `~/.local/bin`) |
 
-| `RALPH_SESSION_TIMEOUT` | seconds an engine session may run before ralph kills it and everything it started (default `3600`, `0` disables). The killed session fails gate 0 with the cause |
 ### Where the run leaves its trail
 
 ```
@@ -1047,6 +1058,7 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | ralph or `test-runner` picks the wrong test command | check with `mktux-profile.sh test-cmd` (see [Stack profiles](#stack-profiles)); override with `--test-cmd` or `RALPH_TEST_CMD` |
 | `test-runner` returns `ERROR:` about a missing dependency | the environment is not set up. It never installs on its own: run the setup the line names (e.g. `uv sync --extra dev`) |
 | the Laravel hooks do not fire | there is no `artisan` at or above the current directory — check with `mktux-profile.sh name` |
+| gate 0 red with `passou de RALPH_SESSION_TIMEOUT` | a command inside the session waited for input that never came — a confirmation prompt, watch mode, a server in the foreground. The prompt asks for stdin closed (`< /dev/null`); fix the test or command that prompts |
 | the run restarts from phase 1 after you edit the plan | editing `project-phases.md` invalidates the stamp. Use `--from N` |
 | `ralph: command not found` | run installation step 3, and check `~/.local/bin` is on your PATH |
 | `mktux-harness: não encontrei ralph.sh` | the plugin is not installed on that machine, or point `MKTUX_HARNESS_ROOT` at a clone |
@@ -1058,7 +1070,6 @@ When a phase fails, read in this order:
 1. `.phases/logs/phase-NN.verify-M.log` — what the verifier rejected
 2. `.phases/logs/phase-NN.test-M.log` — what the suite rejected
 3. `.phases/logs/phase-NN.cycle-M.log` — what the session tried to do
-| gate 0 red with `passou de RALPH_SESSION_TIMEOUT` | a command inside the session waited for input that never came — a confirmation prompt, watch mode, a server in the foreground. The prompt asks for stdin closed (`< /dev/null`); fix the test or command that prompts |
 
 ---
 

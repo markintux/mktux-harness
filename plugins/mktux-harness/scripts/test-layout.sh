@@ -434,11 +434,15 @@ abc sess haiku 7" "$(jq -r '"\(.session_id) \(.parent // "-") \(.model) \(.input
 # 8. Auto-checagem de BR do plan-project-phases (Parte 7)
 # ---------------------------------------------------------------------------
 # O script mora no SKILL.md; roda ele como esta escrito. Com 10+ fases a
-# comparacao virava texto ("2" <= "11" falso) e so a fase 1 aparecia.
+# comparacao virava texto ("2" <= "11" falso) e so a fase 1 aparecia. O texto
+# da regra sai embaixo: numa faixa, "fases 7" escondia que a BR tambem nomeava
+# artefatos de outras fases.
 header "8. auto-checagem de BR do plan-project-phases"
 br="$TMP/br" && mkdir -p "$br"
 awk '/^# Fases que citam/,/^done$/' "$PLUGIN/skills/plan-project-phases/SKILL.md" > "$br/check.sh"
-printf '1. **BR-01 — a**\n2. **BR-02 — b**\n3. **BR-03 — c**\n4. **BR-10 — d**\n' > "$br/feature-description.md"
+printf '%s\n' '## Business Rules' '' '1. **BR-01 — a:** applies to X' '   and to Y.' '2. **BR-02 — b**' \
+  '   - nested detail' '3. **BR-03 — c**, unlike BR-01' '4. **BR-10 — d**' '' 'Prose citing BR-02 again.' \
+  > "$br/feature-description.md"
 {
   echo "Preambulo cita BR-03, e nao conta."
   for i in $(seq 1 11); do
@@ -450,10 +454,14 @@ printf '1. **BR-01 — a**\n2. **BR-02 — b**\n3. **BR-03 — c**\n4. **BR-10 �
   done
 } > "$br/project-phases.md"
 assert_eq "BR-01   fases 2 11
+        a: applies to X and to Y.
 BR-02   fases 2
+        b - nested detail
 BR-03   -- nenhuma fase
-BR-10   fases 11" "$(f="$br/project-phases.md" bash "$br/check.sh")" \
-  "fases em ordem numerica com 10+ fases, faixa expandida, preambulo ignorado"
+        c, unlike BR-01
+BR-10   fases 11
+        d" "$(f="$br/project-phases.md" bash "$br/check.sh")" \
+  "fases em ordem numerica com 10+ fases, faixa expandida, preambulo ignorado, texto da regra embaixo"
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then

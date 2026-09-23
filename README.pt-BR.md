@@ -456,7 +456,7 @@ instead.
 ---
 ```
 
-Note cinco coisas, todas deliberadas:
+Note seis coisas, todas deliberadas:
 
 1. **A fase repete os próprios guards.** O `Do not touch` está dentro da fase, não
    num preâmbulo — porque o `ralph` descarta tudo que não está entre headings de
@@ -485,7 +485,19 @@ Note cinco coisas, todas deliberadas:
    erro de validação" é uma cláusula da action *e* uma do controller. Cada fase
    que recebe uma cláusula cita a `BR-NN` e carrega task e cenário para ela. Num
    run real só a fase da action citou a regra: as duas fases passaram nos quatro
-   gates, e o upload que falhava ainda chegava ao admin como erro 500.
+   gates, e o upload que falhava ainda chegava ao admin como erro 500. Regra
+   que nomeia vários artefatos ("aniversários, recordes e o top 5") tem várias
+   cláusulas, então uma faixa como `BR-10 through BR-16` só serve numa fase
+   onde cada regra da faixa cai inteira. A auto-checagem do plano imprime o
+   texto de cada regra embaixo das fases que a citam, para a lacuna aparecer.
+
+6. **Toda fase fecha com a suíte verde sozinha.** O portão 2 roda a suíte
+   inteira depois de cada fase. Fase que muda um contrato existente — lança
+   exceção onde antes devolvia valor, muda assinatura — atualiza na mesma fase
+   todo chamador que ela quebra, ou deixa a mudança para a fase que os religa. Um
+   `Do not touch` nunca cobre chamador que a própria fase quebra: num run real,
+   uma fase fez um método recusar o período diário enquanto o chamador dele
+   estava proibido até três fases depois, e a sessão ficou sem saída.
 
 O `ralph` lê a linha `Read first:` e os ids que a fase cita, e entrega à sessão
 **só esses trechos** — a seção nomeada, a regra `BR-NN`, a story `US-N.N`, a
@@ -656,6 +668,7 @@ que o ralph vai resolver num projeto sem rodar nada:
 | `RALPH_VERIFY_MODEL` | modelo das sessões auxiliares |
 | `RALPH_VERIFY_EFFORT` | esforço dessas sessões |
 | `RALPH_MAX_CYCLES` | ciclos de correção por fase |
+| `RALPH_SESSION_TIMEOUT` | segundos que uma sessão de engine pode durar antes de o ralph encerrá-la, com tudo o que ela abriu (default `3600`, `0` desliga). A sessão encerrada reprova no portão 0 com a causa |
 | `RALPH_MAX_LIMIT_WAITS` | esperas consecutivas por limite, por fase |
 | `RALPH_SMOKE` | `0` desliga o smoke test |
 | `RALPH_MEMORY` | `0` desliga a página por fase no [ai-memory](#memória-de-longo-prazo-ai-memory). Sem o binário ou com o servidor fora do ar, desliga sozinha |
@@ -668,7 +681,6 @@ que o ralph vai resolver num projeto sem rodar nada:
 | `MKTUX_BIN_DIR` | onde instalar os wrappers (default `~/.local/bin`) |
 
 ### Onde o run deixa rastro
-| `RALPH_SESSION_TIMEOUT` | segundos que uma sessão de engine pode durar antes de o ralph encerrá-la, com tudo o que ela abriu (default `3600`, `0` desliga). A sessão encerrada reprova no portão 0 com a causa |
 
 ```
 .phases/
@@ -1047,6 +1059,7 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | o ralph ou o `test-runner` escolhe o comando de teste errado | confira com `mktux-profile.sh test-cmd` (veja [Perfis de stack](#perfis-de-stack)); sobreponha com `--test-cmd` ou `RALPH_TEST_CMD` |
 | o `test-runner` devolve `ERROR:` de dependência faltando | o ambiente não está preparado. Ele nunca instala sozinho: rode o preparo que a linha cita (ex: `uv sync --extra dev`) |
 | os hooks do Laravel não disparam | não há `artisan` no diretório atual nem acima dele — confira com `mktux-profile.sh name` |
+| portão 0 vermelho com `passou de RALPH_SESSION_TIMEOUT` | um comando dentro da sessão esperou um input que nunca veio — prompt de confirmação, modo watch, servidor em primeiro plano. O prompt pede stdin fechado (`< /dev/null`); corrija o teste ou o comando que pergunta |
 | o run reinicia da fase 1 depois de você editar o plano | editar o `project-phases.md` invalida o stamp. Use `--from N` |
 | `ralph: command not found` | rode o passo 3 da instalação, e confira que `~/.local/bin` está no PATH |
 | `mktux-harness: não encontrei ralph.sh` | o plugin não está instalado nessa máquina, ou aponte `MKTUX_HARNESS_ROOT` para um clone |
@@ -1059,7 +1072,6 @@ Quando uma fase falhar, leia nesta ordem:
 2. `.phases/logs/phase-NN.test-M.log` — o que a suite reprovou
 3. `.phases/logs/phase-NN.cycle-M.log` — o que a sessão tentou fazer
 
-| portão 0 vermelho com `passou de RALPH_SESSION_TIMEOUT` | um comando dentro da sessão esperou um input que nunca veio — prompt de confirmação, modo watch, servidor em primeiro plano. O prompt pede stdin fechado (`< /dev/null`); corrija o teste ou o comando que pergunta |
 ---
 
 ## O que tem na caixa
