@@ -430,6 +430,22 @@ assert_eq "sess - opus 15
 abc sess haiku 7" "$(jq -r '"\(.session_id) \(.parent // "-") \(.model) \(.input)"' "$cl/proj/.harness/tokens.jsonl")" \
   "claude: sessao e subagent, cada um com a propria soma"
 
+# Sessao do ralph: fase, ciclo e modo em cada linha, subagent incluido. Fora do
+# ralph, nenhum campo a mais.
+assert_eq "- - -" "$(jq -r '"\(.ralph_phase // "-") \(.ralph_cycle // "-") \(.ralph_mode // "-")"' "$cl/proj/.harness/tokens.jsonl" | sort -u)" \
+  "fora do ralph: sem campos do ralph"
+rm -f "$cl/proj/.harness/tokens.jsonl" "$cx/repo/.harness/tokens.jsonl"
+echo "{\"transcript_path\":\"$cl/t/sess.jsonl\",\"session_id\":\"sess\"}" \
+  | RALPH_PHASE_NUM=3 RALPH_PHASE_ATTEMPT=2 RALPH_SESSION_MODE=impl CLAUDE_PROJECT_DIR="$cl/proj" \
+    bash "$PLUGIN/hooks/claude/log-tokens.sh"
+assert_eq "sess 3 2 impl
+abc 3 2 impl" "$(jq -r '"\(.session_id) \(.ralph_phase) \(.ralph_cycle) \(.ralph_mode)"' "$cl/proj/.harness/tokens.jsonl")" \
+  "claude: linha do ralph leva fase, ciclo e modo (subagent incluido)"
+(cd "$cx/repo" && echo '{"session_id":"pai"}' | RALPH_PHASE_NUM=11 RALPH_PHASE_ATTEMPT=0 RALPH_SESSION_MODE=verify \
+  CODEX_HOME="$cx" bash "$PLUGIN/hooks/codex/log-tokens.sh")
+assert_eq "11 0 verify number" "$(jq -r '"\(.ralph_phase) \(.ralph_cycle) \(.ralph_mode) \(.ralph_phase | type)"' "$cx/repo/.harness/tokens.jsonl" | sort -u)" \
+  "codex: fase e ciclo numericos, modo do gate 3"
+
 # ---------------------------------------------------------------------------
 # 8. Auto-checagem de BR do plan-project-phases (Parte 7)
 # ---------------------------------------------------------------------------

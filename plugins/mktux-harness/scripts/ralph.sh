@@ -154,7 +154,11 @@
 #   RALPH_PHASE_TITLE        titulo da fase corrente
 #   RALPH_PHASE_NUM          numero da fase corrente
 #   RALPH_PHASE_TOTAL        total de fases do run
-#   RALPH_PHASE_ATTEMPT      ciclo corrente (1 = implementacao inicial)
+#   RALPH_PHASE_ATTEMPT      ciclo corrente (1 = implementacao inicial; 0 = gates
+#                            contra HEAD antes da sessao, fase check-only ou ja
+#                            commitada)
+#   RALPH_SESSION_MODE       impl | verify — o log-tokens grava fase, ciclo e
+#                            modo em cada linha do tokens.jsonl
 #   RALPH_PHASE_MAX_ATTEMPTS igual a RALPH_MAX_CYCLES
 #   RALPH_TEST_CMD           o comando do gate 2 (vazio quando desabilitado): o
 #                            subagent test-runner roda o mesmo que o gate
@@ -1701,6 +1705,7 @@ run_engine() {
 
   export RALPH_ENGINE="$ENGINE"
   export RALPH_PHASE_MAX_ATTEMPTS="$MAX_CYCLES"
+  export RALPH_SESSION_MODE="$mode"
   # O subagent test-runner resolve o comando por mktux-profile.sh, que le isto
   # primeiro: dentro de um run ele roda exatamente o comando do gate 2.
   export RALPH_TEST_CMD="$TEST_CMD"
@@ -2320,6 +2325,9 @@ run_phase() {
   export RALPH_PHASE_TITLE="$phase_title"
   export RALPH_PHASE_NUM="$phase_num"
   export RALPH_PHASE_TOTAL="$total"
+  # 0 ate o loop de ciclos: a verificacao contra HEAD antes da sessao e o
+  # ciclo 0 (test-0, verify-0), e o valor da fase anterior nao pode vazar.
+  export RALPH_PHASE_ATTEMPT=0
 
   LIMIT_WAITS=0
   GATE_CAUSE=""

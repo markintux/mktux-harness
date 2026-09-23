@@ -9,6 +9,10 @@
 # Subagents (spawn_agent) gravam rollout proprio, e o do pai nao inclui o consumo
 # deles. Cada subagent vira uma linha com o proprio session_id e `parent`. Num run
 # real do ralph eram 28 subagents, +26% de input que o tokens.jsonl nao via.
+#
+# Sessao do ralph (RALPH_PHASE_NUM no ambiente): cada linha leva ralph_phase,
+# ralph_cycle e ralph_mode (impl|verify). Sem isso, medir um run por fase era
+# casar timestamp com o log do ralph na mao.
 set -euo pipefail
 
 input=$(cat)
@@ -48,6 +52,9 @@ emit() {
     --arg session "$id" \
     --arg model "$model" \
     --arg parent "$parent" \
+    --arg phase "${RALPH_PHASE_NUM:-}" \
+    --arg cycle "${RALPH_PHASE_ATTEMPT:-}" \
+    --arg mode "${RALPH_SESSION_MODE:-}" \
     '{
        ts: $ts,
        session_id: $session,
@@ -58,7 +65,12 @@ emit() {
        cache_read: (.cached_input_tokens     // 0),
        reasoning:  (.reasoning_output_tokens // 0),
        total:      (.total_tokens            // 0)
-     } + (if $parent == "" then {} else {parent: $parent} end)' >> "$root/.harness/tokens.jsonl"
+     } + (if $parent == "" then {} else {parent: $parent} end)
+       + (if $phase == "" then {} else {
+           ralph_phase: ($phase | tonumber? // $phase),
+           ralph_cycle: ($cycle | tonumber? // $cycle),
+           ralph_mode: $mode
+         } end)' >> "$root/.harness/tokens.jsonl"
 }
 
 emit "$rollout" "$session"

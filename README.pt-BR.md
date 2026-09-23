@@ -735,7 +735,7 @@ Os hooks vêm do plugin. Não há nada para configurar por projeto.
 |---|---|---|
 | `profile-hook` | antes de todo Bash · Claude: após Edit/Write · Codex: no fim do turno | acha o perfil de stack subindo do diretório do evento e repassa o evento ao script do perfil; sem perfil, não faz nada |
 | `log-event` | todo evento | grava em `.harness/events.jsonl` com timestamp e branch |
-| `log-tokens` | fim da sessão | grava consumo por modelo em `.harness/tokens.jsonl`, com campo `vendor` para comparar Claude e Codex no mesmo gráfico. Cada subagent ganha linha própria, com `parent` |
+| `log-tokens` | fim da sessão | grava consumo por modelo em `.harness/tokens.jsonl`, com campo `vendor` para comparar Claude e Codex no mesmo gráfico. Cada subagent ganha linha própria, com `parent`. Sob o ralph, cada linha leva também `ralph_phase`, `ralph_cycle` (0 = gates contra HEAD antes de sessão) e `ralph_mode` (`impl`/`verify`), para medir o run fase a fase |
 
 Scripts do perfil Laravel (`profiles/laravel/hooks/`), chamados pelo `profile-hook`:
 

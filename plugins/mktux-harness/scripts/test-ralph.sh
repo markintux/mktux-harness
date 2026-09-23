@@ -68,6 +68,8 @@ verify=0
 
 # O ralph exporta o comando do gate 2 para as sessoes (o test-runner le dali).
 printf '%s\n' "${RALPH_TEST_CMD-<unset>}" >> "$state/session_test_cmd"
+# Fase, ciclo e modo: o log-tokens grava os tres em cada linha do tokens.jsonl.
+printf '%s %s %s\n' "${RALPH_PHASE_NUM-}" "${RALPH_PHASE_ATTEMPT-}" "${RALPH_SESSION_MODE-}" >> "$state/session_env"
 
 bump() {
   local f="$state/$1" n=0
@@ -509,6 +511,10 @@ if case_enabled ok-first; then
   assert_eq "feat(phase-2): Feature" "$(git -C "$d/repo" log -1 --pretty=%s)" "mensagem de commit da ultima fase"
   assert_eq 2 "$(cat "$d/state/impl_calls")" "1 sessao de implementacao por fase (2 fases)"
   assert_eq 2 "$(cat "$d/state/verify_calls")" "gate 3 (default always) rodou em toda fase"
+  assert_eq "1 1 impl
+1 1 verify
+2 1 impl
+2 1 verify" "$(cat "$d/state/session_env")" "sessoes recebem fase, ciclo e modo (para o tokens.jsonl)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1747,6 +1753,7 @@ if case_enabled check-only; then
   assert_eq $((before + 1)) "$(commits "$d")" "so a fase 1 commita"
   assert_contains "$d/repo/.phases/.progress" "phase-02.md" "progresso registra a fase check-only"
   test -f "$d/repo/.phases/logs/phase-02.verify-0.log" && ok "verificacao previa loga como ciclo 0" || bad "verificacao previa loga como ciclo 0"
+  assert_contains "$d/state/session_env" "2 0 verify" "verificacao previa exporta ciclo 0, sem herdar o da fase anterior"
   assert_contains "$d/out.log" "Pendencias manuais (1)" "(manual) da fase check-only segue no relatorio"
 
   d=$(new_case check-only-red)
