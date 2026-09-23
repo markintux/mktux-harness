@@ -704,13 +704,20 @@ que o ralph vai resolver num projeto sem rodar nada:
 ├── .progress                fases já concluídas
 ├── state/run.tsv            snapshot do run, lido pelo ralph-watch
 └── logs/
-    ├── run.log                    log linear do run inteiro
+    ├── run.log                    log linear (--dashboard), um bloco por invocação
     ├── phase-NN.cycle-M.log       sessão de implementação
+    ├── phase-NN.cycle-M.last.txt  mensagem final da sessão (Codex)
     ├── phase-NN.test-M.log        saída do portão 2
     ├── phase-NN.verify-M.log      sessão do portão 3
     ├── phase-NN.verify-M.last.txt veredito final do portão 3 (Codex)
-    └── phase-NN.memory.log        saída do `ai-memory write-page`
+    ├── phase-NN.memory.log        saída do `ai-memory write-page`
+    └── archive/<início do run>/   logs de um run anterior da fase, movidos
+                                   quando ela reabre (ficam os 10 últimos runs)
 ```
+
+Os nomes de log se repetem entre runs e features, então a fase move os logs
+antigos para `archive/` antes de reabrir: o que está em `logs/` é do run mais
+recente.
 
 `.phases/` e `.harness/` (telemetria dos hooks) são registrados em
 `.git/info/exclude` automaticamente — o ralph **não mexe** no `.gitignore` do

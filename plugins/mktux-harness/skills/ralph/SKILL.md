@@ -266,13 +266,19 @@ anteriores para dentro da sessao fria.
 ├── .progress            fases ja concluidas
 ├── state/run.tsv        snapshot do run, lido pelo ralph-watch
 └── logs/
-    ├── run.log                 log linear do run inteiro
+    ├── run.log                 log linear (--dashboard), um bloco por invocacao
     ├── phase-NN.cycle-M.log    sessao de implementacao
+    ├── phase-NN.cycle-M.last.txt   mensagem final da sessao (codex)
     ├── phase-NN.test-M.log     saida do gate 2
     ├── phase-NN.verify-M.log   sessao do gate 3
     ├── phase-NN.verify-M.last.txt  veredito final do gate 3 (codex)
-    └── phase-NN.memory.log     saida do `ai-memory write-page`
+    ├── phase-NN.memory.log     saida do `ai-memory write-page`
+    └── archive/<inicio do run>/    logs de um run anterior da fase, movidos
+                                    quando ela reabre (ficam os 10 ultimos)
 ```
+
+O que esta em `logs/` e do run mais recente de cada fase. Diagnostico de um run
+antigo: `logs/archive/`.
 
 `.phases/` e `.harness/` (telemetria dos hooks) sao registrados em
 `.git/info/exclude` automaticamente — o ralph nao mexe no `.gitignore` do

@@ -1065,7 +1065,12 @@ start_dashboard() {
   fi
 
   mkdir -p "$LOG_DIR"
-  : > "$RUN_LOG"
+  # Append, com cabecalho: um run retomado 3 vezes deixava so a ultima invocacao
+  # no run.log, e a evidencia das anteriores sumia. Rotaciona em 5 MB.
+  if [ -f "$RUN_LOG" ] && [ "$(wc -c < "$RUN_LOG")" -gt 5242880 ]; then
+    mv -f "$RUN_LOG" "$RUN_LOG.1"
+  fi
+  printf '\n===== ralph %s — %s =====\n' "$(date '+%d/%m/%Y %H:%M:%S')" "$INPUT_FILE" >> "$RUN_LOG"
 
   # fd 9/10 guardam o terminal: o relatorio final volta para a tela depois que
   # o painel morre.
@@ -2288,6 +2293,24 @@ record_contests() {
   done <<< "$contests"
 }
 
+# Logs de uma execucao anterior desta fase saem do caminho antes dela reabrir.
+# Os nomes se repetem entre runs e entre features (phase-03.cycle-2.log), entao
+# o ciclo 3 de uma feature de semana passada aparecia ao lado do ciclo 1 de hoje
+# e parecia parte do run. Vao para logs/archive/<inicio deste run>/; ficam os 10
+# arquivos mais recentes.
+LOG_ARCHIVE_KEEP=10
+
+archive_phase_logs() {
+  local phase_file="$1" dest old
+  compgen -G "$LOG_DIR/${phase_file%.md}.*" > /dev/null || return 0
+  dest="$LOG_DIR/archive/$RUN_STAMP"
+  mkdir -p "$dest"
+  mv -f "$LOG_DIR/${phase_file%.md}."* "$dest"/
+  ls -1d "$LOG_DIR/archive"/*/ 2> /dev/null | sort -r | tail -n +$((LOG_ARCHIVE_KEEP + 1)) \
+    | while IFS= read -r old; do rm -rf "$old"; done
+  log "Logs anteriores de ${phase_file%.md} arquivados em $dest/"
+}
+
 # run_phase <phase_file> <phase_num> <phase_title> <seq> <total>
 run_phase() {
   local phase_file="$1" phase_num="$2" phase_title="$3" seq="$4" total="$5"
@@ -2306,6 +2329,7 @@ run_phase() {
 
   echo ""
   log "[$seq/$total] Phase $phase_num: $phase_title"
+  archive_phase_logs "$phase_file"
 
   # Fase so de verificacao, ou ja commitada neste branch: gates 2 e 3 contra
   # HEAD, sem sessao. Verde fecha a fase como "ja implementada"; vermelho abre o
@@ -2505,6 +2529,7 @@ run_phase() {
 # ---------------------------------------------------------------------------
 
 LAST_GATE=""
+RUN_STAMP="$(date '+%Y%m%d-%H%M%S')"
 
 main() {
   preflight_checks

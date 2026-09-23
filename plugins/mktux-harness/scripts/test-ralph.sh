@@ -1907,6 +1907,29 @@ if case_enabled committed-phase; then
   assert_eq 2 "$(cat "$d/state/impl_calls")" "wip: as duas fases abrem sessao"
 fi
 
+# ---------------------------------------------------------------------------
+# 54. Logs de uma execucao anterior da fase vao para logs/archive/<run>/ antes
+#     dela reabrir. Os nomes se repetem entre runs e features: o ciclo 3 de uma
+#     feature antiga aparecia ao lado do ciclo 1 de hoje.
+# ---------------------------------------------------------------------------
+if case_enabled log-archive; then
+  header "54. logs antigos da fase arquivados quando ela reabre"
+  d=$(new_case log-archive)
+  mkdir -p "$d/repo/.phases/logs"
+  echo "run velho" > "$d/repo/.phases/logs/phase-01.cycle-3.log"
+  echo "outra fase" > "$d/repo/.phases/logs/phase-09.cycle-1.log"
+  for i in $(seq 1 11); do mkdir -p "$d/repo/.phases/logs/archive/20000101-0000$(printf '%02d' "$i")"; done
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  test -f "$d/repo/.phases/logs/phase-01.cycle-3.log" && bad "log velho saiu de logs/" || ok "log velho saiu de logs/"
+  assert_eq 1 "$(ls "$d/repo/.phases/logs/archive"/*/phase-01.cycle-3.log 2>/dev/null | wc -l | tr -d ' ')" "log velho arquivado"
+  test -f "$d/repo/.phases/logs/phase-01.cycle-1.log" && ok "log deste run no lugar de sempre" || bad "log deste run no lugar de sempre"
+  test -f "$d/repo/.phases/logs/phase-09.cycle-1.log" && ok "fase que nao reabriu fica onde esta" || bad "fase que nao reabriu fica onde esta"
+  assert_eq 10 "$(ls -1d "$d/repo/.phases/logs/archive"/*/ | wc -l | tr -d ' ')" "archive guarda os 10 mais recentes"
+  test -d "$d/repo/.phases/logs/archive/20000101-000001" && bad "o mais antigo saiu" || ok "o mais antigo saiu"
+  assert_contains "$d/out.log" "Logs anteriores de phase-01 arquivados" "avisa onde foram parar"
+fi
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then
   echo -e "${GREEN}TODOS VERDES: $PASS asserts${NC}"
