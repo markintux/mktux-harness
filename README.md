@@ -90,7 +90,7 @@ agent's exit code.**
 
 | Gate | What it checks | Fails the phase? |
 |---|---|---|
-| **0** | the engine actually finished, no protocol error | yes |
+| **0** | the engine actually finished, no protocol error, within `RALPH_SESSION_TIMEOUT` | yes |
 | **1** | did the session write code? A **signal**, not a verdict — a phase already correctly implemented writes nothing | no |
 | **2** | the project's test suite, run **by ralph**, outside the agent's session | yes |
 | **3** | an independent read-only verifier that judges **task by task** | yes |
@@ -119,7 +119,26 @@ A phase marked `**Check-only phase**` — the close-out that only asserts state 
 gets no session up front. ralph runs gates 2 and 3 against HEAD; green closes the
 phase with no session and no commit, red opens cycle 1 as a fix with the verdict
 in hand. In a real run, a phase like that opened a session, wrote nothing and
-spent 2.4M input tokens to reach the same verdict.
+spent 2.4M input tokens to reach the same verdict. A phase already committed on
+the branch with ralph's message — `feat(phase-N): <title>`, say after you
+committed a stuck phase's work by hand — takes the same path on the next run:
+the gates judge HEAD, and only a red gate opens a session.
+
+The verifier reads only the phase, so when the plan is wrong it enforces the
+error. In a real run a session checked the CSS config, found that the token the
+task named did not exist and used the right one; the verifier failed the task,
+and the fix cycle obeyed and shipped white borders. So the session can
+**contest** a task it has confirmed is wrong, ending its answer with
+`RALPH-CONTEST: TASK 4 — border-border is not defined (tailwind.config.js:26)`.
+The verifier gets the phase's contests and checks the cited evidence in the
+code: if it holds, it judges the task by its goal rather than its wording; if
+not, the task comes back `INCOMPLETE — contestacao recusada`, and the fix cycle
+gets the refusal. A red suite is never accepted — a task that would break
+something the phase forbids touching is left undone and contested. Nothing
+waits for a person: the run goes on, and accepted contests are listed in the
+final report for review in the morning. When a phase fails for any other
+reason, the report shows the end of the session's last message: it usually
+says why it got stuck.
 
 ---
 
@@ -457,7 +476,7 @@ instead.
 ---
 ```
 
-Five things there are deliberate:
+Six things there are deliberate:
 
 1. **The phase repeats its own guards.** The `Do not touch` block lives inside the
    phase, not in a preamble — because `ralph` discards everything that is not
@@ -486,7 +505,18 @@ Five things there are deliberate:
    Each phase that gets a clause cites the `BR-NN` and carries a task and a
    scenario for it. In a real run only the action phase cited the rule: both
    phases passed all four gates, and a failed upload still reached the admin as
-   a 500.
+   a 500. A rule that names several artifacts ("birthdays, records and the top
+   5") is several clauses, so a range like `BR-10 through BR-16` only fits a
+   phase where every rule in it lands whole. The plan's self-check prints each
+   rule's text under the phases that cite it, so a gap shows.
+
+6. **Every phase ends with the suite green on its own.** Gate 2 runs the whole
+   suite after each phase. A phase that changes an existing contract — throws
+   where it used to return, changes a signature — updates every caller it breaks
+   in the same phase, or leaves the change to the phase that rewires them. A
+   `Do not touch` never covers a caller the phase itself breaks: in a real run a
+   phase made a method refuse the daily period while its caller was off-limits
+   until three phases later, and the session had no way out.
 
 `ralph` reads the `Read first:` line and the ids the phase cites, and hands the
 session **only those excerpts** — the named section, the `BR-NN` rule, the
@@ -659,6 +689,7 @@ To see what ralph will resolve in a project without running anything:
 | `RALPH_VERIFY_MODEL` | model for the auxiliary sessions |
 | `RALPH_VERIFY_EFFORT` | effort for those sessions |
 | `RALPH_MAX_CYCLES` | fix cycles per phase |
+| `RALPH_SESSION_TIMEOUT` | seconds an engine session may run before ralph kills it and everything it started (default `3600`, `0` disables). The killed session fails gate 0 with the cause |
 | `RALPH_MAX_LIMIT_WAITS` | consecutive limit waits, per phase |
 | `RALPH_SMOKE` | `0` disables the smoke test |
 | `RALPH_MEMORY` | `0` disables the per-phase page in [ai-memory](#long-term-memory-ai-memory). Turns itself off when the binary is missing or the server is down |
@@ -679,13 +710,19 @@ To see what ralph will resolve in a project without running anything:
 ├── .progress                phases already completed
 ├── state/run.tsv            run snapshot, read by ralph-watch
 └── logs/
-    ├── run.log                    linear log of the whole run
+    ├── run.log                    linear log (--dashboard), one block per invocation
     ├── phase-NN.cycle-M.log       implementation session
+    ├── phase-NN.cycle-M.last.txt  the session's final message (Codex)
     ├── phase-NN.test-M.log        gate 2 output
     ├── phase-NN.verify-M.log      gate 3 session
     ├── phase-NN.verify-M.last.txt gate 3 final verdict (Codex)
-    └── phase-NN.memory.log        `ai-memory write-page` output
+    ├── phase-NN.memory.log        `ai-memory write-page` output
+    └── archive/<run start>/       a phase's logs from an earlier run, moved
+                                   when the phase reopens (last 10 runs kept)
 ```
+
+Log names repeat across runs and features, so a phase moves its old logs to
+`archive/` before it reopens: what sits in `logs/` belongs to the latest run.
 
 `.phases/` and `.harness/` (hook telemetry) are registered in `.git/info/exclude`
 automatically — ralph **does not touch** your project's `.gitignore`. A tracked
@@ -701,8 +738,8 @@ Hooks come from the plugin. There is nothing to configure per project.
 | Hook | When | What it does |
 |---|---|---|
 | `profile-hook` | before every Bash call · Claude: after Edit/Write · Codex: end of turn | finds the stack profile walking up from the event's directory and hands the event to the profile's script; no profile, no-op |
-| `log-event` | every event | appends to `.harness/events.jsonl` with timestamp and branch |
-| `log-tokens` | end of session | records per-model usage in `.harness/tokens.jsonl`, with a `vendor` field so Claude and Codex land on the same chart. Each subagent gets its own line, with `parent` |
+| `log-event` | every event | appends to `.harness/events.jsonl` with timestamp and branch. Lean on purpose: a tool's output is kept only as its size (`tool_response_chars`), strings are clipped at 2,000 characters, and the file rotates to `events.jsonl.1` at 20 MB — kept whole, one real project's log reached 146 MB |
+| `log-tokens` | end of session | records per-model usage in `.harness/tokens.jsonl`, with a `vendor` field so Claude and Codex land on the same chart. Each subagent gets its own line, with `parent`. Under ralph, each line also carries `ralph_phase`, `ralph_cycle` (0 = gates against HEAD before any session) and `ralph_mode` (`impl`/`verify`), so a run can be measured phase by phase |
 
 Laravel profile scripts (`profiles/laravel/hooks/`), called by `profile-hook`:
 
@@ -1046,7 +1083,8 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | ralph or `test-runner` picks the wrong test command | check with `mktux-profile.sh test-cmd` (see [Stack profiles](#stack-profiles)); override with `--test-cmd` or `RALPH_TEST_CMD` |
 | `test-runner` returns `ERROR:` about a missing dependency | the environment is not set up. It never installs on its own: run the setup the line names (e.g. `uv sync --extra dev`) |
 | the Laravel hooks do not fire | there is no `artisan` at or above the current directory — check with `mktux-profile.sh name` |
-| the run restarts from phase 1 after you edit the plan | editing `project-phases.md` invalidates the stamp. Use `--from N` |
+| gate 0 red with `passou de RALPH_SESSION_TIMEOUT` | a command inside the session waited for input that never came — a confirmation prompt, watch mode, a server in the foreground. The prompt asks for stdin closed (`< /dev/null`); fix the test or command that prompts |
+| the run restarts from phase 1 after you edit the plan | editing `project-phases.md` invalidates the stamp and clears `.progress`. A phase already committed as `feat(phase-N): <title>` is revalidated against HEAD with no session; `--from N` skips the earlier ones outright |
 | `ralph: command not found` | run installation step 3, and check `~/.local/bin` is on your PATH |
 | `mktux-harness: não encontrei ralph.sh` | the plugin is not installed on that machine, or point `MKTUX_HARNESS_ROOT` at a clone |
 | preflight aborts with `Hooks do ai-memory em ... sem jq` | ai-memory's hooks are in your user config and isolating them needs `jq`. Install `jq`. Use `RALPH_HOOK_ISOLATION=0` only if you accept sessions claiming your handoffs |

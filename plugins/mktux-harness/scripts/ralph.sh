@@ -77,6 +77,15 @@
 #      tem Read/Glob/Grep; codex roda em sandbox read-only, instruido a nao
 #      rodar build nem teste.
 #
+# Contestacao: a sessao que confirma um erro no plano (task que cita o que nao
+# existe, contradiz uma BR/US, ou exige quebrar teste que a fase proibe tocar)
+# termina a resposta com
+#   RALPH-CONTEST: TASK <n> — <evidencia>
+# O verificador do gate 3 recebe as contestacoes da fase e confere a evidencia
+# no codigo: procede, julga a task pelo objetivo dela; nao procede, INCOMPLETE
+# com o motivo, e o ciclo de correcao recebe a recusa. Nada para o run: a
+# contestacao aceita sai no relatorio final, para revisao depois.
+#
 # Sessoes frias de verdade: os hooks do ai-memory ficam de fora
 # (RALPH_HOOK_ISOLATION) e, no codex, a memoria nativa (features.memories).
 # .phases/ e .harness/ entram no .git/info/exclude.
@@ -112,6 +121,9 @@
 #   RALPH_VERIFY_EFFORT      esforco dessas sessoes (default: low no codex; no
 #                            claude fica com o default do modelo)
 #   RALPH_MAX_CYCLES         ciclos de correcao por fase (default: 3)
+#   RALPH_SESSION_TIMEOUT    segundos que uma sessao de engine pode durar antes
+#                            de o ralph encerra-la (default: 3600; 0 desliga).
+#                            Sessao encerrada = gate 0 vermelho, com a causa
 #   RALPH_MAX_LIMIT_WAITS    esperas consecutivas por limite, por fase (default: 20)
 #   RALPH_LIMIT_WAIT_DEFAULT fallback de espera em segundos (default: 1800)
 #   RALPH_LIMIT_BUFFER       segundos extras apos o reset (default: 60)
@@ -143,7 +155,11 @@
 #   RALPH_PHASE_TITLE        titulo da fase corrente
 #   RALPH_PHASE_NUM          numero da fase corrente
 #   RALPH_PHASE_TOTAL        total de fases do run
-#   RALPH_PHASE_ATTEMPT      ciclo corrente (1 = implementacao inicial)
+#   RALPH_PHASE_ATTEMPT      ciclo corrente (1 = implementacao inicial; 0 = gates
+#                            contra HEAD antes da sessao, fase check-only ou ja
+#                            commitada)
+#   RALPH_SESSION_MODE       impl | verify — o log-tokens grava fase, ciclo e
+#                            modo em cada linha do tokens.jsonl
 #   RALPH_PHASE_MAX_ATTEMPTS igual a RALPH_MAX_CYCLES
 #   RALPH_TEST_CMD           o comando do gate 2 (vazio quando desabilitado): o
 #                            subagent test-runner roda o mesmo que o gate
@@ -215,6 +231,9 @@ RUN_LOG="$LOG_DIR/run.log"
 MAX_LIMIT_WAITS="${RALPH_MAX_LIMIT_WAITS:-20}"
 LIMIT_WAIT_DEFAULT="${RALPH_LIMIT_WAIT_DEFAULT:-1800}"
 LIMIT_BUFFER="${RALPH_LIMIT_BUFFER:-60}"
+SESSION_TIMEOUT="${RALPH_SESSION_TIMEOUT:-3600}"
+# 1 quando o watchdog encerrou a ultima sessao (run_logged). Lido pelo gate 0.
+SESSION_TIMED_OUT=0
 
 TEST_CMD=""
 PROFILE=""
@@ -608,6 +627,11 @@ preflight_checks() {
 
   if ! [[ "$MAX_CYCLES" =~ ^[0-9]+$ ]] || [ "$MAX_CYCLES" -lt 1 ]; then
     fail "Valor invalido para --max-cycles: '$MAX_CYCLES'. Use um inteiro >= 1."
+    exit 1
+  fi
+
+  if ! [[ "$SESSION_TIMEOUT" =~ ^[0-9]+$ ]]; then
+    fail "Valor invalido para RALPH_SESSION_TIMEOUT: '$SESSION_TIMEOUT'. Use segundos (0 desliga)."
     exit 1
   fi
 
@@ -1046,7 +1070,12 @@ start_dashboard() {
   fi
 
   mkdir -p "$LOG_DIR"
-  : > "$RUN_LOG"
+  # Append, com cabecalho: um run retomado 3 vezes deixava so a ultima invocacao
+  # no run.log, e a evidencia das anteriores sumia. Rotaciona em 5 MB.
+  if [ -f "$RUN_LOG" ] && [ "$(wc -c < "$RUN_LOG")" -gt 5242880 ]; then
+    mv -f "$RUN_LOG" "$RUN_LOG.1"
+  fi
+  printf '\n===== ralph %s — %s =====\n' "$(date '+%d/%m/%Y %H:%M:%S')" "$INPUT_FILE" >> "$RUN_LOG"
 
   # fd 9/10 guardam o terminal: o relatorio final volta para a tela depois que
   # o painel morre.
@@ -1151,10 +1180,52 @@ PREAMBLE
     echo "  e nao prova nada a mais."
     echo "- Ao terminar, rode o comando acima UMA vez. Nao troque de runner: fora dele"
     echo "  voce pode ver verde onde a validacao ve vermelho."
+    # Stdin fechado: nao ha humano na sessao. Na fase 9 de pub-email-alerts um
+    # teste pediu confirmacao, o runner via container anexou o TTY da sessao, e
+    # a sessao esperou a resposta por 2h.
+    echo "- Rode testes e comandos do projeto com stdin fechado (\`<comando> < /dev/null\`)"
+    echo "  e nunca em modo interativo ou watch: nao ha ninguem para responder um prompt."
+    if [ "$SESSION_TIMEOUT" -gt 0 ]; then
+      echo "  A sessao que passar de $(format_duration "$SESSION_TIMEOUT") e encerrada pelo ralph."
+    fi
     if [ -n "$PROFILE" ]; then
       profile_prompt_notes
     fi
   fi
+}
+
+# Saida para plano errado. A sessao que achava a task errada nao tinha como
+# dizer. Na fase 9 de pub-email-alerts ela confirmou no config do CSS que o
+# token pedido nao existia e usou o certo; o verificador, que le so a fase,
+# reprovou; o ciclo de correcao obedeceu e a borda saiu branca. Na fase 4 o
+# mesmo caminho tirou um filtro correto. Na fase 3 a sessao explicou o impasse
+# em prosa, que o ralph nao le. A linha RALPH-CONTEST e lida da mensagem final
+# (session_contests) e vai para o verificador, que confere a evidencia. O run
+# nunca para esperando alguem: e feito para rodar a noite sem contato humano.
+contest_instructions() {
+  local phase_file="$1"
+  cat <<'CONTEST'
+
+## Quando a fase manda algo errado
+A fase foi escrita antes do codigo e pode errar. Se cumprir uma task como esta
+escrita exige algo que voce CONFIRMOU ser errado — cita classe, metodo, rota,
+token ou arquivo que nao existe; contradiz uma regra (BR) ou story (US); obriga
+a quebrar um teste de codigo que esta fase proibe tocar — nao obedeca e nao
+desvie em silencio. Faca o resto da fase e termine a resposta com uma linha por
+task contestada:
+
+RALPH-CONTEST: TASK <n> — <o que esta errado, com a evidencia (arquivo:linha)>
+
+O verificador recebe a contestacao e confere a evidencia no codigo: se procede,
+julga a task pelo objetivo dela, nao pela letra; se nao procede, a task volta
+incompleta com o motivo. Suite vermelha nunca e aceita: se cumprir uma task
+quebra algo que esta fase proibe tocar, nao faca essa parte e conteste. Contestar
+nao e saida para task dificil ou trabalhosa: sem evidencia no codigo, cumpra a
+task.
+CONTEST
+  echo
+  echo "Numeracao das tasks desta fase (a mesma do verificador):"
+  phase_task_lines "$phase_file" | awk '{ t = $0; gsub(/\*\*/, "", t); if (length(t) > 120) t = substr(t, 1, 120) "..."; print NR ". " t }'
 }
 
 build_impl_prompt() {
@@ -1190,9 +1261,10 @@ quebrar.
 - Item "(manual)" e procedimento de quem conduz o PR e nenhum gate o verifica.
   Rode-o se for um comando deste repositorio que voce consegue rodar aqui; se
   exige uma pessoa ou um aparelho, siga em frente
-
-## Fase a implementar
 TASK
+    contest_instructions "$phase_file"
+    echo
+    echo "## Fase a implementar"
     cat "$PHASES_DIR/$phase_file"
   } > "$prompt_file"
 
@@ -1221,7 +1293,22 @@ antes de mudar qualquer coisa.
 - Nao deixe TODOs, placeholders ou testes pulados.
 - Durante a correcao, rode so os testes afetados. Ao final, rode a suite
   completa UMA vez e garanta que ela passa.
+- Motivo do gate 3 vem de um verificador que le so a fase, nao os documentos
+  do plano: se o que ele pede e justamente o erro, conteste em vez de obedecer.
 INTRO
+    contest_instructions "$phase_file"
+    # A sessao nova nao sabe o que a anterior contestou. Sem isto ela refazia o
+    # que tinha sido recusado de proposito, ou desistia de uma contestacao que
+    # ainda estava de pe.
+    if [ -n "$PHASE_CONTESTS" ]; then
+      echo
+      echo "## Contestacoes de sessoes anteriores desta fase"
+      echo "O verificador ja as recebeu. Recusada aparece no motivo abaixo como"
+      echo "\"contestacao recusada\": cumpra a task. As demais continuam de pe; repita a"
+      echo "linha se continuar valendo."
+      echo
+      printf '%s\n' "$PHASE_CONTESTS"
+    fi
     echo
     echo "## Motivo da falha ($gate)"
     echo '```'
@@ -1333,6 +1420,25 @@ VERIFY
     # mesma task de teste reprovou no ciclo 1 por tres gates e, com eles
     # cobertos, no ciclo 2 por um teste "direto" de outra classe que o plano
     # nunca pediu. Citar o bullet da a correcao um alvo que nao se move.
+    # O verificador le so a fase: sem isto ele cobrava a letra de uma task
+    # errada e o ciclo de correcao desfazia o que a sessao tinha feito certo.
+    if [ -n "$PHASE_CONTESTS" ]; then
+      echo
+      echo "## Contestacoes da sessao de implementacao"
+      echo "A sessao que implementou a fase contestou tasks, dizendo que como escritas"
+      echo "estao erradas:"
+      echo
+      printf '%s\n' "$PHASE_CONTESTS"
+      cat <<'VERIFY'
+
+Para cada task contestada, abra o que a evidencia cita e confira:
+- procede (o que a task pede nao existe, contradiz a regra citada, ou quebraria
+  um teste que a fase proibe tocar): julgue pelo objetivo da task, nao pela
+  letra. DONE se o codigo faz o que a evidencia mostra ser o certo.
+- nao procede: TASK <n>: INCOMPLETE — contestacao recusada: <o que voce viu>.
+Contestacao sem evidencia verificavel nao procede.
+VERIFY
+    fi
     cat <<'VERIFY'
 
 ## Onde olhar
@@ -1352,8 +1458,8 @@ VERIFY
     fi
     cat <<'VERIFY'
 
-- Comece pelos arquivos acima. Abra outro so quando a task o citar ou o codigo o
-  importar.
+- Comece pelos arquivos acima. Abra outro so quando a task ou uma contestacao o
+  citar, ou o codigo o importar.
 - Leia cada arquivo uma vez.
 - NAO rode build, testes, typecheck nem lint: outro gate ja cuida disso.
 - NAO leia codigo de dependencias de terceiros (node_modules, vendor, .venv) nem
@@ -1533,19 +1639,98 @@ wait_for_reset() {
 # Engine
 # ---------------------------------------------------------------------------
 
+# Encerra um processo e todos os descendentes. Coleta os filhos ANTES de matar o
+# pai: depois, orfaos sao adotados pelo init e `pgrep -P` nao os acha mais.
+kill_tree() {
+  local pid="$1" kid kids
+  kids=$(pgrep -P "$pid" 2> /dev/null || true)
+  kill -TERM "$pid" 2> /dev/null || true
+  for kid in $kids; do
+    kill_tree "$kid"
+  done
+}
+
 # Roda o comando da engine mandando TUDO para o log. O codex streama raciocinio,
 # patches e tool calls no stdout; espelhar isso na tela enterra as linhas do
 # proprio ralph (fases, gates, causa de falha). Com --verbose / RALPH_VERBOSE=1
 # o comportamento antigo volta.
+#
+# run_logged <log_file> <stdin_file> <cmd...>
+#
+# A engine roda em background sob um watchdog: passou de RALPH_SESSION_TIMEOUT,
+# o ralph encerra a arvore inteira e devolve 124. Na fase 9 de pub-email-alerts
+# um teste pediu confirmacao a um TTY que nunca respondeu, e a sessao ficou 2h
+# "aguardando o codigo de saida" ate alguem matar na mao.
+#
+# O stdin vai explicito: comando assincrono sem redirecionamento proprio le de
+# /dev/null, e o codex perderia o prompt.
+#
+# Comando assincrono tambem ignora SIGINT. Sem o trap, Ctrl-C matava o ralph e
+# deixava a engine escrevendo na arvore. O trap encerra a arvore e devolve o
+# codigo do sinal, que o run_engine ja trata como interrupcao.
 run_logged() {
-  local log_file="$1"
-  shift
+  local log_file="$1" stdin_file="$2"
+  shift 2
+
+  local flag="${log_file%.log}.timeout"
+  rm -f "$flag"
+  SESSION_TIMED_OUT=0
 
   if [ "$VERBOSE" -eq 1 ]; then
-    "$@" 2>&1 | tee "$log_file"
+    ( "$@" < "$stdin_file" 2>&1 | tee "$log_file" ) &
   else
-    "$@" > "$log_file" 2>&1
+    "$@" < "$stdin_file" > "$log_file" 2>&1 &
   fi
+  local pid=$! rc=0 signal=0 watchdog=""
+
+  if [ "$SESSION_TIMEOUT" -gt 0 ]; then
+    (
+      elapsed=0
+      while kill -0 "$pid" 2> /dev/null; do
+        sleep 1
+        elapsed=$((elapsed + 1))
+        if [ "$elapsed" -ge "$SESSION_TIMEOUT" ]; then
+          touch "$flag"
+          kill_tree "$pid"
+          break
+        fi
+      done
+    ) &
+    watchdog=$!
+  fi
+
+  local saved_int saved_term
+  saved_int=$(trap -p INT)
+  saved_term=$(trap -p TERM)
+  trap 'signal=130' INT
+  trap 'signal=143' TERM
+
+  wait "$pid" || rc=$?
+  if [ "$signal" -ne 0 ]; then
+    kill_tree "$pid"
+    wait "$pid" 2> /dev/null || true
+    rc=$signal
+  fi
+  # Com a flag gravada o watchdog esta no meio do kill_tree: espera, nunca mata.
+  # Mata-lo ali o interrompia depois do pai e antes dos filhos, e o comando que
+  # travou a sessao ficava orfao. Sem flag, mata: esperar o `sleep 1` dele
+  # custava ate 1s por sessao.
+  if [ -n "$watchdog" ]; then
+    [ -f "$flag" ] || kill "$watchdog" 2> /dev/null || true
+    wait "$watchdog" 2> /dev/null || true
+  fi
+
+  if [ -n "$saved_int" ]; then eval "$saved_int"; else trap - INT; fi
+  if [ -n "$saved_term" ]; then eval "$saved_term"; else trap - TERM; fi
+
+  if [ "$signal" -eq 0 ] && [ -f "$flag" ]; then
+    rm -f "$flag"
+    SESSION_TIMED_OUT=1
+    echo "[ralph] sessao encerrada: passou de RALPH_SESSION_TIMEOUT (${SESSION_TIMEOUT}s)" >> "$log_file"
+    return 124
+  fi
+  rm -f "$flag"
+  return "$rc"
 }
 
 # run_engine <prompt_file> <log_file> <mode: impl|verify>
@@ -1555,6 +1740,7 @@ run_engine() {
 
   export RALPH_ENGINE="$ENGINE"
   export RALPH_PHASE_MAX_ATTEMPTS="$MAX_CYCLES"
+  export RALPH_SESSION_MODE="$mode"
   # O subagent test-runner resolve o comando por mktux-profile.sh, que le isto
   # primeiro: dentro de um run ele roda exatamente o comando do gate 2.
   export RALPH_TEST_CMD="$TEST_CMD"
@@ -1577,17 +1763,21 @@ run_engine() {
       if [[ "$mode" == "verify" ]]; then
         # -o: so a mensagem final, sem o transcript nem o bloco que o `codex
         # exec` reimprime depois do resumo de tokens. O gate 3 le dali.
-        run_logged "$log_file" codex exec --color never --sandbox read-only \
+        run_logged "$log_file" "$prompt_file" codex exec --color never --sandbox read-only \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${model_args[@]+"${model_args[@]}"} \
-          -o "$(verify_last_message_file "$log_file")" - < "$prompt_file" || rc=$?
+          -o "$(last_message_file "$log_file")" - || rc=$?
       else
-        run_logged "$log_file" codex exec --color never --sandbox danger-full-access \
+        # -o tambem aqui: a mensagem final carrega as contestacoes da sessao e
+        # e o que o relatorio de falha mostra.
+        rm -f "$(last_message_file "$log_file")"
+        run_logged "$log_file" "$prompt_file" codex exec --color never --sandbox danger-full-access \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
-          ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} - < "$prompt_file" || rc=$?
+          ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} \
+          -o "$(last_message_file "$log_file")" - || rc=$?
       fi
     else
-      # < /dev/null: claude -p le stdin quando nao e TTY. Sem o redirect ele
+      # stdin /dev/null: claude -p le stdin quando nao e TTY. Sem o redirect ele
       # consome o stream de quem chamou (ex: o manifest do loop de fases).
       if [[ "$mode" == "verify" ]]; then
         # --disallowedTools, nao --allowedTools: sob --dangerously-skip-permissions
@@ -1600,21 +1790,21 @@ run_engine() {
         # --tools: so essas tres existem na sessao (nem Agent, que abriria um
         # subagent com escrita); o deny fica como segunda trava.
         # --disable-slash-commands: sem a listagem de skills no contexto.
-        run_logged "$log_file" env -u CLAUDECODE claude --dangerously-skip-permissions \
+        run_logged "$log_file" /dev/null env -u CLAUDECODE claude --dangerously-skip-permissions \
           --strict-mcp-config --disable-slash-commands \
           --tools "Read,Glob,Grep" \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${model_args[@]+"${model_args[@]}"} \
           -p "$(cat "$prompt_file")" \
           --disallowedTools "Write,Edit,NotebookEdit,Bash" \
-          --output-format text < /dev/null || rc=$?
+          --output-format text || rc=$?
       else
         # JSON: o exit code do CLI e sinal fraco; o gate 0 le is_error.
-        run_logged "$log_file" env -u CLAUDECODE claude --dangerously-skip-permissions \
+        run_logged "$log_file" /dev/null env -u CLAUDECODE claude --dangerously-skip-permissions \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} \
           -p "$(cat "$prompt_file")" \
-          --output-format json < /dev/null || rc=$?
+          --output-format json || rc=$?
       fi
     fi
 
@@ -1627,7 +1817,8 @@ run_engine() {
       fail "Execucao interrompida (sinal $rc). Abortando o run."
       if [ -n "$(git status --porcelain)" ]; then
         fail "O trabalho parcial ficou na arvore. Antes de rodar de novo:"
-        fail "    commite (o ralph revalida a fase e segue) ou 'git checkout -- . && git clean -fd' (descarta)"
+        fail "    commite como 'feat(phase-${RALPH_PHASE_NUM:-N}): ${RALPH_PHASE_TITLE:-<titulo>}' (o ralph revalida a fase contra HEAD, sem sessao)"
+        fail "    ou 'git checkout -- . && git clean -fd' (descarta)"
       fi
       exit "$rc"
     fi
@@ -1650,8 +1841,20 @@ run_engine() {
 # Preenche GATE_CAUSE quando vermelho.
 GATE_CAUSE=""
 
+session_timeout_cause() {
+  printf '%s' "A sessao passou de RALPH_SESSION_TIMEOUT ($(format_duration "$SESSION_TIMEOUT")) e o ralph a encerrou. Causa mais comum: um comando esperando input que nunca chega (prompt de confirmacao, modo watch, servidor em primeiro plano). Rode testes e comandos do projeto com stdin fechado (< /dev/null) e nunca em modo interativo."
+}
+
 gate0_engine_finished() {
   local log_file="$1" rc="$2"
+
+  # Antes do JSON do claude: a sessao morta pelo watchdog nunca emite resultado,
+  # e "terminou sem emitir um resultado" esconderia o motivo.
+  if [ "$SESSION_TIMED_OUT" -eq 1 ]; then
+    GATE_CAUSE="$(session_timeout_cause) Ultimas linhas do output:"$'\n'"$(engine_tail "$log_file" 40)"
+    state_gate 0 fail
+    return 1
+  fi
 
   if [[ "$ENGINE" == "claude" ]]; then
     if ! grep -qF '"type":"result"' "$log_file" && ! grep -qF '"type": "result"' "$log_file"; then
@@ -1738,9 +1941,39 @@ gate2_tests_pass() {
 # GATE3_RAN diz ao caminho "ja implementada" quais gates de fato validaram HEAD.
 GATE3_RAN=0
 
-# Onde o codex grava a mensagem final do verificador (-o). Ao lado do log.
-verify_last_message_file() {
+# Onde o codex grava a mensagem final da sessao (-o), impl ou verificador. Ao
+# lado do log.
+last_message_file() {
   printf '%s\n' "${1%.log}.last.txt"
+}
+
+# Mensagem final da sessao: o -o do codex, o .result do JSON do claude. Vazio
+# quando a engine nao deixou nenhuma (crash, timeout, claude sem jq).
+session_final_message() {
+  local log_file="$1" last
+  last=$(last_message_file "$log_file")
+  if [ -s "$last" ]; then
+    cat "$last"
+  elif [[ "$ENGINE" == "claude" ]] && command -v jq > /dev/null 2>&1; then
+    jq -r 'select(.type == "result") | .result // empty' "$log_file" 2> /dev/null || true
+  fi
+}
+
+# Linhas RALPH-CONTEST da sessao. Sem mensagem final, le o log: o exemplo do
+# prompt (`TASK <n>`) nao casa com `TASK [0-9]+`. No JSON do claude (sem jq) a
+# linha termina no primeiro \n escapado ou na aspa que fecha a string.
+session_contests() {
+  local log_file="$1" msg
+  msg=$(session_final_message "$log_file")
+  {
+    if [ -n "$msg" ]; then
+      printf '%s\n' "$msg" | grep -oE 'RALPH-CONTEST: TASK [0-9]+.*'
+    elif [[ "$ENGINE" == "claude" ]]; then
+      grep -oE 'RALPH-CONTEST: TASK [0-9]+[^"]*' "$log_file" 2> /dev/null | sed -E 's/\\n.*//; s/\\$//'
+    else
+      grep -oE 'RALPH-CONTEST: TASK [0-9]+.*' "$log_file" 2> /dev/null
+    fi
+  } | awk '!seen[$0]++' | head -n 20 || true
 }
 
 gate3_verify_uncached() {
@@ -1791,7 +2024,7 @@ gate3_verify_uncached() {
   prompt_file=$(build_verify_prompt "$phase_file" "$cycle")
   # Logs sobrevivem ao re-run com o mesmo nome: a mensagem final de um run
   # anterior nao pode passar pelo veredito deste.
-  last_msg=$(verify_last_message_file "$verify_log")
+  last_msg=$(last_message_file "$verify_log")
   rm -f "$last_msg"
   run_engine "$prompt_file" "$verify_log" verify || true
 
@@ -1803,7 +2036,9 @@ gate3_verify_uncached() {
   task_lines=$(sed 's/^[[:space:]]*//' "$verdict_src" | grep -E '^TASK [0-9]+: (DONE|INCOMPLETE|NOT-CODE)' || true)
 
   if [ -z "$task_lines" ]; then
-    GATE_CAUSE="O verificador independente nao emitiu nenhuma linha 'TASK <n>: DONE|INCOMPLETE|NOT-CODE' — nao foi possivel confirmar que a fase esta completa. Ultimas linhas do verificador:"$'\n'"$(engine_tail "$verify_log" 40)"
+    GATE_CAUSE=""
+    [ "$SESSION_TIMED_OUT" -eq 1 ] && GATE_CAUSE="$(session_timeout_cause)"$'\n'
+    GATE_CAUSE="${GATE_CAUSE}O verificador independente nao emitiu nenhuma linha 'TASK <n>: DONE|INCOMPLETE|NOT-CODE' — nao foi possivel confirmar que a fase esta completa. Ultimas linhas do verificador:"$'\n'"$(engine_tail "$verify_log" 40)"
     state_gate 3 fail
     return 1
   fi
@@ -1945,6 +2180,18 @@ phase_is_check_only() {
   grep -qE '^[[:space:]]*\*\*Check-only phase\*\*' "$PHASES_DIR/$1" 2>/dev/null
 }
 
+# Fase ja commitada neste branch com a mensagem que o ralph usa. Acontece quando
+# o run e retomado depois de uma fase fechada fora dele — alguem commitou a mao o
+# trabalho de uma fase que travou —, ou quando o plano mudou e zerou o
+# .progress. Na fase 3 de pub-email-alerts o commit manual estava la e o ralph
+# abriu uma sessao inteira para ela nao escrever nada. Os gates contra HEAD
+# decidem: a mensagem do commit so escolhe o caminho, nunca aprova.
+# Sem -q: com pipefail, o grep que sai no primeiro match mata o git log com
+# SIGPIPE e o pipeline "falha" justamente quando achou.
+phase_committed() {
+  git log -n 500 --format=%s 2> /dev/null | grep -xF "feat(phase-$1): $2" > /dev/null
+}
+
 # O gate 3 e uma funcao do codigo: bytes identicos tem que dar o mesmo veredito.
 # Sem memo, um ciclo de correcao que nao escreveu nada paga OUTRA sessao de
 # verificacao para julgar exatamente os mesmos bytes — e verificador fraco muda
@@ -1954,16 +2201,18 @@ gate3_independent_verify() {
   local phase_file="$1" cycle="$2" session_wrote="$3"
   local tree_sig rc=0
 
-  tree_sig=$(tree_signature)
+  # A contestacao entra na chave: sessao que nao escreveu nada mas trouxe
+  # evidencia nova merece outro julgamento; a mesma, nao.
+  tree_sig="$(tree_signature)|$PHASE_CONTESTS"
 
   if [ -n "$GATE3_MEMO_SIG" ] && [ "$tree_sig" = "$GATE3_MEMO_SIG" ]; then
     GATE_CAUSE="$GATE3_MEMO_CAUSE"
     GATE3_RAN="$GATE3_MEMO_RAN"
     if [ "$GATE3_MEMO_RC" -eq 0 ]; then
-      success "Gate 3 — codigo identico ao do ciclo anterior; veredito mantido (aprovado)"
+      success "Gate 3 — codigo e contestacoes identicos ao ciclo anterior; veredito mantido (aprovado)"
       state_gate 3 pass
     else
-      warn "Gate 3 — codigo identico ao do ciclo anterior; veredito mantido (reprovado), sem re-julgar"
+      warn "Gate 3 — codigo e contestacoes identicos ao ciclo anterior; veredito mantido (reprovado), sem re-julgar"
       state_gate 3 fail
     fi
     return "$GATE3_MEMO_RC"
@@ -2055,15 +2304,53 @@ commit_wip() {
   warn "Commit wip criado para a fase $phase_num — a proxima fase parte de arvore limpa"
 }
 
+# Contestacoes da fase corrente, de todos os ciclos: vao para o verificador e
+# para o prompt de correcao. As de fases que fecharam verdes (o verificador
+# aceitou a evidencia) saem no relatorio final para conferir antes do PR.
+PHASE_CONTESTS=""
+CONTEST_NOTES=()
+
+record_contests() {
+  local phase_num="$1" contests="$2" line
+  [ -n "$contests" ] || return 0
+  while IFS= read -r line; do
+    if [ -n "$line" ]; then
+      CONTEST_NOTES+=("Phase $phase_num: ${line#RALPH-CONTEST: }")
+    fi
+  done <<< "$contests"
+}
+
+# Logs de uma execucao anterior desta fase saem do caminho antes dela reabrir.
+# Os nomes se repetem entre runs e entre features (phase-03.cycle-2.log), entao
+# o ciclo 3 de uma feature de semana passada aparecia ao lado do ciclo 1 de hoje
+# e parecia parte do run. Vao para logs/archive/<inicio deste run>/; ficam os 10
+# arquivos mais recentes.
+LOG_ARCHIVE_KEEP=10
+
+archive_phase_logs() {
+  local phase_file="$1" dest old
+  compgen -G "$LOG_DIR/${phase_file%.md}.*" > /dev/null || return 0
+  dest="$LOG_DIR/archive/$RUN_STAMP"
+  mkdir -p "$dest"
+  mv -f "$LOG_DIR/${phase_file%.md}."* "$dest"/
+  ls -1d "$LOG_DIR/archive"/*/ 2> /dev/null | sort -r | tail -n +$((LOG_ARCHIVE_KEEP + 1)) \
+    | while IFS= read -r old; do rm -rf "$old"; done
+  log "Logs anteriores de ${phase_file%.md} arquivados em $dest/"
+}
+
 # run_phase <phase_file> <phase_num> <phase_title> <seq> <total>
 run_phase() {
   local phase_file="$1" phase_num="$2" phase_title="$3" seq="$4" total="$5"
-  local phase_start
+  local phase_start contests="" log_file=""
   phase_start=$(date +%s)
+  PHASE_CONTESTS=""
 
   export RALPH_PHASE_TITLE="$phase_title"
   export RALPH_PHASE_NUM="$phase_num"
   export RALPH_PHASE_TOTAL="$total"
+  # 0 ate o loop de ciclos: a verificacao contra HEAD antes da sessao e o
+  # ciclo 0 (test-0, verify-0), e o valor da fase anterior nao pode vazar.
+  export RALPH_PHASE_ATTEMPT=0
 
   LIMIT_WAITS=0
   GATE_CAUSE=""
@@ -2073,14 +2360,24 @@ run_phase() {
 
   echo ""
   log "[$seq/$total] Phase $phase_num: $phase_title"
+  archive_phase_logs "$phase_file"
 
-  # Fase so de verificacao: gates 2 e 3 contra HEAD, sem sessao. Verde fecha a
-  # fase como "ja implementada"; vermelho abre o ciclo 1 ja como correcao, com a
-  # causa. Sem gate 3 (--no-verify) nao ha quem confirme as afirmacoes: segue o
-  # fluxo normal. Logs deste passo levam o numero 0 (test-0, verify-0).
-  local precheck_failed=0
-  if phase_is_check_only "$phase_file" && [ "$VERIFY_MODE" != "off" ]; then
-    log "Fase so de verificacao (**Check-only phase**) — gates contra HEAD, sem sessao"
+  # Fase so de verificacao, ou ja commitada neste branch: gates 2 e 3 contra
+  # HEAD, sem sessao. Verde fecha a fase como "ja implementada"; vermelho abre o
+  # ciclo 1 ja como correcao, com a causa. Sem gate 3 (--no-verify) nao ha quem
+  # confirme as afirmacoes: segue o fluxo normal. Logs deste passo levam o
+  # numero 0 (test-0, verify-0).
+  local precheck_failed=0 precheck_what=""
+  if [ "$VERIFY_MODE" != "off" ]; then
+    if phase_is_check_only "$phase_file"; then
+      precheck_what="Fase so de verificacao"
+      log "Fase so de verificacao (**Check-only phase**) — gates contra HEAD, sem sessao"
+    elif phase_committed "$phase_num" "$phase_title"; then
+      precheck_what="Fase ja commitada neste branch"
+      log "Fase ja commitada neste branch (feat(phase-$phase_num)) — gates contra HEAD, sem sessao"
+    fi
+  fi
+  if [ -n "$precheck_what" ]; then
     state_cycle "$seq" 1
     state_gate 0 skip
     state_gate 1 skip
@@ -2099,8 +2396,8 @@ run_phase() {
       return 0
     fi
     if [ "$precheck_failed" -eq 1 ]; then
-      fail "Fase so de verificacao reprovou contra HEAD ($LAST_GATE) — abrindo sessao de correcao"
-      GATE_CAUSE="Fase so de verificacao: o ralph rodou os gates contra o codigo em HEAD, sem sessao de implementacao, e eles reprovaram. Corrija o que falta."$'\n'"$GATE_CAUSE"
+      fail "$precheck_what reprovou contra HEAD ($LAST_GATE) — abrindo sessao de correcao"
+      GATE_CAUSE="$precheck_what: o ralph rodou os gates contra o codigo em HEAD, sem sessao de implementacao, e eles reprovaram. Corrija o que falta."$'\n'"$GATE_CAUSE"
     fi
   fi
 
@@ -2111,7 +2408,7 @@ run_phase() {
     [ "$cycle" -gt 1 ] && warn "Ciclo de correcao $cycle/$MAX_CYCLES..."
     state_cycle "$seq" "$cycle"
 
-    local prompt_file log_file rc=0 sig_before
+    local prompt_file rc=0 sig_before
     log_file="$LOG_DIR/${phase_file%.md}.cycle-${cycle}.log"
 
     if [ "$cycle" -eq 1 ] && [ "$precheck_failed" -eq 0 ]; then
@@ -2124,6 +2421,12 @@ run_phase() {
     run_engine "$prompt_file" "$log_file" impl || rc=$?
 
     GATE_CAUSE=""
+    contests=$(session_contests "$log_file")
+    if [ -n "$contests" ]; then
+      warn "A sessao contestou a fase:"
+      printf '%s\n' "$contests" | sed 's/^/    /'
+      PHASE_CONTESTS=$(printf '%s\n%s\n' "$PHASE_CONTESTS" "$contests" | awk 'NF && !seen[$0]++')
+    fi
 
     # Gate 1 e sinal, nao veredito: uma fase ja implementada faz o engine
     # (corretamente) nao escrever nada. Quem decide sao os gates 2 e 3.
@@ -2163,6 +2466,7 @@ run_phase() {
           log "Gate 2 verde contra o codigo em HEAD; nenhum commit criado."
         fi
         mark_phase_done "$phase_file"
+        record_contests "$phase_num" "$PHASE_CONTESTS"
         state_tasks_all "$seq" done
         state_phase "$seq" done
         return 0
@@ -2177,6 +2481,7 @@ run_phase() {
       fi
       save_memory "$phase_file" "$phase_num" "$phase_title" "$cycles_run" "$phase_duration"
       mark_phase_done "$phase_file"
+      record_contests "$phase_num" "$PHASE_CONTESTS"
       state_tasks_all "$seq" done
       state_phase "$seq" done
       return 0
@@ -2212,13 +2517,23 @@ run_phase() {
   fail "Phase $phase_num: $phase_title — FALHOU apos $cycles_run ciclo(s) ($(format_duration "$phase_duration"))"
   fail "Ultima causa ($LAST_GATE):"
   printf '%s\n' "$GATE_CAUSE" | head -n 20 | sed 's/^/    /'
+  # A sessao costuma saber por que travou — na fase 3 de pub-email-alerts ela
+  # disse que o comando que quebrava era proibido nesta fase — e so o log
+  # guardava isso.
+  local final_msg=""
+  [ -n "$log_file" ] && final_msg=$(session_final_message "$log_file")
+  if [ -n "$final_msg" ]; then
+    fail "Ultima mensagem da sessao (fim):"
+    printf '%s\n' "$final_msg" | grep -v '^[[:space:]]*$' | tail -n 12 | sed 's/^/    /'
+  fi
   fail "Logs em: $LOG_DIR/${phase_file%.md}.*"
 
   # O trabalho parcial fica na arvore; o preflight da proxima execucao exige
   # arvore limpa. Diga o que fazer em vez de deixar o dev descobrir no abort.
   if [ -n "$(git status --porcelain)" ]; then
     warn "O trabalho parcial desta fase ficou na arvore. Antes de re-rodar o ralph:"
-    warn "    commite (o ralph revalida a fase e segue) ou 'git checkout -- . && git clean -fd' (descarta)"
+    warn "    commite como 'feat(phase-$phase_num): $phase_title' (o ralph revalida a fase contra HEAD, sem sessao)"
+    warn "    ou 'git checkout -- . && git clean -fd' (descarta)"
   fi
   return 1
 }
@@ -2228,6 +2543,7 @@ run_phase() {
 # ---------------------------------------------------------------------------
 
 LAST_GATE=""
+RUN_STAMP="$(date '+%Y%m%d-%H%M%S')"
 
 main() {
   preflight_checks
@@ -2365,6 +2681,12 @@ main() {
     echo ""
     warn "Pendencias manuais (${#pending[@]}) — de quem conduz, antes do PR:"
     for phase in "${pending[@]}"; do printf '    %s\n' "$phase"; done
+  fi
+
+  if [ ${#CONTEST_NOTES[@]} -gt 0 ]; then
+    echo ""
+    warn "Contestacoes aceitas pelo verificador (${#CONTEST_NOTES[@]}) — a sessao desviou da letra da task; confira antes do PR:"
+    for phase in "${CONTEST_NOTES[@]}"; do printf '    %s\n' "$phase"; done
   fi
 
   echo ""

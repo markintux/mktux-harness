@@ -80,7 +80,7 @@ Por fase, em ordem. Todos verdes → commit. Qualquer vermelho → ciclo de corr
 
 | Gate | O que e | Reprova? |
 |---|---|---|
-| **0** | a engine terminou de verdade (claude: `is_error` no JSON; codex: exit code) | sim |
+| **0** | a engine terminou de verdade (claude: `is_error` no JSON; codex: exit code), dentro de `RALPH_SESSION_TIMEOUT` | sim |
 | **1** | a sessao escreveu codigo? **Sinal, nao veredito** — fase ja implementada faz a engine (corretamente) nao escrever nada | nao |
 | **2** | suite de testes do projeto, rodada **pelo ralph**, fora da sessao do agente | sim |
 | **3** | sessao verificadora independente, read-only, task a task | sim, em `INCOMPLETE` |
@@ -131,6 +131,44 @@ fechamento que so afirma estado. O ralph roda os gates 2 e 3 contra HEAD
 sessao**, sem commit; vermelho abre o ciclo 1 ja com o prompt de correcao e a
 causa. O gate 3 mantem o poder de reprovar. Com `--no-verify` o marcador e
 ignorado e a fase segue o fluxo normal.
+
+**Fase ja commitada no branch segue o mesmo caminho.** Commit com a mensagem do
+ralph (`feat(phase-N): <titulo>`, nao `wip(...)`) nos ultimos 500 do branch: o
+ralph roda os gates contra HEAD antes de abrir sessao. E o caso de retomar
+depois de commitar a mao o trabalho de uma fase que travou, ou de o plano mudar
+e zerar o `.progress`. A mensagem escolhe o caminho; quem aprova sao os gates.
+
+### Contestacao (`RALPH-CONTEST`)
+
+O verificador le so a fase. Quando a fase erra — cita token, classe ou arquivo
+que nao existe, contradiz uma BR/US, exige quebrar teste que ela mesma proibe
+tocar — o ciclo de correcao obedecia o verificador e desfazia o que a sessao
+tinha feito certo. Agora a sessao de implementacao (ou de correcao) pode
+terminar a resposta com uma linha por task:
+
+```
+RALPH-CONTEST: TASK 4 — border-border nao existe (tailwind.config.js:26)
+```
+
+O ralph le a mensagem final da sessao (codex: `-o` em `cycle-M.last.txt`;
+claude: o `result` do JSON) e entrega as contestacoes da fase, de todos os
+ciclos, ao verificador do gate 3 e ao prompt de correcao seguinte. O
+verificador abre o que a evidencia cita:
+
+- procede → julga a task pelo objetivo, nao pela letra (DONE se o codigo faz o
+  certo);
+- nao procede → `TASK n: INCOMPLETE — contestacao recusada: ...`, e o ciclo de
+  correcao recebe a recusa.
+
+**Nada para o run esperando alguem** — o ralph e feito para rodar a noite sem
+contato humano. Suite vermelha nunca e aceita: task que quebraria algo que a
+fase proibe tocar fica por fazer e e contestada. Fase verde com contestacao sai
+em *Contestacoes aceitas pelo verificador* no relatorio final, para revisar
+antes do PR. O memo do gate 3 inclui as contestacoes: correcao que nao escreveu
+nada mas trouxe evidencia nova e julgada de novo.
+
+Fase que falha por outro motivo mostra no relatorio o fim da mensagem final da
+sessao — quase sempre ela ja diz por que travou.
 
 **Fase declarada `**Operational phase**` nao e reprovada pelo gate 3.** Ele roda e
 reporta, mas perde o poder de reprovar. Marcador de planos antigos, anterior ao
@@ -210,6 +248,7 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd   # Codex: $PLUGIN_
 | `RALPH_VERIFY_MODEL` | modelo das sessoes auxiliares |
 | `RALPH_VERIFY_EFFORT` | esforco dessas sessoes |
 | `RALPH_MAX_CYCLES` | ciclos de correcao por fase (default: 3) |
+| `RALPH_SESSION_TIMEOUT` | segundos que uma sessao de engine pode durar (default: 3600; `0` desliga). Passou, o ralph encerra a arvore da sessao e o gate 0 reprova com a causa |
 | `RALPH_MAX_LIMIT_WAITS` | esperas consecutivas por limite, por fase (default: 20) |
 | `RALPH_SMOKE` | `0` desliga o smoke test da engine |
 | `RALPH_MEMORY` | pagina por fase no ai-memory (`ralph/<feature>/phase-NN.md`, pos-commit, sem LLM); `0` desliga. Sem o binario ou com o servidor fora do ar, desliga sozinha |
@@ -231,13 +270,19 @@ anteriores para dentro da sessao fria.
 ├── .progress            fases ja concluidas
 ├── state/run.tsv        snapshot do run, lido pelo ralph-watch
 └── logs/
-    ├── run.log                 log linear do run inteiro
+    ├── run.log                 log linear (--dashboard), um bloco por invocacao
     ├── phase-NN.cycle-M.log    sessao de implementacao
+    ├── phase-NN.cycle-M.last.txt   mensagem final da sessao (codex)
     ├── phase-NN.test-M.log     saida do gate 2
     ├── phase-NN.verify-M.log   sessao do gate 3
     ├── phase-NN.verify-M.last.txt  veredito final do gate 3 (codex)
-    └── phase-NN.memory.log     saida do `ai-memory write-page`
+    ├── phase-NN.memory.log     saida do `ai-memory write-page`
+    └── archive/<inicio do run>/    logs de um run anterior da fase, movidos
+                                    quando ela reabre (ficam os 10 ultimos)
 ```
+
+O que esta em `logs/` e do run mais recente de cada fase. Diagnostico de um run
+antigo: `logs/archive/`.
 
 `.phases/` e `.harness/` (telemetria dos hooks) sao registrados em
 `.git/info/exclude` automaticamente — o ralph nao mexe no `.gitignore` do
@@ -256,9 +301,10 @@ sessao.
 | task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do codigo, ou marque `(manual)` se ela for mesmo procedimento |
 | fase de fechamento reprova sem nada de errado no codigo | task procedural sem `(manual)`: o verificador tenta julgar o que nao tem como ler. Marque os procedimentos com `(manual)` |
 | `gate 0 vermelho` e o relatorio manda revisar as tasks | leia o FIM do `phase-NN.cycle-M.log` antes de mexer no plano: engine que morre por cota, rede ou crash cai no mesmo lugar. Task correta nao e a causa mais provavel |
+| gate 0 vermelho com `passou de RALPH_SESSION_TIMEOUT` | um comando da sessao esperou input que nunca veio (prompt de confirmacao, modo watch, servidor em primeiro plano). O prompt ja pede stdin fechado; ache e corrija o teste ou comando que pergunta — o fim do `cycle-M.log` mostra o ultimo comando |
 | fase reprova em todo ciclo ate esgotar | task com escape condicional (*"faca X, mas se ficar estranho, deixe"*). O verificador escolhe INCOMPLETE na duvida |
 | gate 2 sempre vermelho no primeiro run | ambiente do perfil incompleto. A causa de cada perfil esta em *Perfis de stack* |
-| o run reinicia da fase 1 depois de voce editar o plano | editar o `project-phases.md` invalida o stamp e zera `.progress`. Use `--from N` |
+| o run reinicia da fase 1 depois de voce editar o plano | editar o `project-phases.md` invalida o stamp e zera `.progress`. Fase ja commitada como `feat(phase-N): <titulo>` e revalidada contra HEAD sem sessao; `--from N` pula de vez as anteriores |
 | preflight aborta com `Hooks do ai-memory em ... sem jq` | os hooks do ai-memory estao na config de usuario e o isolamento precisa do `jq`. Instale o `jq`; `RALPH_HOOK_ISOLATION=0` so se aceitar que as sessoes consumam handoffs |
 | `Falha ao gravar no ai-memory` | leia `.phases/logs/phase-NN.memory.log`. Servidor caiu no meio do run: `ai-memory status`; no macOS, `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. A fase continua valida |
 

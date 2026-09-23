@@ -68,6 +68,8 @@ verify=0
 
 # O ralph exporta o comando do gate 2 para as sessoes (o test-runner le dali).
 printf '%s\n' "${RALPH_TEST_CMD-<unset>}" >> "$state/session_test_cmd"
+# Fase, ciclo e modo: o log-tokens grava os tres em cada linha do tokens.jsonl.
+printf '%s %s %s\n' "${RALPH_PHASE_NUM-}" "${RALPH_PHASE_ATTEMPT-}" "${RALPH_SESSION_MODE-}" >> "$state/session_env"
 
 bump() {
   local f="$state/$1" n=0
@@ -157,6 +159,9 @@ fi
 if [ "$verify" -eq 1 ] && [ "$name" = "codex" ]; then
   echo "$last" > "$state/verify_last_path"
 fi
+if [ "$verify" -eq 0 ] && [ "$name" = "codex" ] && [ -n "$last" ]; then
+  echo "$last" > "$state/impl_last_path"
+fi
 if [ "$verify" -eq 0 ] && [ -n "$effort" ]; then
   echo "$effort" > "$state/impl_effort"
 fi
@@ -193,7 +198,15 @@ if [ "$verify" -eq 1 ]; then
           *) echo "TASK $i: DONE" ;;
         esac
       done < <(grep -E '^[[:space:]]*- \[[ x]\]' <<< "$prompt")
-    elif [ "$scenario" = "verify-incomplete-once" ] && [ "$n" -eq 1 ]; then
+    elif { [ "$scenario" = "contest-verified" ] || [ "$scenario" = "contest-late" ]; } \
+      && grep -q '^## Phase 1:' <<< "$prompt" && ! grep -q '^RALPH-CONTEST: TASK 1 ' <<< "$prompt"; then
+      # Fase 1 sem a contestacao no prompt: cobra a letra da task.
+      echo "TASK 1: INCOMPLETE — usa outro token em vez de border-border"
+      for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
+    elif [ "$scenario" = "contest-rejected" ] && [ "$n" -eq 1 ]; then
+      echo "TASK 1: INCOMPLETE — contestacao recusada: border-border esta definido em tailwind.config.js:30"
+      for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
+    elif { [ "$scenario" = "verify-incomplete-once" ] || [ "$scenario" = "contest-other" ]; } && [ "$n" -eq 1 ]; then
       echo "TASK 1: INCOMPLETE — o arquivo nao foi criado"
       for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
     else
@@ -225,8 +238,14 @@ fi
 
 # --- sessao de implementacao -------------------------------------------------
 n=$(bump impl_calls)
+# Quem roda a engine: o teste de sinal manda SIGTERM para esse processo.
+echo "$PPID" > "$state/engine_ppid"
 
-emit_claude_ok()    { echo '{"type":"result","subtype":"success","is_error":false,"result":"implementado"}'; }
+# hang-once: a 1a sessao trava (comando esperando input que nunca chega).
+if [ "$scenario" = "hang-once" ] && [ "$n" -eq 1 ]; then
+  sleep 37
+fi
+
 emit_claude_limit() { echo "{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"result\":\"Claude AI usage limit reached|$1\"}"; }
 
 case "$scenario" in
@@ -255,6 +274,7 @@ write=1
 [ "$scenario" = "empty-diff" ] && write=0
 [ "$scenario" = "already-done" ] && write=0
 [ "$scenario" = "stall-after-red" ] && [ "$n" -gt 1 ] && write=0
+[ "$scenario" = "contest-late" ] && [ "$n" -eq 2 ] && write=0
 
 if [ "$write" -eq 1 ]; then
   mkdir -p src
@@ -277,7 +297,32 @@ if [ "$scenario" = "false-429" ]; then
   exit 0
 fi
 
-if [ "$name" = "claude" ]; then emit_claude_ok; else echo "Done."; fi
+# Mensagem final da sessao: o .result do claude, o -o do codex.
+final="implementado"
+case "$scenario" in
+  contest-verified|contest-rejected)
+    [ "$n" -eq 1 ] && final="$final
+RALPH-CONTEST: TASK 1 — o token border-border nao existe (tailwind.config.js:26)" ;;
+  contest-late)
+    [ "$n" -eq 2 ] && final="$final
+RALPH-CONTEST: TASK 1 — o token border-border nao existe (tailwind.config.js:26)" ;;
+  contest-green|contest-test-red)
+    final="$final
+RALPH-CONTEST: TASK 2 — BR-13 exige o filtro que a task nao cita (feature-description.md:149)" ;;
+  contest-other)
+    [ "$n" -eq 1 ] && final="$final
+RALPH-CONTEST: TASK 2 — BR-13 exige o filtro que a task nao cita (feature-description.md:149)" ;;
+  empty-diff)
+    final="Travado: SendPubReportsTest so passa tocando o comando, proibido nesta fase" ;;
+esac
+[ -n "$last" ] && printf '%s\n' "$final" > "$last"
+if [ "$name" = "claude" ]; then
+  printf '{"type":"result","subtype":"success","is_error":false,"result":"%s"}\n' \
+    "$(printf '%s' "$final" | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
+else
+  echo "Done."
+  echo "$final"
+fi
 exit 0
 MOCK
 
@@ -322,7 +367,7 @@ f="$state/test_calls"; n=0
 [ -f "$f" ] && n=$(cat "$f")
 n=$((n + 1)); echo "$n" > "$f"
 
-if [ "$scenario" = "test-red-once" ] || [ "$scenario" = "stall-after-red" ]; then
+if [ "$scenario" = "test-red-once" ] || [ "$scenario" = "stall-after-red" ] || [ "$scenario" = "contest-test-red" ]; then
   if [ "$n" -eq 1 ]; then
     echo "1 failing test: ExpectedFooTest"
     exit 1
@@ -434,6 +479,7 @@ run_ralph() {
     RALPH_VERIFY_MODEL="${CASE_VERIFY_MODEL:-}" \
     RALPH_VERIFY_EFFORT="${CASE_VERIFY_EFFORT:-}" \
     RALPH_SMOKE="${CASE_SMOKE:-0}" \
+    RALPH_SESSION_TIMEOUT="${CASE_SESSION_TIMEOUT:-}" \
     RALPH_MEMORY="${CASE_MEMORY:-0}" \
     RALPH_MEMORY_BIN="${CASE_MEMORY_BIN:-ai-memory}" \
     RALPH_HOOK_ISOLATION="${CASE_HOOK_ISOLATION:-1}" \
@@ -473,6 +519,10 @@ if case_enabled ok-first; then
   assert_eq "feat(phase-2): Feature" "$(git -C "$d/repo" log -1 --pretty=%s)" "mensagem de commit da ultima fase"
   assert_eq 2 "$(cat "$d/state/impl_calls")" "1 sessao de implementacao por fase (2 fases)"
   assert_eq 2 "$(cat "$d/state/verify_calls")" "gate 3 (default always) rodou em toda fase"
+  assert_eq "1 1 impl
+1 1 verify
+2 1 impl
+2 1 verify" "$(cat "$d/state/session_env")" "sessoes recebem fase, ciclo e modo (para o tokens.jsonl)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -598,7 +648,11 @@ if case_enabled resume-invalidated; then
   rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "segunda execucao verde"
   assert_contains "$d/out.log" "progresso zerado" "progresso invalidado com aviso"
-  assert_eq $((before + 4)) "$(commits "$d")" "3 fases re-executadas + commit da mutacao"
+  # As fases 1 e 2 ja tem commit feat(phase-N): os gates as revalidam contra
+  # HEAD, sem sessao. So a fase nova abre sessao e commita.
+  assert_contains "$d/out.log" "Fase ja commitada neste branch (feat(phase-1))" "fase commitada revalidada sem sessao"
+  assert_eq 3 "$(cat "$d/state/impl_calls")" "so a fase nova abriu sessao (2 do 1o run + 1)"
+  assert_eq $((before + 2)) "$(commits "$d")" "commit da mutacao + fase 3"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1707,6 +1761,7 @@ if case_enabled check-only; then
   assert_eq $((before + 1)) "$(commits "$d")" "so a fase 1 commita"
   assert_contains "$d/repo/.phases/.progress" "phase-02.md" "progresso registra a fase check-only"
   test -f "$d/repo/.phases/logs/phase-02.verify-0.log" && ok "verificacao previa loga como ciclo 0" || bad "verificacao previa loga como ciclo 0"
+  assert_contains "$d/state/session_env" "2 0 verify" "verificacao previa exporta ciclo 0, sem herdar o da fase anterior"
   assert_contains "$d/out.log" "Pendencias manuais (1)" "(manual) da fase check-only segue no relatorio"
 
   d=$(new_case check-only-red)
@@ -1721,6 +1776,184 @@ if case_enabled check-only; then
   assert_contains "$fp" "Motivo da falha (gate 3" "ciclo 1 usa o prompt de correcao"
   assert_contains "$fp" "TASK 1: INCOMPLETE" "com o veredito da verificacao previa"
   assert_contains "$d/out.log" "COMPLETA" "fase corrigida e commitada"
+fi
+
+# ---------------------------------------------------------------------------
+# 49. Sessao travada: o watchdog encerra no RALPH_SESSION_TIMEOUT, o gate 0
+#     reprova com a causa e o ciclo de correcao segue. Na fase 9 de
+#     pub-email-alerts a sessao esperou 2h por um prompt de confirmacao.
+# ---------------------------------------------------------------------------
+if case_enabled session-timeout; then
+  header "49. sessao travada -> encerrada no timeout, ciclo de correcao"
+  d=$(new_case session-timeout)
+  started=$(date +%s)
+  rc=$(CASE_SESSION_TIMEOUT=2 run_ralph "$d" hang-once --engine claude --test-cmd "$d/test.sh" --max-cycles 2)
+  assert_eq 0 "$rc" "exit 0 depois do ciclo de correcao"
+  [ $(($(date +%s) - started)) -lt 30 ] && ok "encerrou antes do sleep da sessao (37s)" || bad "encerrou antes do sleep da sessao (37s)"
+  assert_contains "$d/out.log" "Gate 0 vermelho" "gate 0 reprovou a sessao encerrada"
+  fp="$d/repo/.phases/prompts/phase-01.cycle-2.txt"
+  assert_contains "$fp" "passou de RALPH_SESSION_TIMEOUT (2s)" "causa do ciclo diz que foi o timeout"
+  assert_contains "$fp" "stdin fechado" "causa diz como nao travar de novo"
+  assert_contains "$d/repo/.phases/logs/phase-01.cycle-1.log" "[ralph] sessao encerrada" "log da sessao marca o encerramento"
+  pgrep -f 'sleep 37' > /dev/null && bad "arvore da sessao encerrada (sem sleep orfao)" || ok "arvore da sessao encerrada (sem sleep orfao)"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "com stdin fechado" "prompt manda rodar comandos sem stdin"
+  assert_not_contains "$d/out.log" "Terminated" "sem aviso de job control do bash na tela"
+
+  d=$(new_case session-timeout-bad)
+  rc=$(CASE_SESSION_TIMEOUT=1h run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 1 "$rc" "valor invalido: exit 1"
+  assert_contains "$d/out.log" "Valor invalido para RALPH_SESSION_TIMEOUT" "diz o que esta errado"
+fi
+
+# ---------------------------------------------------------------------------
+# 50. Sinal durante a sessao: a engine roda em background (watchdog), e comando
+#     assincrono nao recebe o sinal do terminal. O ralph encerra a arvore e
+#     aborta, em vez de morrer e deixar a engine escrevendo na arvore.
+# ---------------------------------------------------------------------------
+if case_enabled session-signal; then
+  header "50. SIGTERM durante a sessao -> engine encerrada, run abortado"
+  d=$(new_case session-signal)
+  ( CASE_SESSION_TIMEOUT=0 run_ralph "$d" hang-once --engine claude --test-cmd "$d/test.sh" > "$d/rc.txt" ) &
+  bg=$!
+  for _ in $(seq 1 50); do [ -s "$d/state/engine_ppid" ] && break; sleep 0.2; done
+  kill -TERM "$(cat "$d/state/engine_ppid")"
+  wait "$bg"
+  assert_eq 143 "$(cat "$d/rc.txt")" "exit 143"
+  assert_contains "$d/out.log" "Execucao interrompida (sinal 143)" "tratado como interrupcao, nao como falha da fase"
+  pgrep -f 'sleep 37' > /dev/null && bad "engine encerrada junto" || ok "engine encerrada junto"
+  assert_eq 1 "$(cat "$d/state/impl_calls")" "nenhum ciclo de correcao aberto"
+fi
+
+# ---------------------------------------------------------------------------
+# 51. RALPH-CONTEST: a sessao contesta a task e o verificador confere a
+#     evidencia. Nada para o run — o ralph roda a noite sem contato humano. Na
+#     fase 9 de pub-email-alerts o verificador, sem a contestacao, cobrou um
+#     token de CSS que nao existia e o ciclo de correcao obedeceu.
+# ---------------------------------------------------------------------------
+if case_enabled contest; then
+  header "51. contestacao vai para o verificador, que confere a evidencia"
+  for engine in claude codex; do
+    d=$(new_case "contest-$engine")
+    rc=$(run_ralph "$d" contest-verified --engine "$engine" --test-cmd "$d/test.sh" --max-cycles 3)
+    assert_eq 0 "$rc" "$engine: exit 0, sem parar o run"
+    assert_eq 2 "$(cat "$d/state/impl_calls")" "$engine: uma sessao por fase, sem ciclo de correcao"
+    vp="$d/repo/.phases/prompts/phase-01.verify-1.txt"
+    assert_contains "$vp" "## Contestacoes da sessao de implementacao" "$engine: verificador recebe a contestacao"
+    assert_contains "$vp" "RALPH-CONTEST: TASK 1 — o token border-border nao existe (tailwind.config.js:26)" "$engine: com a evidencia"
+    assert_contains "$d/out.log" "Contestacoes aceitas pelo verificador (1)" "$engine: aceita vai para o relatorio"
+    assert_contains "$d/out.log" "Phase 1: TASK 1 — o token border-border nao existe" "$engine: com a fase e o texto"
+    assert_eq 3 "$(commits "$d")" "$engine: as 2 fases commitadas"
+  done
+  assert_contains "$d/state/impl_last_path" ".cycle-1.last.txt" "codex: sessao de implementacao grava a mensagem final com -o"
+  assert_not_contains "$d/repo/.phases/prompts/phase-02.verify-1.txt" "Contestacoes da sessao" "contestacao nao vaza para a fase seguinte"
+
+  cp="$d/repo/.phases/prompts/phase-01.cycle-1.txt"
+  assert_contains "$cp" "RALPH-CONTEST: TASK <n>" "prompt de implementacao ensina a contestar"
+  assert_contains "$cp" "2. Task: cria o arquivo B" "prompt numera as tasks como o verificador"
+  assert_contains "$cp" "Suite vermelha nunca e aceita" "prompt: contestar nao libera suite vermelha"
+  assert_not_contains "$cp" "para a fase" "prompt nao promete parada"
+
+  # Verificador recusa a evidencia: ciclo de correcao normal, com a recusa e a
+  # contestacao anterior no prompt.
+  d=$(new_case contest-rejected)
+  rc=$(run_ralph "$d" contest-rejected --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 0 "$rc" "recusada: exit 0 depois da correcao"
+  assert_eq 3 "$(cat "$d/state/impl_calls")" "recusada: ciclo de correcao aberto"
+  fp="$d/repo/.phases/prompts/phase-01.cycle-2.txt"
+  assert_contains "$fp" "contestacao recusada: border-border esta definido" "correcao recebe a recusa"
+  assert_contains "$fp" "## Contestacoes de sessoes anteriores desta fase" "correcao sabe o que foi contestado"
+  assert_contains "$fp" "conteste em vez de obedecer" "correcao lembra que o verificador le so a fase"
+
+  # Gate 2 vermelho com contestacao: ciclo normal, nunca parada.
+  d=$(new_case contest-test-red)
+  rc=$(run_ralph "$d" contest-test-red --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 0 "$rc" "gate 2 + contestacao: exit 0 depois da correcao"
+  assert_eq 3 "$(cat "$d/state/impl_calls")" "gate 2 + contestacao: ciclo de correcao"
+
+  # Correcao que nao escreve nada mas traz evidencia nova: re-julga em vez de
+  # repetir o veredito memoizado.
+  d=$(new_case contest-late)
+  rc=$(run_ralph "$d" contest-late --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 0 "$rc" "contestacao tardia: exit 0"
+  assert_eq 3 "$(cat "$d/state/verify_calls")" "contestacao nova re-julga (sem memo)"
+  assert_not_contains "$d/out.log" "parando em vez de repetir" "nao tratou como ciclo travado"
+fi
+
+# ---------------------------------------------------------------------------
+# 52. Fase que falha mostra a ultima mensagem da sessao: na fase 3 de
+#     pub-email-alerts ela dizia por que travou, e so o log guardava.
+# ---------------------------------------------------------------------------
+if case_enabled last-message; then
+  header "52. fase que falha mostra a ultima mensagem da sessao"
+  for engine in claude codex; do
+    d=$(new_case "last-message-$engine")
+    rc=$(run_ralph "$d" empty-diff --engine "$engine" --test-cmd "$d/test.sh" --max-cycles 2)
+    assert_eq 1 "$rc" "$engine: exit 1"
+    assert_contains "$d/out.log" "Ultima mensagem da sessao (fim):" "$engine: bloco da mensagem final"
+    assert_contains "$d/out.log" "SendPubReportsTest so passa tocando o comando" "$engine: com o texto da sessao"
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# 53. Fase ja commitada no branch (feat(phase-N): <titulo>) -> gates contra HEAD
+#     sem sessao. Na fase 3 de pub-email-alerts o trabalho foi commitado a mao
+#     depois de travar, e a retomada abriu uma sessao inteira que nao escreveu
+#     nada.
+# ---------------------------------------------------------------------------
+if case_enabled committed-phase; then
+  header "53. fase commitada a mao -> revalidada contra HEAD, sem sessao"
+  d=$(new_case committed-phase)
+  mkdir -p "$d/repo/src" && echo "feito a mao" > "$d/repo/src/impl-manual.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat(phase-1): Foundation"
+  before=$(commits "$d")
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  assert_contains "$d/out.log" "Fase ja commitada neste branch (feat(phase-1))" "reconheceu o commit da fase"
+  assert_contains "$d/out.log" "Phase 1: Foundation — VERIFICADA sem sessao" "fechada pelos gates contra HEAD"
+  assert_eq 1 "$(cat "$d/state/impl_calls")" "so a fase 2 abriu sessao"
+  assert_eq $((before + 1)) "$(commits "$d")" "so a fase 2 commita"
+
+  # Commit com a mensagem da fase, mas sem o codigo: a mensagem escolhe o
+  # caminho, quem aprova sao os gates.
+  d=$(new_case committed-phase-red)
+  echo "anotacao" > "$d/repo/notes.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat(phase-1): Foundation"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "commit sem o codigo: exit 0 depois da correcao"
+  assert_contains "$d/out.log" "Fase ja commitada neste branch reprovou contra HEAD" "reprovacao contra HEAD reportada"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "Motivo da falha (gate 3" "ciclo 1 ja como correcao"
+
+  # wip(phase-N) e trabalho incompleto: segue o fluxo normal.
+  d=$(new_case committed-phase-wip)
+  mkdir -p "$d/repo/src" && echo "parcial" > "$d/repo/src/impl-wip.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "wip(phase-1): incomplete — see .phases/logs/"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "wip: exit 0"
+  assert_not_contains "$d/out.log" "Fase ja commitada" "wip nao conta como fase commitada"
+  assert_eq 2 "$(cat "$d/state/impl_calls")" "wip: as duas fases abrem sessao"
+fi
+
+# ---------------------------------------------------------------------------
+# 54. Logs de uma execucao anterior da fase vao para logs/archive/<run>/ antes
+#     dela reabrir. Os nomes se repetem entre runs e features: o ciclo 3 de uma
+#     feature antiga aparecia ao lado do ciclo 1 de hoje.
+# ---------------------------------------------------------------------------
+if case_enabled log-archive; then
+  header "54. logs antigos da fase arquivados quando ela reabre"
+  d=$(new_case log-archive)
+  mkdir -p "$d/repo/.phases/logs"
+  echo "run velho" > "$d/repo/.phases/logs/phase-01.cycle-3.log"
+  echo "outra fase" > "$d/repo/.phases/logs/phase-09.cycle-1.log"
+  for i in $(seq 1 11); do mkdir -p "$d/repo/.phases/logs/archive/20000101-0000$(printf '%02d' "$i")"; done
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  test -f "$d/repo/.phases/logs/phase-01.cycle-3.log" && bad "log velho saiu de logs/" || ok "log velho saiu de logs/"
+  assert_eq 1 "$(ls "$d/repo/.phases/logs/archive"/*/phase-01.cycle-3.log 2>/dev/null | wc -l | tr -d ' ')" "log velho arquivado"
+  test -f "$d/repo/.phases/logs/phase-01.cycle-1.log" && ok "log deste run no lugar de sempre" || bad "log deste run no lugar de sempre"
+  test -f "$d/repo/.phases/logs/phase-09.cycle-1.log" && ok "fase que nao reabriu fica onde esta" || bad "fase que nao reabriu fica onde esta"
+  assert_eq 10 "$(ls -1d "$d/repo/.phases/logs/archive"/*/ | wc -l | tr -d ' ')" "archive guarda os 10 mais recentes"
+  test -d "$d/repo/.phases/logs/archive/20000101-000001" && bad "o mais antigo saiu" || ok "o mais antigo saiu"
+  assert_contains "$d/out.log" "Logs anteriores de phase-01 arquivados" "avisa onde foram parar"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

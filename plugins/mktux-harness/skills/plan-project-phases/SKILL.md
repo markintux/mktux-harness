@@ -180,6 +180,14 @@ Por fase, em ordem. Todos verdes → commit. Qualquer vermelho → ciclo de corr
   Task marcada `(manual)` (1.6) nao entra no gate 3: nenhum veredito pedido,
   nenhum aceito.
 
+A sessao de implementacao pode **contestar** uma task que confirmou estar errada
+— cita o que nao existe, contradiz uma BR ou US, exige quebrar teste que a fase
+proibe tocar — com `RALPH-CONTEST: TASK <n> — <evidencia>`. O verificador confere
+a evidencia no codigo e, se procede, julga a task pelo objetivo, nao pela letra.
+O run nao para: a contestacao aceita sai no relatorio para revisao depois. Plano
+errado vira desvio para alguem conferir de manha, nao mais um ciclo obedecendo o
+erro — ainda assim, escreva o que a task cita depois de confirmar no codigo.
+
 ## 1.6 Escreva task como estado, nao como comando
 
 Esta e a regra de maior alavancagem do documento inteiro.
@@ -283,8 +291,9 @@ Parte 5.1 fecha isso.
 ## 1.8 Re-rodar
 
 Editar o `project-phases.md` invalida o stamp do manifest e zera
-`.phases/.progress`. Use `ralph <caminho> --from N` pra retomar sem re-rodar fase
-ja commitada.
+`.phases/.progress`. Fase ja commitada como `feat(phase-N): <titulo>` e
+revalidada contra HEAD sem sessao; `ralph <caminho> --from N` pula de vez as
+anteriores a N.
 
 ---
 
@@ -344,7 +353,7 @@ houver.
 
 Adapte a feature; nem toda feature precisa de toda fase.
 
-Duas regras que importam mais que a ordem:
+Tres regras que importam mais que a ordem:
 
 - **Primitiva compartilhada ganha fase propria, cedo.** Se cinco fases posteriores
   vao cada uma formatar moeda ou escapar CSV, construa isso uma vez, numa fase que
@@ -352,6 +361,16 @@ Duas regras que importam mais que a ordem:
 - **Agrupe pelo que falha junto.** Duas telas que precisam da mesma request class
   e do mesmo gate pertencem a uma fase. Uma tela com formato de parametro
   diferente pertence a outra.
+- **Toda fase fecha com a suite verde sozinha.** O gate 2 roda a suite inteira
+  no fim de cada fase. Fase que muda o contrato de codigo existente — lanca
+  excecao onde antes devolvia valor, muda assinatura, tira um caminho — atualiza
+  **na mesma fase** todo chamador que a mudanca quebra, ou deixa a mudanca para
+  a fase que religa esses chamadores. O **Do not touch** de uma fase nunca cobre
+  um chamador que a propria fase quebra: a sessao fica sem saida, proibida de
+  deixar a suite vermelha e proibida de tocar o arquivo. Num run real, a fase 3
+  fez um metodo recusar o periodo diario, o comando que o chamava so seria
+  religado na fase 6 e estava proibido na fase 3: quatro testes do comando
+  ficaram vermelhos e a fase so saiu com correcao humana.
 
 ---
 
@@ -368,6 +387,9 @@ Duas regras que importam mais que a ordem:
   que** — uma sessao fria vai, caso contrario, anexar no fim e quebrar.
 - Quando uma task modifica codigo existente, diga precisamente o que muda **e o
   que tem que continuar identico**.
+- Quando a mudanca altera o contrato (excecao nova, assinatura, retorno), busque
+  os chamadores no codigo (`rg -n '<metodo>'`) e escreva na task quais sao e em
+  que fase cada um se adapta — a mesma fase, ou uma anterior (Parte 3).
 
 ## 4.1 Regra que atravessa camadas
 
@@ -389,6 +411,17 @@ seguinte nao ve a regra, e o verificador so julga o que a lista de tasks diz.
 Num run real, a escrita atomica ficou na fase da action, a fase do controller
 nao citou a BR, as duas passaram nos quatro gates, e a falha de geracao chegava
 ao admin como erro 500 — so a revisao humana pegou.
+
+Regra que nomeia mais de um artefato — *"applies to both birthday e-mails and
+to every record and top 5 computation"* — e de varias clausulas mesmo sendo uma
+frase so: cada artefato nomeado e uma clausula, e a fase onde ele nasce cita a
+BR. Por isso a faixa `BR-10 through BR-16` so vale quando **cada** regra da faixa
+acontece inteira naquela fase: a faixa leva o texto para a sessao, mas diz a voce
+na auto-checagem que a regra esta coberta. Num run real, a BR que tirava os
+clientes anonimizados dos aniversarios, dos recordes e do top 5 entrou so numa
+faixa da fase dos aniversarios. A fase dos recordes nao a citou, o verificador
+reprovou duas vezes o filtro correto que a sessao tinha posto, e o ciclo de
+correcao o removeu.
 
 ---
 
@@ -477,9 +510,9 @@ HTML, referencia de design ou qualquer artefato externo:
     and reproduce its structure faithfully, adapting to <template syntax>.
   ```
   `<template syntax>` e a linguagem de template do stack (o perfil diz qual).
-- O agente tem que verificar que o arquivo existe antes de comecar. Se estiver
-  faltando, ele para e pergunta ao usuario com a ferramenta AskUserQuestion —
-  nunca prossegue por suposicao.
+- O agente tem que verificar que o arquivo existe antes de comecar. A sessao do
+  ralph nao tem humano para perguntar: se o arquivo estiver faltando, ela
+  contesta a task (`RALPH-CONTEST`, 1.5) — nunca prossegue por suposicao.
 
 ---
 
@@ -509,9 +542,9 @@ grep -nE '^[[:space:]]*- \[[ x]\][[:space:]]+(Run|Execute|Build|Confirm|Verify|C
 # itens escritos. Linha de codigo: o conjunto tem que estar listado na propria task.
 grep -nwiE 'every|all|each|any' "$f" | grep -E '^[0-9]+:[[:space:]]*- '
 
-# Fases que citam cada BR (4.1), faixas "BR-a through BR-b" expandidas.
-# BR sem fase e lacuna; BR de varias clausulas numa fase so, confira se as
-# outras clausulas nao acontecem em outra camada.
+# Fases que citam cada BR (4.1), faixas "BR-a through BR-b" expandidas, com o
+# texto da regra embaixo. BR sem fase e lacuna. Leia o texto: todo artefato que
+# ele nomeia tem que nascer numa das fases listadas.
 d="$(dirname "$f")/feature-description.md"
 grep -oE 'BR-[0-9]+' "$d" | sort -u -t- -k2,2n | while read -r br; do
   printf '%-7s %s\n' "$br" "$(awk -v n="${br#BR-}" '
@@ -526,6 +559,13 @@ grep -oE 'BR-[0-9]+' "$d" | sort -u -t- -k2,2n | while read -r br; do
       if ($0 ~ ("BR-0*" n "([^0-9]|$)")) hit[ph]=1
     }
     END{for (p=1; p<=last; p++) if (p in hit) s=s " " p; print (s=="" ? "-- nenhuma fase" : "fases" s)}' "$f")"
+  awk -v n="${br#BR-}" '
+    /^[[:space:]]*$/ || /^#/ || /^([0-9]+\.|[-*])[[:space:]]/ { on=0 }
+    $0 ~ ("^[[:space:]]*([0-9]+\\.|[-*])[[:space:]]+(\\*\\*)?BR-0*" n "([^0-9]|$)") {
+      on=1; sub(/^[[:space:]]*([0-9]+\.|[-*])[[:space:]]+(\*\*)?BR-[0-9]+[[:space:]]*(—|-|:)?[[:space:]]*/, "")
+    }
+    on { sub(/^[[:space:]]+/, ""); gsub(/\*\*/, ""); t = t (t=="" ? "" : " ") $0 }
+    END{ if (t!="") print "        " substr(t, 1, 400) }' "$d"
 done
 ```
 
@@ -534,6 +574,9 @@ Depois releia e confirme:
 - [ ] A contagem que o `awk` imprimiu e a que voce pretendia: nenhum checkbox perdido em sub-bullet.
 - [ ] A primeira linha de cada task diz sozinha do que ela trata.
 - [ ] Toda fase que toca codigo compartilhado ou arriscado carrega a propria linha **Do not touch**.
+- [ ] Nenhuma fase muda um contrato cujo chamador ela esta proibida de tocar: o
+      chamador se adapta na mesma fase, ou a mudanca espera a fase que o religa
+      (Parte 3).
 - [ ] Nenhuma task esta escrita como comando de shell quando a mesma exigencia e legivel do repo.
 - [ ] Todo procedimento (formatador, build, suite, aparelho real, pergunta) leva
       `(manual)`; nenhuma task de estado leva.
