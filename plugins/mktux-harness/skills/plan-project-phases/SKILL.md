@@ -180,6 +180,13 @@ Por fase, em ordem. Todos verdes → commit. Qualquer vermelho → ciclo de corr
   Task marcada `(manual)` (1.6) nao entra no gate 3: nenhum veredito pedido,
   nenhum aceito.
 
+A sessao de implementacao pode **contestar** uma task que confirmou estar errada
+— cita o que nao existe, contradiz uma BR ou US, exige quebrar teste que a fase
+proibe tocar — com `RALPH-CONTEST: TASK <n> — <evidencia>`. Se um gate reprova a
+task contestada, o ralph para a fase para uma pessoa decidir. Plano errado custa
+uma parada, nao mais um ciclo obedecendo o erro: escreva o que a task cita
+depois de confirmar no codigo.
+
 ## 1.6 Escreva task como estado, nao como comando
 
 Esta e a regra de maior alavancagem do documento inteiro.
@@ -501,9 +508,9 @@ HTML, referencia de design ou qualquer artefato externo:
     and reproduce its structure faithfully, adapting to <template syntax>.
   ```
   `<template syntax>` e a linguagem de template do stack (o perfil diz qual).
-- O agente tem que verificar que o arquivo existe antes de comecar. Se estiver
-  faltando, ele para e pergunta ao usuario com a ferramenta AskUserQuestion —
-  nunca prossegue por suposicao.
+- O agente tem que verificar que o arquivo existe antes de comecar. A sessao do
+  ralph nao tem humano para perguntar: se o arquivo estiver faltando, ela
+  contesta a task (`RALPH-CONTEST`, 1.5) — nunca prossegue por suposicao.
 
 ---
 

@@ -157,6 +157,9 @@ fi
 if [ "$verify" -eq 1 ] && [ "$name" = "codex" ]; then
   echo "$last" > "$state/verify_last_path"
 fi
+if [ "$verify" -eq 0 ] && [ "$name" = "codex" ] && [ -n "$last" ]; then
+  echo "$last" > "$state/impl_last_path"
+fi
 if [ "$verify" -eq 0 ] && [ -n "$effort" ]; then
   echo "$effort" > "$state/impl_effort"
 fi
@@ -193,7 +196,11 @@ if [ "$verify" -eq 1 ]; then
           *) echo "TASK $i: DONE" ;;
         esac
       done < <(grep -E '^[[:space:]]*- \[[ x]\]' <<< "$prompt")
-    elif [ "$scenario" = "verify-incomplete-once" ] && [ "$n" -eq 1 ]; then
+    elif [ "$scenario" = "contest-verified" ]; then
+      # Reprova sempre a task que a sessao contestou.
+      echo "TASK 1: INCOMPLETE — usa outro token em vez de border-border"
+      for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
+    elif { [ "$scenario" = "verify-incomplete-once" ] || [ "$scenario" = "contest-other" ]; } && [ "$n" -eq 1 ]; then
       echo "TASK 1: INCOMPLETE — o arquivo nao foi criado"
       for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
     else
@@ -233,7 +240,6 @@ if [ "$scenario" = "hang-once" ] && [ "$n" -eq 1 ]; then
   sleep 37
 fi
 
-emit_claude_ok()    { echo '{"type":"result","subtype":"success","is_error":false,"result":"implementado"}'; }
 emit_claude_limit() { echo "{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true,\"result\":\"Claude AI usage limit reached|$1\"}"; }
 
 case "$scenario" in
@@ -284,7 +290,29 @@ if [ "$scenario" = "false-429" ]; then
   exit 0
 fi
 
-if [ "$name" = "claude" ]; then emit_claude_ok; else echo "Done."; fi
+# Mensagem final da sessao: o .result do claude, o -o do codex.
+final="implementado"
+case "$scenario" in
+  contest-verified)
+    final="$final
+RALPH-CONTEST: TASK 1 — o token border-border nao existe (tailwind.config.js:26)" ;;
+  contest-green|contest-test-red)
+    final="$final
+RALPH-CONTEST: TASK 2 — BR-13 exige o filtro que a task nao cita (feature-description.md:149)" ;;
+  contest-other)
+    [ "$n" -eq 1 ] && final="$final
+RALPH-CONTEST: TASK 2 — BR-13 exige o filtro que a task nao cita (feature-description.md:149)" ;;
+  empty-diff)
+    final="Travado: SendPubReportsTest so passa tocando o comando, proibido nesta fase" ;;
+esac
+[ -n "$last" ] && printf '%s\n' "$final" > "$last"
+if [ "$name" = "claude" ]; then
+  printf '{"type":"result","subtype":"success","is_error":false,"result":"%s"}\n' \
+    "$(printf '%s' "$final" | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
+else
+  echo "Done."
+  echo "$final"
+fi
 exit 0
 MOCK
 
@@ -329,7 +357,7 @@ f="$state/test_calls"; n=0
 [ -f "$f" ] && n=$(cat "$f")
 n=$((n + 1)); echo "$n" > "$f"
 
-if [ "$scenario" = "test-red-once" ] || [ "$scenario" = "stall-after-red" ]; then
+if [ "$scenario" = "test-red-once" ] || [ "$scenario" = "stall-after-red" ] || [ "$scenario" = "contest-test-red" ]; then
   if [ "$n" -eq 1 ]; then
     echo "1 failing test: ExpectedFooTest"
     exit 1
@@ -1775,6 +1803,65 @@ if case_enabled session-signal; then
   assert_contains "$d/out.log" "Execucao interrompida (sinal 143)" "tratado como interrupcao, nao como falha da fase"
   pgrep -f 'sleep 37' > /dev/null && bad "engine encerrada junto" || ok "engine encerrada junto"
   assert_eq 1 "$(cat "$d/state/impl_calls")" "nenhum ciclo de correcao aberto"
+fi
+
+# ---------------------------------------------------------------------------
+# 51. RALPH-CONTEST: a sessao contesta a task, o gate reprova justamente ela ->
+#     a fase para para decisao humana, sem outro ciclo. Na fase 9 de
+#     pub-email-alerts o ciclo 2 obedeceu o verificador e usou um token de CSS
+#     que nao existia; na fase 4, removeu um filtro correto.
+# ---------------------------------------------------------------------------
+if case_enabled contest; then
+  header "51. contestacao + gate reprovando a task contestada -> fase parada"
+  for engine in claude codex; do
+    d=$(new_case "contest-$engine")
+    rc=$(run_ralph "$d" contest-verified --engine "$engine" --test-cmd "$d/test.sh" --max-cycles 3)
+    assert_eq 1 "$rc" "$engine: exit 1"
+    assert_eq 1 "$(cat "$d/state/impl_calls")" "$engine: nenhum ciclo de correcao depois da contestacao"
+    assert_contains "$d/out.log" "PARADA no ciclo 1: a sessao contestou a fase" "$engine: fase parada, nao falhada por ciclos"
+    assert_contains "$d/out.log" "TASK 1 — o token border-border nao existe (tailwind.config.js:26)" "$engine: contestacao no relatorio"
+    assert_contains "$d/out.log" "TASK 1: INCOMPLETE — usa outro token" "$engine: veredito ao lado"
+    assert_contains "$d/out.log" "rode com --from 1" "$engine: diz como retomar"
+    assert_eq 1 "$(commits "$d")" "$engine: nada commitado"
+  done
+  assert_contains "$d/state/impl_last_path" ".phases/logs/phase-01.cycle-1.last.txt" "codex: sessao de implementacao grava a mensagem final com -o"
+
+  cp="$d/repo/.phases/prompts/phase-01.cycle-1.txt"
+  assert_contains "$cp" "RALPH-CONTEST: TASK <n>" "prompt de implementacao ensina a contestar"
+  assert_contains "$cp" "2. Task: cria o arquivo B" "prompt numera as tasks como o verificador"
+
+  # Gate 2 vermelho com contestacao na mesa: o impasse da fase 3 (so ficava
+  # verde tocando um arquivo proibido). Para no ciclo 1.
+  d=$(new_case contest-test-red)
+  rc=$(run_ralph "$d" contest-test-red --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 1 "$rc" "gate 2 + contestacao: exit 1"
+  assert_eq 1 "$(cat "$d/state/impl_calls")" "gate 2 + contestacao: parou no ciclo 1"
+  assert_contains "$d/out.log" "Veredito (gate 2" "gate 2 + contestacao: mostra a saida da suite"
+
+  # Contestacao de uma task, gate reprovando outra: segue o ciclo normal.
+  d=$(new_case contest-other)
+  rc=$(run_ralph "$d" contest-other --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 0 "$rc" "gate reprovou outra task: exit 0 depois da correcao"
+  assert_eq 3 "$(cat "$d/state/impl_calls")" "gate reprovou outra task: ciclo de correcao aberto"
+  fp="$d/repo/.phases/prompts/phase-01.cycle-2.txt"
+  assert_contains "$fp" "conteste em vez de obedecer" "prompt de correcao lembra que o verificador le so a fase"
+  assert_contains "$d/out.log" "Contestacoes que passaram nos gates (1)" "contestacao aprovada vai para o relatorio"
+  assert_contains "$d/out.log" "Phase 1: TASK 2 — BR-13 exige o filtro" "com a fase e o texto"
+fi
+
+# ---------------------------------------------------------------------------
+# 52. Fase que falha mostra a ultima mensagem da sessao: na fase 3 de
+#     pub-email-alerts ela dizia por que travou, e so o log guardava.
+# ---------------------------------------------------------------------------
+if case_enabled last-message; then
+  header "52. fase que falha mostra a ultima mensagem da sessao"
+  for engine in claude codex; do
+    d=$(new_case "last-message-$engine")
+    rc=$(run_ralph "$d" empty-diff --engine "$engine" --test-cmd "$d/test.sh" --max-cycles 2)
+    assert_eq 1 "$rc" "$engine: exit 1"
+    assert_contains "$d/out.log" "Ultima mensagem da sessao (fim):" "$engine: bloco da mensagem final"
+    assert_contains "$d/out.log" "SendPubReportsTest so passa tocando o comando" "$engine: com o texto da sessao"
+  done
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

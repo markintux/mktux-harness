@@ -121,6 +121,18 @@ sem sessão e sem commit; vermelho abre o ciclo 1 como correção, já com o
 veredito. Num run real, uma fase assim abriu sessão, não escreveu nada e gastou
 2,4M tokens de input para chegar no mesmo veredito.
 
+O verificador lê só a fase, então quando o plano erra ele cobra o erro. Num run
+real, a sessão conferiu o config do CSS, viu que o token que a task pedia não
+existia e usou o certo; o verificador reprovou, o ciclo de correção obedeceu e
+as bordas saíram brancas. Por isso a sessão pode **contestar** uma task que
+confirmou estar errada, terminando a resposta com
+`RALPH-CONTEST: TASK 4 — border-border não existe (tailwind.config.js:26)`. Se
+um gate reprova a task contestada — ou a suíte fica vermelha com contestação na
+mesa — o ralph para a fase para uma pessoa decidir, em vez de abrir outro ciclo.
+Contestação que os gates aceitam é commitada e listada no relatório final.
+Quando a fase falha por outro motivo, o relatório mostra o fim da última
+mensagem da sessão: quase sempre ela já diz por que travou.
+
 ---
 
 ## Instalação
@@ -1059,6 +1071,7 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | o ralph ou o `test-runner` escolhe o comando de teste errado | confira com `mktux-profile.sh test-cmd` (veja [Perfis de stack](#perfis-de-stack)); sobreponha com `--test-cmd` ou `RALPH_TEST_CMD` |
 | o `test-runner` devolve `ERROR:` de dependência faltando | o ambiente não está preparado. Ele nunca instala sozinho: rode o preparo que a linha cita (ex: `uv sync --extra dev`) |
 | os hooks do Laravel não disparam | não há `artisan` no diretório atual nem acima dele — confira com `mktux-profile.sh name` |
+| fase `PARADA ... a sessao contestou a fase` | a sessão confirmou que a task pede algo errado. Leia a evidência na linha `RALPH-CONTEST`; se procede, corrija a fase e os docs do plano e rode com `--from N`. Se a task está certa, diga isso nela, com o porquê |
 | portão 0 vermelho com `passou de RALPH_SESSION_TIMEOUT` | um comando dentro da sessão esperou um input que nunca veio — prompt de confirmação, modo watch, servidor em primeiro plano. O prompt pede stdin fechado (`< /dev/null`); corrija o teste ou o comando que pergunta |
 | o run reinicia da fase 1 depois de você editar o plano | editar o `project-phases.md` invalida o stamp. Use `--from N` |
 | `ralph: command not found` | rode o passo 3 da instalação, e confira que `~/.local/bin` está no PATH |

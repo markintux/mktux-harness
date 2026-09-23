@@ -77,6 +77,14 @@
 #      tem Read/Glob/Grep; codex roda em sandbox read-only, instruido a nao
 #      rodar build nem teste.
 #
+# Contestacao: a sessao que confirma um erro no plano (task que cita o que nao
+# existe, contradiz uma BR/US, ou exige quebrar teste que a fase proibe tocar)
+# termina a resposta com
+#   RALPH-CONTEST: TASK <n> — <evidencia>
+# Gate 3 reprovando uma task contestada, ou gate 2 vermelho com contestacao,
+# para a fase para decisao humana, sem outro ciclo. Fase que fecha verde com
+# contestacao segue, e a contestacao sai no relatorio final.
+#
 # Sessoes frias de verdade: os hooks do ai-memory ficam de fora
 # (RALPH_HOOK_ISOLATION) e, no codex, a memoria nativa (features.memories).
 # .phases/ e .harness/ entram no .git/info/exclude.
@@ -1176,6 +1184,37 @@ PREAMBLE
   fi
 }
 
+# Saida para plano errado. A sessao que achava a task errada nao tinha como
+# dizer. Na fase 9 de pub-email-alerts ela confirmou no config do CSS que o
+# token pedido nao existia e usou o certo; o verificador, que le so a fase,
+# reprovou; o ciclo de correcao obedeceu e a borda saiu branca. Na fase 4 o
+# mesmo caminho tirou um filtro correto. Na fase 3 a sessao explicou o impasse
+# em prosa, que o ralph nao le. A linha RALPH-CONTEST e lida da mensagem final
+# (session_contests) e para a fase quando um gate reprova o que ela contestou.
+contest_instructions() {
+  local phase_file="$1"
+  cat <<'CONTEST'
+
+## Quando a fase manda algo errado
+A fase foi escrita antes do codigo e pode errar. Se cumprir uma task como esta
+escrita exige algo que voce CONFIRMOU ser errado — cita classe, metodo, rota,
+token ou arquivo que nao existe; contradiz uma regra (BR) ou story (US); obriga
+a quebrar um teste de codigo que esta fase proibe tocar — nao obedeca e nao
+desvie em silencio. Faca o resto da fase e termine a resposta com uma linha por
+task contestada:
+
+RALPH-CONTEST: TASK <n> — <o que esta errado, com a evidencia (arquivo:linha)>
+
+Se um gate reprovar uma task contestada, o ralph para a fase para uma pessoa
+decidir; se tudo passar, a contestacao vai para o relatorio do run. Contestar
+nao e saida para task dificil ou trabalhosa: sem evidencia no codigo, cumpra a
+task.
+CONTEST
+  echo
+  echo "Numeracao das tasks desta fase (a mesma do verificador):"
+  phase_task_lines "$phase_file" | awk '{ t = $0; gsub(/\*\*/, "", t); if (length(t) > 120) t = substr(t, 1, 120) "..."; print NR ". " t }'
+}
+
 build_impl_prompt() {
   local phase_file="$1" cycle="$2"
   local prompt_file="$PROMPT_DIR/${phase_file%.md}.cycle-${cycle}.txt"
@@ -1209,9 +1248,10 @@ quebrar.
 - Item "(manual)" e procedimento de quem conduz o PR e nenhum gate o verifica.
   Rode-o se for um comando deste repositorio que voce consegue rodar aqui; se
   exige uma pessoa ou um aparelho, siga em frente
-
-## Fase a implementar
 TASK
+    contest_instructions "$phase_file"
+    echo
+    echo "## Fase a implementar"
     cat "$PHASES_DIR/$phase_file"
   } > "$prompt_file"
 
@@ -1240,7 +1280,10 @@ antes de mudar qualquer coisa.
 - Nao deixe TODOs, placeholders ou testes pulados.
 - Durante a correcao, rode so os testes afetados. Ao final, rode a suite
   completa UMA vez e garanta que ela passa.
+- Motivo do gate 3 vem de um verificador que le so a fase, nao os documentos
+  do plano: se o que ele pede e justamente o erro, conteste em vez de obedecer.
 INTRO
+    contest_instructions "$phase_file"
     echo
     echo "## Motivo da falha ($gate)"
     echo '```'
@@ -1678,11 +1721,15 @@ run_engine() {
         run_logged "$log_file" "$prompt_file" codex exec --color never --sandbox read-only \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${model_args[@]+"${model_args[@]}"} \
-          -o "$(verify_last_message_file "$log_file")" - || rc=$?
+          -o "$(last_message_file "$log_file")" - || rc=$?
       else
+        # -o tambem aqui: a mensagem final carrega as contestacoes da sessao e
+        # e o que o relatorio de falha mostra.
+        rm -f "$(last_message_file "$log_file")"
         run_logged "$log_file" "$prompt_file" codex exec --color never --sandbox danger-full-access \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
-          ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} - || rc=$?
+          ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} \
+          -o "$(last_message_file "$log_file")" - || rc=$?
       fi
     else
       # stdin /dev/null: claude -p le stdin quando nao e TTY. Sem o redirect ele
@@ -1848,9 +1895,58 @@ gate2_tests_pass() {
 # GATE3_RAN diz ao caminho "ja implementada" quais gates de fato validaram HEAD.
 GATE3_RAN=0
 
-# Onde o codex grava a mensagem final do verificador (-o). Ao lado do log.
-verify_last_message_file() {
+# Onde o codex grava a mensagem final da sessao (-o), impl ou verificador. Ao
+# lado do log.
+last_message_file() {
   printf '%s\n' "${1%.log}.last.txt"
+}
+
+# Mensagem final da sessao: o -o do codex, o .result do JSON do claude. Vazio
+# quando a engine nao deixou nenhuma (crash, timeout, claude sem jq).
+session_final_message() {
+  local log_file="$1" last
+  last=$(last_message_file "$log_file")
+  if [ -s "$last" ]; then
+    cat "$last"
+  elif [[ "$ENGINE" == "claude" ]] && command -v jq > /dev/null 2>&1; then
+    jq -r 'select(.type == "result") | .result // empty' "$log_file" 2> /dev/null || true
+  fi
+}
+
+# Linhas RALPH-CONTEST da sessao. Sem mensagem final, le o log: o exemplo do
+# prompt (`TASK <n>`) nao casa com `TASK [0-9]+`. No JSON do claude (sem jq) a
+# linha termina no primeiro \n escapado ou na aspa que fecha a string.
+session_contests() {
+  local log_file="$1" msg
+  msg=$(session_final_message "$log_file")
+  {
+    if [ -n "$msg" ]; then
+      printf '%s\n' "$msg" | grep -oE 'RALPH-CONTEST: TASK [0-9]+.*'
+    elif [[ "$ENGINE" == "claude" ]]; then
+      grep -oE 'RALPH-CONTEST: TASK [0-9]+[^"]*' "$log_file" 2> /dev/null | sed -E 's/\\n.*//; s/\\$//'
+    else
+      grep -oE 'RALPH-CONTEST: TASK [0-9]+.*' "$log_file" 2> /dev/null
+    fi
+  } | awk '!seen[$0]++' | head -n 20 || true
+}
+
+# A contestacao para a fase quando o gate reprova o que foi contestado. Gate 3:
+# alguma task contestada voltou INCOMPLETE. Gate 2 vermelho nao se atribui a uma
+# task: com contestacao na mesa, para tambem — foi o caso da fase 3 de
+# pub-email-alerts, que so ficava verde tocando um arquivo proibido.
+contest_blocks() {
+  local contests="$1" nums n
+  [ -n "$contests" ] || return 1
+  case "$LAST_GATE" in
+    "gate 2"*) return 0 ;;
+    "gate 3"*)
+      nums=$(printf '%s\n' "$contests" | sed -nE 's/^RALPH-CONTEST: TASK ([0-9]+).*/\1/p')
+      for n in $nums; do
+        printf '%s\n' "$GATE_CAUSE" | grep -qE "^TASK $n: INCOMPLETE" && return 0
+      done
+      ;;
+  esac
+  return 1
 }
 
 gate3_verify_uncached() {
@@ -1901,7 +1997,7 @@ gate3_verify_uncached() {
   prompt_file=$(build_verify_prompt "$phase_file" "$cycle")
   # Logs sobrevivem ao re-run com o mesmo nome: a mensagem final de um run
   # anterior nao pode passar pelo veredito deste.
-  last_msg=$(verify_last_message_file "$verify_log")
+  last_msg=$(last_message_file "$verify_log")
   rm -f "$last_msg"
   run_engine "$prompt_file" "$verify_log" verify || true
 
@@ -2167,10 +2263,22 @@ commit_wip() {
   warn "Commit wip criado para a fase $phase_num — a proxima fase parte de arvore limpa"
 }
 
+# Contestacoes de fases que fecharam verdes: a sessao desviou da task e os gates
+# aceitaram. Saem no relatorio final para alguem conferir antes do PR.
+CONTEST_NOTES=()
+
+record_contests() {
+  local phase_num="$1" contests="$2" line
+  [ -n "$contests" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] && CONTEST_NOTES+=("Phase $phase_num: ${line#RALPH-CONTEST: }")
+  done <<< "$contests"
+}
+
 # run_phase <phase_file> <phase_num> <phase_title> <seq> <total>
 run_phase() {
   local phase_file="$1" phase_num="$2" phase_title="$3" seq="$4" total="$5"
-  local phase_start
+  local phase_start contests="" phase_contests="" contested="" log_file=""
   phase_start=$(date +%s)
 
   export RALPH_PHASE_TITLE="$phase_title"
@@ -2223,7 +2331,7 @@ run_phase() {
     [ "$cycle" -gt 1 ] && warn "Ciclo de correcao $cycle/$MAX_CYCLES..."
     state_cycle "$seq" "$cycle"
 
-    local prompt_file log_file rc=0 sig_before
+    local prompt_file rc=0 sig_before
     log_file="$LOG_DIR/${phase_file%.md}.cycle-${cycle}.log"
 
     if [ "$cycle" -eq 1 ] && [ "$precheck_failed" -eq 0 ]; then
@@ -2236,6 +2344,12 @@ run_phase() {
     run_engine "$prompt_file" "$log_file" impl || rc=$?
 
     GATE_CAUSE=""
+    contests=$(session_contests "$log_file")
+    if [ -n "$contests" ]; then
+      warn "A sessao contestou a fase:"
+      printf '%s\n' "$contests" | sed 's/^/    /'
+      phase_contests=$(printf '%s\n%s\n' "$phase_contests" "$contests" | awk 'NF && !seen[$0]++')
+    fi
 
     # Gate 1 e sinal, nao veredito: uma fase ja implementada faz o engine
     # (corretamente) nao escrever nada. Quem decide sao os gates 2 e 3.
@@ -2275,6 +2389,7 @@ run_phase() {
           log "Gate 2 verde contra o codigo em HEAD; nenhum commit criado."
         fi
         mark_phase_done "$phase_file"
+        record_contests "$phase_num" "$phase_contests"
         state_tasks_all "$seq" done
         state_phase "$seq" done
         return 0
@@ -2289,9 +2404,17 @@ run_phase() {
       fi
       save_memory "$phase_file" "$phase_num" "$phase_title" "$cycles_run" "$phase_duration"
       mark_phase_done "$phase_file"
+      record_contests "$phase_num" "$phase_contests"
       state_tasks_all "$seq" done
       state_phase "$seq" done
       return 0
+    fi
+
+    # Gate vermelho sobre o que a sessao contestou: outro ciclo so obedeceria o
+    # verificador (ou repetiria o impasse). Quem decide e uma pessoa.
+    if contest_blocks "$contests"; then
+      contested="$contests"
+      break
     fi
 
     # Chegar aqui significa gate vermelho. Se a sessao de correcao nao escreveu
@@ -2321,9 +2444,28 @@ run_phase() {
 
   local phase_duration=$(($(date +%s) - phase_start))
   state_phase "$seq" failed
-  fail "Phase $phase_num: $phase_title — FALHOU apos $cycles_run ciclo(s) ($(format_duration "$phase_duration"))"
-  fail "Ultima causa ($LAST_GATE):"
-  printf '%s\n' "$GATE_CAUSE" | head -n 20 | sed 's/^/    /'
+  if [ -n "$contested" ]; then
+    fail "Phase $phase_num: $phase_title — PARADA no ciclo $cycles_run: a sessao contestou a fase e o gate reprovou ($(format_duration "$phase_duration"))"
+    fail "Contestacao da sessao:"
+    printf '%s\n' "$contested" | sed 's/^/    /'
+    fail "Veredito ($LAST_GATE):"
+    printf '%s\n' "$GATE_CAUSE" | head -n 20 | sed 's/^/    /'
+    warn "Decida antes de re-rodar. A sessao tem razao: corrija a fase (e os docs do plano)"
+    warn "e rode com --from $phase_num. A task esta certa: deixe isso explicito nela, com o porque."
+  else
+    fail "Phase $phase_num: $phase_title — FALHOU apos $cycles_run ciclo(s) ($(format_duration "$phase_duration"))"
+    fail "Ultima causa ($LAST_GATE):"
+    printf '%s\n' "$GATE_CAUSE" | head -n 20 | sed 's/^/    /'
+    # A sessao costuma saber por que travou — na fase 3 de pub-email-alerts ela
+    # disse que o comando que quebrava era proibido nesta fase — e so o log
+    # guardava isso.
+    local final_msg=""
+    [ -n "$log_file" ] && final_msg=$(session_final_message "$log_file")
+    if [ -n "$final_msg" ]; then
+      fail "Ultima mensagem da sessao (fim):"
+      printf '%s\n' "$final_msg" | grep -v '^[[:space:]]*$' | tail -n 12 | sed 's/^/    /'
+    fi
+  fi
   fail "Logs em: $LOG_DIR/${phase_file%.md}.*"
 
   # O trabalho parcial fica na arvore; o preflight da proxima execucao exige
@@ -2477,6 +2619,12 @@ main() {
     echo ""
     warn "Pendencias manuais (${#pending[@]}) — de quem conduz, antes do PR:"
     for phase in "${pending[@]}"; do printf '    %s\n' "$phase"; done
+  fi
+
+  if [ ${#CONTEST_NOTES[@]} -gt 0 ]; then
+    echo ""
+    warn "Contestacoes que passaram nos gates (${#CONTEST_NOTES[@]}) — a sessao desviou da task; confira antes do PR:"
+    for phase in "${CONTEST_NOTES[@]}"; do printf '    %s\n' "$phase"; done
   fi
 
   echo ""
