@@ -2294,7 +2294,9 @@ record_contests() {
   local phase_num="$1" contests="$2" line
   [ -n "$contests" ] || return 0
   while IFS= read -r line; do
-    [ -n "$line" ] && CONTEST_NOTES+=("Phase $phase_num: ${line#RALPH-CONTEST: }")
+    if [ -n "$line" ]; then
+      CONTEST_NOTES+=("Phase $phase_num: ${line#RALPH-CONTEST: }")
+    fi
   done <<< "$contests"
 }
 
