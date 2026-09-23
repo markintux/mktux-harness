@@ -479,6 +479,35 @@ BR-10   fases 11
         d" "$(f="$br/project-phases.md" bash "$br/check.sh")" \
   "fases em ordem numerica com 10+ fases, faixa expandida, preambulo ignorado, texto da regra embaixo"
 
+# ---------------------------------------------------------------------------
+# 9. log-event grava o evento enxuto e gira o arquivo
+# ---------------------------------------------------------------------------
+# Inteiro, o tool_response de cada Read e de cada suite levou o events.jsonl de
+# um projeto real a 146 MB, com linhas de 500 KB que ninguem le.
+header "9. log-event enxuto e com rotacao"
+ev="$TMP/events" && mkdir -p "$ev"
+git -C "$ev" init -q
+big=$(head -c 300000 /dev/zero | tr '\0' 'x')
+cmd=$(head -c 5000 /dev/zero | tr '\0' 'y')
+jq -nc --arg out "$big" --arg cmd "$cmd" \
+  '{hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: {command: $cmd}, tool_response: {stdout: $out, exit_code: 0}}' \
+  | CLAUDE_PROJECT_DIR="$ev" bash "$PLUGIN/hooks/shared/log-event.sh"
+line="$ev/.harness/events.jsonl"
+assert_eq 1 "$(wc -l < "$line" | tr -d ' ')" "um evento, uma linha"
+[ "$(wc -c < "$line")" -lt 3000 ] && ok "linha enxuta ($(wc -c < "$line" | tr -d ' ') bytes)" || bad "linha enxuta ($(wc -c < "$line" | tr -d ' ') bytes)"
+assert_eq "false $(jq -nc --arg out "$big" '{stdout: $out, exit_code: 0} | tojson | length') PostToolUse" "$(jq -r '"\(has("tool_response")) \(.tool_response_chars) \(.hook_event_name)"' "$line")" \
+  "saida da ferramenta vira so o tamanho"
+assert_eq "2000 …(+3000 chars)" "$(jq -r '.tool_input.command | "\(.[0:2000] | length) \(.[2000:])"' "$line")" \
+  "string longa cortada com a conta do que saiu"
+
+head -c 21000000 /dev/zero | tr '\0' 'x' > "$line"
+echo '{"hook_event_name":"Stop"}' | CLAUDE_PROJECT_DIR="$ev" bash "$PLUGIN/hooks/shared/log-event.sh"
+test -f "$line.1" && ok "passou de 20 MB: gira para events.jsonl.1" || bad "passou de 20 MB: gira para events.jsonl.1"
+assert_eq "Stop" "$(jq -r '.hook_event_name' "$line")" "arquivo novo so com o evento atual"
+
+echo 'nao e json' | CLAUDE_PROJECT_DIR="$ev" bash "$PLUGIN/hooks/shared/log-event.sh"
+assert_eq 0 "$?" "payload invalido nao derruba o hook"
+
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then
   echo -e "${GREEN}TODOS VERDES: $PASS asserts${NC}"

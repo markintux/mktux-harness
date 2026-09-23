@@ -734,7 +734,7 @@ Hooks come from the plugin. There is nothing to configure per project.
 | Hook | When | What it does |
 |---|---|---|
 | `profile-hook` | before every Bash call · Claude: after Edit/Write · Codex: end of turn | finds the stack profile walking up from the event's directory and hands the event to the profile's script; no profile, no-op |
-| `log-event` | every event | appends to `.harness/events.jsonl` with timestamp and branch |
+| `log-event` | every event | appends to `.harness/events.jsonl` with timestamp and branch. Lean on purpose: a tool's output is kept only as its size (`tool_response_chars`), strings are clipped at 2,000 characters, and the file rotates to `events.jsonl.1` at 20 MB — kept whole, one real project's log reached 146 MB |
 | `log-tokens` | end of session | records per-model usage in `.harness/tokens.jsonl`, with a `vendor` field so Claude and Codex land on the same chart. Each subagent gets its own line, with `parent`. Under ralph, each line also carries `ralph_phase`, `ralph_cycle` (0 = gates against HEAD before any session) and `ralph_mode` (`impl`/`verify`), so a run can be measured phase by phase |
 
 Laravel profile scripts (`profiles/laravel/hooks/`), called by `profile-hook`:
