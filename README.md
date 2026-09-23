@@ -1151,18 +1151,11 @@ mktux-harness/
 
 ## Credits
 
-`ralph.sh`, `ralph-watch.sh` and `sail-guard.sh` descend from the
-[**Beer and Code Harness**](https://github.com/beerandcodeteam/beer-and-code-harness)
-(MIT © Beer and Code). The `/init` chain with freshness stamps, the pipeline
-router idea, and `/ai-context` also come from there — `/mktux:ai-context` is that
-command ported and adapted so `CLAUDE.md` stays owned by Laravel Boost and
-`.ai/rules` stays the team's convention layer.
-
-Thanks to the Beer and Code team for the mentorship and the original work.
-
-The four-gate contract, gate 3's `NOT-CODE` verdict, the stop-on-cycle-without-
-progress rule, the `ralph-watch` panel, and the phase-writing rules in the
-`plan-project-phases` skill were developed and hardened in production runs on this
-harness.
+Started from the
+[Beer and Code Harness](https://github.com/beerandcodeteam/beer-and-code-harness)
+(MIT © Beer and Code) and has since diverged: the four-gate contract, gate 3's
+`NOT-CODE` verdict and `RALPH-CONTEST` judging, Check-only phases, session
+timeouts, stack profiles, Codex support, the `ralph-watch` panel and the
+phase-writing rules were built and hardened in production runs on this harness.
 
 License: [MIT](LICENSE).
