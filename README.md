@@ -130,11 +130,15 @@ task named did not exist and used the right one; the verifier failed the task,
 and the fix cycle obeyed and shipped white borders. So the session can
 **contest** a task it has confirmed is wrong, ending its answer with
 `RALPH-CONTEST: TASK 4 — border-border is not defined (tailwind.config.js:26)`.
-If a gate fails a contested task — or the suite is red while a contest stands —
-ralph stops the phase for a person to decide, instead of opening another cycle.
-A contest the gates accept is committed and listed in the final report. When a
-phase fails for any other reason, the report shows the end of the session's
-last message: it usually says why it got stuck.
+The verifier gets the phase's contests and checks the cited evidence in the
+code: if it holds, it judges the task by its goal rather than its wording; if
+not, the task comes back `INCOMPLETE — contestacao recusada`, and the fix cycle
+gets the refusal. A red suite is never accepted — a task that would break
+something the phase forbids touching is left undone and contested. Nothing
+waits for a person: the run goes on, and accepted contests are listed in the
+final report for review in the morning. When a phase fails for any other
+reason, the report shows the end of the session's last message: it usually
+says why it got stuck.
 
 ---
 
@@ -1079,7 +1083,6 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | ralph or `test-runner` picks the wrong test command | check with `mktux-profile.sh test-cmd` (see [Stack profiles](#stack-profiles)); override with `--test-cmd` or `RALPH_TEST_CMD` |
 | `test-runner` returns `ERROR:` about a missing dependency | the environment is not set up. It never installs on its own: run the setup the line names (e.g. `uv sync --extra dev`) |
 | the Laravel hooks do not fire | there is no `artisan` at or above the current directory — check with `mktux-profile.sh name` |
-| phase `PARADA ... a sessao contestou a fase` | the session confirmed the task asks for something wrong. Read the evidence on the `RALPH-CONTEST` line; if it holds, fix the phase and the plan docs and rerun with `--from N`. If the task is right, say so in it, with the reason |
 | gate 0 red with `passou de RALPH_SESSION_TIMEOUT` | a command inside the session waited for input that never came — a confirmation prompt, watch mode, a server in the foreground. The prompt asks for stdin closed (`< /dev/null`); fix the test or command that prompts |
 | the run restarts from phase 1 after you edit the plan | editing `project-phases.md` invalidates the stamp and clears `.progress`. A phase already committed as `feat(phase-N): <title>` is revalidated against HEAD with no session; `--from N` skips the earlier ones outright |
 | `ralph: command not found` | run installation step 3, and check `~/.local/bin` is on your PATH |

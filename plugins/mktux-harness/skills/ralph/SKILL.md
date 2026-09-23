@@ -151,17 +151,21 @@ RALPH-CONTEST: TASK 4 — border-border nao existe (tailwind.config.js:26)
 ```
 
 O ralph le a mensagem final da sessao (codex: `-o` em `cycle-M.last.txt`;
-claude: o `result` do JSON) e:
+claude: o `result` do JSON) e entrega as contestacoes da fase, de todos os
+ciclos, ao verificador do gate 3 e ao prompt de correcao seguinte. O
+verificador abre o que a evidencia cita:
 
-- gate 3 reprovou uma task contestada, ou gate 2 vermelho com contestacao →
-  **para a fase** (PARADA, nao FALHOU), sem outro ciclo, com a contestacao e o
-  veredito lado a lado;
-- gate reprovou outra task → ciclo de correcao normal;
-- tudo verde → commit, e a contestacao sai em *Contestacoes que passaram nos
-  gates* no relatorio final.
+- procede → julga a task pelo objetivo, nao pela letra (DONE se o codigo faz o
+  certo);
+- nao procede → `TASK n: INCOMPLETE — contestacao recusada: ...`, e o ciclo de
+  correcao recebe a recusa.
 
-Fase parada pede decisao: sessao com razao → corrija a fase e os docs do plano,
-e `--from N`; task certa → deixe explicito nela, com o porque.
+**Nada para o run esperando alguem** — o ralph e feito para rodar a noite sem
+contato humano. Suite vermelha nunca e aceita: task que quebraria algo que a
+fase proibe tocar fica por fazer e e contestada. Fase verde com contestacao sai
+em *Contestacoes aceitas pelo verificador* no relatorio final, para revisar
+antes do PR. O memo do gate 3 inclui as contestacoes: correcao que nao escreveu
+nada mas trouxe evidencia nova e julgada de novo.
 
 Fase que falha por outro motivo mostra no relatorio o fim da mensagem final da
 sessao — quase sempre ela ja diz por que travou.
@@ -298,7 +302,6 @@ sessao.
 | fase de fechamento reprova sem nada de errado no codigo | task procedural sem `(manual)`: o verificador tenta julgar o que nao tem como ler. Marque os procedimentos com `(manual)` |
 | `gate 0 vermelho` e o relatorio manda revisar as tasks | leia o FIM do `phase-NN.cycle-M.log` antes de mexer no plano: engine que morre por cota, rede ou crash cai no mesmo lugar. Task correta nao e a causa mais provavel |
 | gate 0 vermelho com `passou de RALPH_SESSION_TIMEOUT` | um comando da sessao esperou input que nunca veio (prompt de confirmacao, modo watch, servidor em primeiro plano). O prompt ja pede stdin fechado; ache e corrija o teste ou comando que pergunta — o fim do `cycle-M.log` mostra o ultimo comando |
-| fase `PARADA ... a sessao contestou a fase` | a task pede algo que a sessao confirmou ser errado. Leia a evidencia da linha `RALPH-CONTEST`; se procede, corrija a fase e os docs e rode `--from N` |
 | fase reprova em todo ciclo ate esgotar | task com escape condicional (*"faca X, mas se ficar estranho, deixe"*). O verificador escolhe INCOMPLETE na duvida |
 | gate 2 sempre vermelho no primeiro run | ambiente do perfil incompleto. A causa de cada perfil esta em *Perfis de stack* |
 | o run reinicia da fase 1 depois de voce editar o plano | editar o `project-phases.md` invalida o stamp e zera `.progress`. Fase ja commitada como `feat(phase-N): <titulo>` e revalidada contra HEAD sem sessao; `--from N` pula de vez as anteriores |

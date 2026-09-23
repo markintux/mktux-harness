@@ -198,9 +198,13 @@ if [ "$verify" -eq 1 ]; then
           *) echo "TASK $i: DONE" ;;
         esac
       done < <(grep -E '^[[:space:]]*- \[[ x]\]' <<< "$prompt")
-    elif [ "$scenario" = "contest-verified" ]; then
-      # Reprova sempre a task que a sessao contestou.
+    elif { [ "$scenario" = "contest-verified" ] || [ "$scenario" = "contest-late" ]; } \
+      && grep -q '^## Phase 1:' <<< "$prompt" && ! grep -q '^RALPH-CONTEST: TASK 1 ' <<< "$prompt"; then
+      # Fase 1 sem a contestacao no prompt: cobra a letra da task.
       echo "TASK 1: INCOMPLETE — usa outro token em vez de border-border"
+      for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
+    elif [ "$scenario" = "contest-rejected" ] && [ "$n" -eq 1 ]; then
+      echo "TASK 1: INCOMPLETE — contestacao recusada: border-border esta definido em tailwind.config.js:30"
       for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
     elif { [ "$scenario" = "verify-incomplete-once" ] || [ "$scenario" = "contest-other" ]; } && [ "$n" -eq 1 ]; then
       echo "TASK 1: INCOMPLETE — o arquivo nao foi criado"
@@ -270,6 +274,7 @@ write=1
 [ "$scenario" = "empty-diff" ] && write=0
 [ "$scenario" = "already-done" ] && write=0
 [ "$scenario" = "stall-after-red" ] && [ "$n" -gt 1 ] && write=0
+[ "$scenario" = "contest-late" ] && [ "$n" -eq 2 ] && write=0
 
 if [ "$write" -eq 1 ]; then
   mkdir -p src
@@ -295,8 +300,11 @@ fi
 # Mensagem final da sessao: o .result do claude, o -o do codex.
 final="implementado"
 case "$scenario" in
-  contest-verified)
-    final="$final
+  contest-verified|contest-rejected)
+    [ "$n" -eq 1 ] && final="$final
+RALPH-CONTEST: TASK 1 — o token border-border nao existe (tailwind.config.js:26)" ;;
+  contest-late)
+    [ "$n" -eq 2 ] && final="$final
 RALPH-CONTEST: TASK 1 — o token border-border nao existe (tailwind.config.js:26)" ;;
   contest-green|contest-test-red)
     final="$final
@@ -1817,47 +1825,58 @@ if case_enabled session-signal; then
 fi
 
 # ---------------------------------------------------------------------------
-# 51. RALPH-CONTEST: a sessao contesta a task, o gate reprova justamente ela ->
-#     a fase para para decisao humana, sem outro ciclo. Na fase 9 de
-#     pub-email-alerts o ciclo 2 obedeceu o verificador e usou um token de CSS
-#     que nao existia; na fase 4, removeu um filtro correto.
+# 51. RALPH-CONTEST: a sessao contesta a task e o verificador confere a
+#     evidencia. Nada para o run — o ralph roda a noite sem contato humano. Na
+#     fase 9 de pub-email-alerts o verificador, sem a contestacao, cobrou um
+#     token de CSS que nao existia e o ciclo de correcao obedeceu.
 # ---------------------------------------------------------------------------
 if case_enabled contest; then
-  header "51. contestacao + gate reprovando a task contestada -> fase parada"
+  header "51. contestacao vai para o verificador, que confere a evidencia"
   for engine in claude codex; do
     d=$(new_case "contest-$engine")
     rc=$(run_ralph "$d" contest-verified --engine "$engine" --test-cmd "$d/test.sh" --max-cycles 3)
-    assert_eq 1 "$rc" "$engine: exit 1"
-    assert_eq 1 "$(cat "$d/state/impl_calls")" "$engine: nenhum ciclo de correcao depois da contestacao"
-    assert_contains "$d/out.log" "PARADA no ciclo 1: a sessao contestou a fase" "$engine: fase parada, nao falhada por ciclos"
-    assert_contains "$d/out.log" "TASK 1 — o token border-border nao existe (tailwind.config.js:26)" "$engine: contestacao no relatorio"
-    assert_contains "$d/out.log" "TASK 1: INCOMPLETE — usa outro token" "$engine: veredito ao lado"
-    assert_contains "$d/out.log" "rode com --from 1" "$engine: diz como retomar"
-    assert_eq 1 "$(commits "$d")" "$engine: nada commitado"
+    assert_eq 0 "$rc" "$engine: exit 0, sem parar o run"
+    assert_eq 2 "$(cat "$d/state/impl_calls")" "$engine: uma sessao por fase, sem ciclo de correcao"
+    vp="$d/repo/.phases/prompts/phase-01.verify-1.txt"
+    assert_contains "$vp" "## Contestacoes da sessao de implementacao" "$engine: verificador recebe a contestacao"
+    assert_contains "$vp" "RALPH-CONTEST: TASK 1 — o token border-border nao existe (tailwind.config.js:26)" "$engine: com a evidencia"
+    assert_contains "$d/out.log" "Contestacoes aceitas pelo verificador (1)" "$engine: aceita vai para o relatorio"
+    assert_contains "$d/out.log" "Phase 1: TASK 1 — o token border-border nao existe" "$engine: com a fase e o texto"
+    assert_eq 3 "$(commits "$d")" "$engine: as 2 fases commitadas"
   done
-  assert_contains "$d/state/impl_last_path" ".phases/logs/phase-01.cycle-1.last.txt" "codex: sessao de implementacao grava a mensagem final com -o"
+  assert_contains "$d/state/impl_last_path" ".cycle-1.last.txt" "codex: sessao de implementacao grava a mensagem final com -o"
+  assert_not_contains "$d/repo/.phases/prompts/phase-02.verify-1.txt" "Contestacoes da sessao" "contestacao nao vaza para a fase seguinte"
 
   cp="$d/repo/.phases/prompts/phase-01.cycle-1.txt"
   assert_contains "$cp" "RALPH-CONTEST: TASK <n>" "prompt de implementacao ensina a contestar"
   assert_contains "$cp" "2. Task: cria o arquivo B" "prompt numera as tasks como o verificador"
+  assert_contains "$cp" "Suite vermelha nunca e aceita" "prompt: contestar nao libera suite vermelha"
+  assert_not_contains "$cp" "para a fase" "prompt nao promete parada"
 
-  # Gate 2 vermelho com contestacao na mesa: o impasse da fase 3 (so ficava
-  # verde tocando um arquivo proibido). Para no ciclo 1.
+  # Verificador recusa a evidencia: ciclo de correcao normal, com a recusa e a
+  # contestacao anterior no prompt.
+  d=$(new_case contest-rejected)
+  rc=$(run_ralph "$d" contest-rejected --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 0 "$rc" "recusada: exit 0 depois da correcao"
+  assert_eq 3 "$(cat "$d/state/impl_calls")" "recusada: ciclo de correcao aberto"
+  fp="$d/repo/.phases/prompts/phase-01.cycle-2.txt"
+  assert_contains "$fp" "contestacao recusada: border-border esta definido" "correcao recebe a recusa"
+  assert_contains "$fp" "## Contestacoes de sessoes anteriores desta fase" "correcao sabe o que foi contestado"
+  assert_contains "$fp" "conteste em vez de obedecer" "correcao lembra que o verificador le so a fase"
+
+  # Gate 2 vermelho com contestacao: ciclo normal, nunca parada.
   d=$(new_case contest-test-red)
   rc=$(run_ralph "$d" contest-test-red --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
-  assert_eq 1 "$rc" "gate 2 + contestacao: exit 1"
-  assert_eq 1 "$(cat "$d/state/impl_calls")" "gate 2 + contestacao: parou no ciclo 1"
-  assert_contains "$d/out.log" "Veredito (gate 2" "gate 2 + contestacao: mostra a saida da suite"
+  assert_eq 0 "$rc" "gate 2 + contestacao: exit 0 depois da correcao"
+  assert_eq 3 "$(cat "$d/state/impl_calls")" "gate 2 + contestacao: ciclo de correcao"
 
-  # Contestacao de uma task, gate reprovando outra: segue o ciclo normal.
-  d=$(new_case contest-other)
-  rc=$(run_ralph "$d" contest-other --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
-  assert_eq 0 "$rc" "gate reprovou outra task: exit 0 depois da correcao"
-  assert_eq 3 "$(cat "$d/state/impl_calls")" "gate reprovou outra task: ciclo de correcao aberto"
-  fp="$d/repo/.phases/prompts/phase-01.cycle-2.txt"
-  assert_contains "$fp" "conteste em vez de obedecer" "prompt de correcao lembra que o verificador le so a fase"
-  assert_contains "$d/out.log" "Contestacoes que passaram nos gates (1)" "contestacao aprovada vai para o relatorio"
-  assert_contains "$d/out.log" "Phase 1: TASK 2 — BR-13 exige o filtro" "com a fase e o texto"
+  # Correcao que nao escreve nada mas traz evidencia nova: re-julga em vez de
+  # repetir o veredito memoizado.
+  d=$(new_case contest-late)
+  rc=$(run_ralph "$d" contest-late --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 0 "$rc" "contestacao tardia: exit 0"
+  assert_eq 3 "$(cat "$d/state/verify_calls")" "contestacao nova re-julga (sem memo)"
+  assert_not_contains "$d/out.log" "parando em vez de repetir" "nao tratou como ciclo travado"
 fi
 
 # ---------------------------------------------------------------------------

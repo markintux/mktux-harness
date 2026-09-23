@@ -182,10 +182,11 @@ Por fase, em ordem. Todos verdes → commit. Qualquer vermelho → ciclo de corr
 
 A sessao de implementacao pode **contestar** uma task que confirmou estar errada
 — cita o que nao existe, contradiz uma BR ou US, exige quebrar teste que a fase
-proibe tocar — com `RALPH-CONTEST: TASK <n> — <evidencia>`. Se um gate reprova a
-task contestada, o ralph para a fase para uma pessoa decidir. Plano errado custa
-uma parada, nao mais um ciclo obedecendo o erro: escreva o que a task cita
-depois de confirmar no codigo.
+proibe tocar — com `RALPH-CONTEST: TASK <n> — <evidencia>`. O verificador confere
+a evidencia no codigo e, se procede, julga a task pelo objetivo, nao pela letra.
+O run nao para: a contestacao aceita sai no relatorio para revisao depois. Plano
+errado vira desvio para alguem conferir de manha, nao mais um ciclo obedecendo o
+erro — ainda assim, escreva o que a task cita depois de confirmar no codigo.
 
 ## 1.6 Escreva task como estado, nao como comando
 
