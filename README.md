@@ -119,7 +119,10 @@ A phase marked `**Check-only phase**` — the close-out that only asserts state 
 gets no session up front. ralph runs gates 2 and 3 against HEAD; green closes the
 phase with no session and no commit, red opens cycle 1 as a fix with the verdict
 in hand. In a real run, a phase like that opened a session, wrote nothing and
-spent 2.4M input tokens to reach the same verdict.
+spent 2.4M input tokens to reach the same verdict. A phase already committed on
+the branch with ralph's message — `feat(phase-N): <title>`, say after you
+committed a stuck phase's work by hand — takes the same path on the next run:
+the gates judge HEAD, and only a red gate opens a session.
 
 The verifier reads only the phase, so when the plan is wrong it enforces the
 error. In a real run a session checked the CSS config, found that the token the
@@ -1072,7 +1075,7 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | the Laravel hooks do not fire | there is no `artisan` at or above the current directory — check with `mktux-profile.sh name` |
 | phase `PARADA ... a sessao contestou a fase` | the session confirmed the task asks for something wrong. Read the evidence on the `RALPH-CONTEST` line; if it holds, fix the phase and the plan docs and rerun with `--from N`. If the task is right, say so in it, with the reason |
 | gate 0 red with `passou de RALPH_SESSION_TIMEOUT` | a command inside the session waited for input that never came — a confirmation prompt, watch mode, a server in the foreground. The prompt asks for stdin closed (`< /dev/null`); fix the test or command that prompts |
-| the run restarts from phase 1 after you edit the plan | editing `project-phases.md` invalidates the stamp. Use `--from N` |
+| the run restarts from phase 1 after you edit the plan | editing `project-phases.md` invalidates the stamp and clears `.progress`. A phase already committed as `feat(phase-N): <title>` is revalidated against HEAD with no session; `--from N` skips the earlier ones outright |
 | `ralph: command not found` | run installation step 3, and check `~/.local/bin` is on your PATH |
 | `mktux-harness: não encontrei ralph.sh` | the plugin is not installed on that machine, or point `MKTUX_HARNESS_ROOT` at a clone |
 | preflight aborts with `Hooks do ai-memory em ... sem jq` | ai-memory's hooks are in your user config and isolating them needs `jq`. Install `jq`. Use `RALPH_HOOK_ISOLATION=0` only if you accept sessions claiming your handoffs |

@@ -132,6 +132,12 @@ sessao**, sem commit; vermelho abre o ciclo 1 ja com o prompt de correcao e a
 causa. O gate 3 mantem o poder de reprovar. Com `--no-verify` o marcador e
 ignorado e a fase segue o fluxo normal.
 
+**Fase ja commitada no branch segue o mesmo caminho.** Commit com a mensagem do
+ralph (`feat(phase-N): <titulo>`, nao `wip(...)`) nos ultimos 500 do branch: o
+ralph roda os gates contra HEAD antes de abrir sessao. E o caso de retomar
+depois de commitar a mao o trabalho de uma fase que travou, ou de o plano mudar
+e zerar o `.progress`. A mensagem escolhe o caminho; quem aprova sao os gates.
+
 ### Contestacao (`RALPH-CONTEST`)
 
 O verificador le so a fase. Quando a fase erra — cita token, classe ou arquivo
@@ -289,7 +295,7 @@ sessao.
 | fase `PARADA ... a sessao contestou a fase` | a task pede algo que a sessao confirmou ser errado. Leia a evidencia da linha `RALPH-CONTEST`; se procede, corrija a fase e os docs e rode `--from N` |
 | fase reprova em todo ciclo ate esgotar | task com escape condicional (*"faca X, mas se ficar estranho, deixe"*). O verificador escolhe INCOMPLETE na duvida |
 | gate 2 sempre vermelho no primeiro run | ambiente do perfil incompleto. A causa de cada perfil esta em *Perfis de stack* |
-| o run reinicia da fase 1 depois de voce editar o plano | editar o `project-phases.md` invalida o stamp e zera `.progress`. Use `--from N` |
+| o run reinicia da fase 1 depois de voce editar o plano | editar o `project-phases.md` invalida o stamp e zera `.progress`. Fase ja commitada como `feat(phase-N): <titulo>` e revalidada contra HEAD sem sessao; `--from N` pula de vez as anteriores |
 | preflight aborta com `Hooks do ai-memory em ... sem jq` | os hooks do ai-memory estao na config de usuario e o isolamento precisa do `jq`. Instale o `jq`; `RALPH_HOOK_ISOLATION=0` so se aceitar que as sessoes consumam handoffs |
 | `Falha ao gravar no ai-memory` | leia `.phases/logs/phase-NN.memory.log`. Servidor caiu no meio do run: `ai-memory status`; no macOS, `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. A fase continua valida |
 

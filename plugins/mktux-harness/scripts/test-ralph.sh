@@ -634,7 +634,11 @@ if case_enabled resume-invalidated; then
   rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "segunda execucao verde"
   assert_contains "$d/out.log" "progresso zerado" "progresso invalidado com aviso"
-  assert_eq $((before + 4)) "$(commits "$d")" "3 fases re-executadas + commit da mutacao"
+  # As fases 1 e 2 ja tem commit feat(phase-N): os gates as revalidam contra
+  # HEAD, sem sessao. So a fase nova abre sessao e commita.
+  assert_contains "$d/out.log" "Fase ja commitada neste branch (feat(phase-1))" "fase commitada revalidada sem sessao"
+  assert_eq 3 "$(cat "$d/state/impl_calls")" "so a fase nova abriu sessao (2 do 1o run + 1)"
+  assert_eq $((before + 2)) "$(commits "$d")" "commit da mutacao + fase 3"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1862,6 +1866,45 @@ if case_enabled last-message; then
     assert_contains "$d/out.log" "Ultima mensagem da sessao (fim):" "$engine: bloco da mensagem final"
     assert_contains "$d/out.log" "SendPubReportsTest so passa tocando o comando" "$engine: com o texto da sessao"
   done
+fi
+
+# ---------------------------------------------------------------------------
+# 53. Fase ja commitada no branch (feat(phase-N): <titulo>) -> gates contra HEAD
+#     sem sessao. Na fase 3 de pub-email-alerts o trabalho foi commitado a mao
+#     depois de travar, e a retomada abriu uma sessao inteira que nao escreveu
+#     nada.
+# ---------------------------------------------------------------------------
+if case_enabled committed-phase; then
+  header "53. fase commitada a mao -> revalidada contra HEAD, sem sessao"
+  d=$(new_case committed-phase)
+  mkdir -p "$d/repo/src" && echo "feito a mao" > "$d/repo/src/impl-manual.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat(phase-1): Foundation"
+  before=$(commits "$d")
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  assert_contains "$d/out.log" "Fase ja commitada neste branch (feat(phase-1))" "reconheceu o commit da fase"
+  assert_contains "$d/out.log" "Phase 1: Foundation — VERIFICADA sem sessao" "fechada pelos gates contra HEAD"
+  assert_eq 1 "$(cat "$d/state/impl_calls")" "so a fase 2 abriu sessao"
+  assert_eq $((before + 1)) "$(commits "$d")" "so a fase 2 commita"
+
+  # Commit com a mensagem da fase, mas sem o codigo: a mensagem escolhe o
+  # caminho, quem aprova sao os gates.
+  d=$(new_case committed-phase-red)
+  echo "anotacao" > "$d/repo/notes.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat(phase-1): Foundation"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "commit sem o codigo: exit 0 depois da correcao"
+  assert_contains "$d/out.log" "Fase ja commitada neste branch reprovou contra HEAD" "reprovacao contra HEAD reportada"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "Motivo da falha (gate 3" "ciclo 1 ja como correcao"
+
+  # wip(phase-N) e trabalho incompleto: segue o fluxo normal.
+  d=$(new_case committed-phase-wip)
+  mkdir -p "$d/repo/src" && echo "parcial" > "$d/repo/src/impl-wip.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "wip(phase-1): incomplete — see .phases/logs/"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "wip: exit 0"
+  assert_not_contains "$d/out.log" "Fase ja commitada" "wip nao conta como fase commitada"
+  assert_eq 2 "$(cat "$d/state/impl_calls")" "wip: as duas fases abrem sessao"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

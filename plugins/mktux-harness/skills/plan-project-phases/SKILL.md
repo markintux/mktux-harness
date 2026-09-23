@@ -290,8 +290,9 @@ Parte 5.1 fecha isso.
 ## 1.8 Re-rodar
 
 Editar o `project-phases.md` invalida o stamp do manifest e zera
-`.phases/.progress`. Use `ralph <caminho> --from N` pra retomar sem re-rodar fase
-ja commitada.
+`.phases/.progress`. Fase ja commitada como `feat(phase-N): <titulo>` e
+revalidada contra HEAD sem sessao; `ralph <caminho> --from N` pula de vez as
+anteriores a N.
 
 ---
 

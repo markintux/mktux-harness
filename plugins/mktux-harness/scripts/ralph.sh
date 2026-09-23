@@ -1772,7 +1772,8 @@ run_engine() {
       fail "Execucao interrompida (sinal $rc). Abortando o run."
       if [ -n "$(git status --porcelain)" ]; then
         fail "O trabalho parcial ficou na arvore. Antes de rodar de novo:"
-        fail "    commite (o ralph revalida a fase e segue) ou 'git checkout -- . && git clean -fd' (descarta)"
+        fail "    commite como 'feat(phase-${RALPH_PHASE_NUM:-N}): ${RALPH_PHASE_TITLE:-<titulo>}' (o ralph revalida a fase contra HEAD, sem sessao)"
+        fail "    ou 'git checkout -- . && git clean -fd' (descarta)"
       fi
       exit "$rc"
     fi
@@ -2153,6 +2154,18 @@ phase_is_check_only() {
   grep -qE '^[[:space:]]*\*\*Check-only phase\*\*' "$PHASES_DIR/$1" 2>/dev/null
 }
 
+# Fase ja commitada neste branch com a mensagem que o ralph usa. Acontece quando
+# o run e retomado depois de uma fase fechada fora dele — alguem commitou a mao o
+# trabalho de uma fase que travou —, ou quando o plano mudou e zerou o
+# .progress. Na fase 3 de pub-email-alerts o commit manual estava la e o ralph
+# abriu uma sessao inteira para ela nao escrever nada. Os gates contra HEAD
+# decidem: a mensagem do commit so escolhe o caminho, nunca aprova.
+# Sem -q: com pipefail, o grep que sai no primeiro match mata o git log com
+# SIGPIPE e o pipeline "falha" justamente quando achou.
+phase_committed() {
+  git log -n 500 --format=%s 2> /dev/null | grep -xF "feat(phase-$1): $2" > /dev/null
+}
+
 # O gate 3 e uma funcao do codigo: bytes identicos tem que dar o mesmo veredito.
 # Sem memo, um ciclo de correcao que nao escreveu nada paga OUTRA sessao de
 # verificacao para julgar exatamente os mesmos bytes — e verificador fraco muda
@@ -2294,13 +2307,22 @@ run_phase() {
   echo ""
   log "[$seq/$total] Phase $phase_num: $phase_title"
 
-  # Fase so de verificacao: gates 2 e 3 contra HEAD, sem sessao. Verde fecha a
-  # fase como "ja implementada"; vermelho abre o ciclo 1 ja como correcao, com a
-  # causa. Sem gate 3 (--no-verify) nao ha quem confirme as afirmacoes: segue o
-  # fluxo normal. Logs deste passo levam o numero 0 (test-0, verify-0).
-  local precheck_failed=0
-  if phase_is_check_only "$phase_file" && [ "$VERIFY_MODE" != "off" ]; then
-    log "Fase so de verificacao (**Check-only phase**) — gates contra HEAD, sem sessao"
+  # Fase so de verificacao, ou ja commitada neste branch: gates 2 e 3 contra
+  # HEAD, sem sessao. Verde fecha a fase como "ja implementada"; vermelho abre o
+  # ciclo 1 ja como correcao, com a causa. Sem gate 3 (--no-verify) nao ha quem
+  # confirme as afirmacoes: segue o fluxo normal. Logs deste passo levam o
+  # numero 0 (test-0, verify-0).
+  local precheck_failed=0 precheck_what=""
+  if [ "$VERIFY_MODE" != "off" ]; then
+    if phase_is_check_only "$phase_file"; then
+      precheck_what="Fase so de verificacao"
+      log "Fase so de verificacao (**Check-only phase**) — gates contra HEAD, sem sessao"
+    elif phase_committed "$phase_num" "$phase_title"; then
+      precheck_what="Fase ja commitada neste branch"
+      log "Fase ja commitada neste branch (feat(phase-$phase_num)) — gates contra HEAD, sem sessao"
+    fi
+  fi
+  if [ -n "$precheck_what" ]; then
     state_cycle "$seq" 1
     state_gate 0 skip
     state_gate 1 skip
@@ -2319,8 +2341,8 @@ run_phase() {
       return 0
     fi
     if [ "$precheck_failed" -eq 1 ]; then
-      fail "Fase so de verificacao reprovou contra HEAD ($LAST_GATE) — abrindo sessao de correcao"
-      GATE_CAUSE="Fase so de verificacao: o ralph rodou os gates contra o codigo em HEAD, sem sessao de implementacao, e eles reprovaram. Corrija o que falta."$'\n'"$GATE_CAUSE"
+      fail "$precheck_what reprovou contra HEAD ($LAST_GATE) — abrindo sessao de correcao"
+      GATE_CAUSE="$precheck_what: o ralph rodou os gates contra o codigo em HEAD, sem sessao de implementacao, e eles reprovaram. Corrija o que falta."$'\n'"$GATE_CAUSE"
     fi
   fi
 
@@ -2472,7 +2494,8 @@ run_phase() {
   # arvore limpa. Diga o que fazer em vez de deixar o dev descobrir no abort.
   if [ -n "$(git status --porcelain)" ]; then
     warn "O trabalho parcial desta fase ficou na arvore. Antes de re-rodar o ralph:"
-    warn "    commite (o ralph revalida a fase e segue) ou 'git checkout -- . && git clean -fd' (descarta)"
+    warn "    commite como 'feat(phase-$phase_num): $phase_title' (o ralph revalida a fase contra HEAD, sem sessao)"
+    warn "    ou 'git checkout -- . && git clean -fd' (descarta)"
   fi
   return 1
 }
