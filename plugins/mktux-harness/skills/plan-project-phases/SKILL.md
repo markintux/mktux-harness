@@ -184,9 +184,13 @@ A sessao de implementacao pode **contestar** uma task que confirmou estar errada
 — cita o que nao existe, contradiz uma BR ou US, exige quebrar teste que a fase
 proibe tocar — com `RALPH-CONTEST: TASK <n> — <evidencia>`. O verificador confere
 a evidencia no codigo e, se procede, julga a task pelo objetivo, nao pela letra.
-O run nao para: a contestacao aceita sai no relatorio para revisao depois. Plano
-errado vira desvio para alguem conferir de manha, nao mais um ciclo obedecendo o
-erro — ainda assim, escreva o que a task cita depois de confirmar no codigo.
+Com a suite vermelha o gate 3 nao roda: um juiz, no mesmo modelo barato, confere
+a contestacao e, se procede, autoriza o ciclo de correcao a fazer a menor mudanca
+no que a fase protegia. O run nao para: contestacao aceita e trava liberada saem
+no relatorio para revisao depois. Plano errado vira desvio para alguem conferir
+de manha, nao mais um ciclo obedecendo o erro — ainda assim, e mais barato nao
+errar: escreva o que a task cita depois de confirmar no codigo, e siga as regras
+de trava da Parte 3.
 
 ## 1.6 Escreva task como estado, nao como comando
 
@@ -353,7 +357,7 @@ houver.
 
 Adapte a feature; nem toda feature precisa de toda fase.
 
-Tres regras que importam mais que a ordem:
+Regras que importam mais que a ordem:
 
 - **Primitiva compartilhada ganha fase propria, cedo.** Se cinco fases posteriores
   vao cada uma formatar moeda ou escapar CSV, construa isso uma vez, numa fase que
@@ -371,6 +375,26 @@ Tres regras que importam mais que a ordem:
   fez um metodo recusar o periodo diario, o comando que o chamava so seria
   religado na fase 6 e estava proibido na fase 3: quatro testes do comando
   ficaram vermelhos e a fase so saiu com correcao humana.
+- **So proteja codigo que um teste ja exercita.** Listar um arquivo no **Do not
+  touch** afirma que ele esta certo, e so um teste de fase anterior garante isso.
+  Codigo que uma fase anterior escreveu mas nenhum teste rodou ainda — o handler
+  criado cedo so para a rota existir, a consulta cuja tela vem depois — pertence
+  a fase que o testa primeiro: ela pode muda-lo, ou a fase anterior cria so o
+  esqueleto e a logica chega junto com o teste. Num run real, a fase 3 escreveu o
+  handler da listagem com a consulta pronta; o primeiro teste que listava
+  registros veio na fase 6, que proibia tocar o handler "porque a consulta ja e
+  final". A consulta quebrava com qualquer registro, e a fase so saiu com
+  correcao humana.
+- **Teste que a fase manda passar sem mudanca nao pode medir o que ela muda.**
+  Antes de listar um teste existente como "passa sem modificacao", leia as
+  assercoes dele. As que medem o fluxo inteiro — quantas consultas ao banco,
+  quantas chamadas a um servico, quantos elementos na pagina, saida identica
+  byte a byte, snapshot — quebram quando a fase acrescenta qualquer coisa a esse
+  fluxo, mesmo certa. Se a fase acrescenta ao que o teste mede, o teste vira task da fase, com
+  o valor novo e o motivo, e sai da lista de intocados. Num run real, a fase
+  acrescentou uma consulta a pagina inicial e listou como intocado o teste que
+  exigia uma consulta so; outro teste com o mesmo problema, na mesma fase, tinha
+  virado task.
 
 ---
 
@@ -594,6 +618,11 @@ Depois releia e confirme:
       arquivo citado antes dele; regra e story sao citadas por id, nunca por
       descricao vaga.
 - [ ] Os criterios de conclusao nomeiam os testes existentes que passam sem modificacao.
+- [ ] Nenhum desses testes mede o que a fase acrescenta (contagem de consultas,
+      chamadas ou elementos, saida identica, snapshot); o que mede virou task
+      (Parte 3).
+- [ ] Todo arquivo no **Do not touch** tem o caminho que a fase usa exercitado
+      por um teste de fase anterior (Parte 3).
 - [ ] `[x]` aparece so em task confirmada lendo o codigo.
 - [ ] Se um perfil casou, o reference dele foi lido, e comandos, caminhos de
       teste e ordem de fases do plano seguem ele.
