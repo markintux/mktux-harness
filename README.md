@@ -134,9 +134,16 @@ The verifier gets the phase's contests and checks the cited evidence in the
 code: if it holds, it judges the task by its goal rather than its wording; if
 not, the task comes back `INCOMPLETE — contestacao recusada`, and the fix cycle
 gets the refusal. A red suite is never accepted — a task that would break
-something the phase forbids touching is left undone and contested. Nothing
-waits for a person: the run goes on, and accepted contests are listed in the
-final report for review in the morning. When a phase fails for any other
+something the phase forbids touching is left undone and contested. The
+verifier only runs on a green suite, so a contest over a red one goes to a
+**judge** instead: same cheap model, read-only, given the contests and the end
+of the suite output. If the contest holds, the next fix cycle may make the
+smallest change it names, even in something the phase protected; if not, the
+fix cycle gets the refusal. In a real run two phases stopped exactly there —
+both contests right, both fixed by hand the next morning the way the session
+had described. Nothing waits for a person: the run goes on, and accepted
+contests and unlocked files are listed in the final report for review in the
+morning. When a phase fails for any other
 reason, the report shows the end of the session's last message: it usually
 says why it got stuck.
 
@@ -739,7 +746,7 @@ Hooks come from the plugin. There is nothing to configure per project.
 |---|---|---|
 | `profile-hook` | before every Bash call · Claude: after Edit/Write · Codex: end of turn | finds the stack profile walking up from the event's directory and hands the event to the profile's script; no profile, no-op |
 | `log-event` | every event | appends to `.harness/events.jsonl` with timestamp and branch. Lean on purpose: a tool's output is kept only as its size (`tool_response_chars`), strings are clipped at 2,000 characters, and the file rotates to `events.jsonl.1` at 20 MB — kept whole, one real project's log reached 146 MB |
-| `log-tokens` | end of session | records per-model usage in `.harness/tokens.jsonl`, with a `vendor` field so Claude and Codex land on the same chart. Each subagent gets its own line, with `parent`. Under ralph, each line also carries `ralph_phase`, `ralph_cycle` (0 = gates against HEAD before any session) and `ralph_mode` (`impl`/`verify`), so a run can be measured phase by phase |
+| `log-tokens` | end of session | records per-model usage in `.harness/tokens.jsonl`, with a `vendor` field so Claude and Codex land on the same chart. Each subagent gets its own line, with `parent`. Under ralph, each line also carries `ralph_phase`, `ralph_cycle` (0 = gates against HEAD before any session) and `ralph_mode` (`impl`/`verify`/`judge`), so a run can be measured phase by phase. Lines are cumulative snapshots, one per turn: to total a run, take the last line of each `session_id` (per model, on Claude) |
 
 Laravel profile scripts (`profiles/laravel/hooks/`), called by `profile-hook`:
 

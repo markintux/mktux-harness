@@ -1,6 +1,6 @@
 {
   "name": "mktux",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "description": "Da ideia ao codigo rodando: especificacao em quatro artefatos, planejamento em fases e execucao autonoma com quatro gates mecanicos. Core agnostico com perfis Laravel, Node.js e Python.",
   "author": {
     "name": "Marcos Vinicius",

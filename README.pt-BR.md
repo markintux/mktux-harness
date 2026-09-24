@@ -134,8 +134,15 @@ verificador recebe as contestações da fase e confere a evidência no código:
 procede, julga a task pelo objetivo e não pela letra; não procede, a task volta
 `INCOMPLETE — contestacao recusada` e o ciclo de correção recebe a recusa.
 Suíte vermelha nunca é aceita — task que quebraria algo que a fase proíbe tocar
-fica por fazer e é contestada. Nada espera uma pessoa: o run segue, e as
-contestações aceitas saem no relatório final para revisar de manhã. Quando a
+fica por fazer e é contestada. O verificador só roda com a suíte verde, então a
+contestação com a suíte vermelha vai para um **juiz**: mesmo modelo barato,
+só leitura, com as contestações e o fim da saída da suíte. Se procede, o
+próximo ciclo de correção pode fazer a menor mudança que ele indica, mesmo no
+que a fase protegia; se não, o ciclo recebe a recusa. Num run real, duas fases
+pararam exatamente aí — as duas contestações certas, as duas corrigidas à mão na
+manhã seguinte do jeito que a sessão tinha descrito. Nada espera uma pessoa: o
+run segue, e as contestações aceitas e as travas liberadas saem no relatório
+final para revisar de manhã. Quando a
 fase falha por outro motivo, o relatório mostra o fim da última mensagem da
 sessão: quase sempre ela já diz por que travou.
 
@@ -738,7 +745,7 @@ Os hooks vêm do plugin. Não há nada para configurar por projeto.
 |---|---|---|
 | `profile-hook` | antes de todo Bash · Claude: após Edit/Write · Codex: no fim do turno | acha o perfil de stack subindo do diretório do evento e repassa o evento ao script do perfil; sem perfil, não faz nada |
 | `log-event` | todo evento | grava em `.harness/events.jsonl` com timestamp e branch. Enxuto de propósito: a saída da ferramenta fica só como tamanho (`tool_response_chars`), strings são cortadas em 2.000 caracteres e o arquivo gira para `events.jsonl.1` em 20 MB — gravado inteiro, o de um projeto real chegou a 146 MB |
-| `log-tokens` | fim da sessão | grava consumo por modelo em `.harness/tokens.jsonl`, com campo `vendor` para comparar Claude e Codex no mesmo gráfico. Cada subagent ganha linha própria, com `parent`. Sob o ralph, cada linha leva também `ralph_phase`, `ralph_cycle` (0 = gates contra HEAD antes de sessão) e `ralph_mode` (`impl`/`verify`), para medir o run fase a fase |
+| `log-tokens` | fim da sessão | grava consumo por modelo em `.harness/tokens.jsonl`, com campo `vendor` para comparar Claude e Codex no mesmo gráfico. Cada subagent ganha linha própria, com `parent`. Sob o ralph, cada linha leva também `ralph_phase`, `ralph_cycle` (0 = gates contra HEAD antes de sessão) e `ralph_mode` (`impl`/`verify`/`judge`), para medir o run fase a fase. Cada linha é o acumulado da sessão até aquele turno: para somar um run, use a última linha de cada `session_id` (por modelo, no Claude) |
 
 Scripts do perfil Laravel (`profiles/laravel/hooks/`), chamados pelo `profile-hook`:
 

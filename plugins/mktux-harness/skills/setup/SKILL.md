@@ -108,7 +108,7 @@ do ai-memory, porque o SessionStart deles consome handoffs. Detalhes na skill
 |---|---|---|
 | `profile-hook` | antes de todo Bash · Claude: apos Edit/Write · Codex: no fim do turno | detecta o perfil de stack subindo do diretorio do evento e repassa o evento ao script do perfil; sem perfil, nao faz nada |
 | `log-event` | todo evento | grava o evento em `.harness/events.jsonl` com timestamp e branch; enxuto: saida da ferramenta vira `tool_response_chars`, strings cortadas em 2000 caracteres, gira em 20 MB |
-| `log-tokens` | fim da sessao | grava consumo por modelo em `.harness/tokens.jsonl`, com `vendor` para comparar Claude e Codex; cada subagent ganha linha propria, com `parent`; sob o ralph, cada linha leva `ralph_phase`, `ralph_cycle` e `ralph_mode` |
+| `log-tokens` | fim da sessao | grava consumo por modelo em `.harness/tokens.jsonl`, com `vendor` para comparar Claude e Codex; cada subagent ganha linha propria, com `parent`; sob o ralph, cada linha leva `ralph_phase`, `ralph_cycle` e `ralph_mode`; cada linha e o acumulado da sessao ate aquele turno, entao some so a ultima de cada `session_id` (por modelo, no Claude) |
 
 `log-tokens` e os scripts de perfil ligados a `claude-post-edit` / `codex-stop`
 sao **deliberadamente diferentes por engine** — o Codex nao tem hook de Edit e
