@@ -143,6 +143,28 @@ fi
 
 grep -q '^RALPH_VERIFY' <<< "$prompt" && verify=1
 
+# --- juiz das contestacoes (gate 2 vermelho) --------------------------------
+# Procede nos cenarios contest-protected*: a fase proibe tocar no arquivo que a
+# suite precisa. Nos demais recusa, com o numero da primeira contestacao.
+if grep -q '^RALPH_JUDGE' <<< "$prompt"; then
+  n=$(bump judge_calls)
+  ro=0
+  [ "$name" = "claude" ] && [[ "$disallowed" == *Write* ]] && ro=1
+  [ "$name" = "codex" ] && [ "$verify" -eq 1 ] && ro=1
+  echo "$ro" > "$state/judge_readonly"
+  echo "$model" > "$state/judge_model"
+  cnum=$(grep -oE '^RALPH-CONTEST: TASK [0-9]+' <<< "$prompt" | head -1 | grep -oE '[0-9]+$' || true)
+  case "$scenario" in
+    contest-protected|contest-protected-late)
+      verdict="CONTEST TASK ${cnum:-1}: UPHELD — src/protected.txt: aceitar o tipo que o framework passa" ;;
+    *)
+      verdict="CONTEST TASK ${cnum:-1}: REJECTED — a suite fica verde sem mexer em src/protected.txt" ;;
+  esac
+  [ -n "$last" ] && printf '%s' "$verdict" > "$last"
+  echo "$verdict"
+  exit 0
+fi
+
 # Grava o modelo pedido para a sessao verificadora (assert do teste de modelo).
 if [ "$verify" -eq 1 ] && [ -n "$model" ]; then
   echo "$model" > "$state/verify_model"
@@ -275,10 +297,21 @@ write=1
 [ "$scenario" = "already-done" ] && write=0
 [ "$scenario" = "stall-after-red" ] && [ "$n" -gt 1 ] && write=0
 [ "$scenario" = "contest-late" ] && [ "$n" -eq 2 ] && write=0
+# contest-protected*: a suite so fica verde com src/unlocked.txt, que a fase
+# proibe criar. A sessao respeita a trava (nao escreve na correcao) ate o prompt
+# trazer a trava liberada pelo juiz.
+unlocked=0 protected_phase=0
+grep -q '^## Travas liberadas pelo juiz' <<< "$prompt" && unlocked=1
+case "$scenario" in
+  contest-protected|contest-protected-late|contest-protected-rejected)
+    grep -q '^## Phase 1:' <<< "$prompt" && protected_phase=1
+    [ "$protected_phase" -eq 1 ] && [ "$n" -gt 1 ] && [ "$unlocked" -eq 0 ] && write=0 ;;
+esac
 
 if [ "$write" -eq 1 ]; then
   mkdir -p src
   echo "impl $n" > "src/impl-$n.txt"
+  [ "$unlocked" -eq 1 ] && echo "liberado" > src/unlocked.txt
 fi
 
 if [ "$scenario" = "false-limit-json" ] && [ "$name" = "claude" ]; then
@@ -314,6 +347,12 @@ RALPH-CONTEST: TASK 2 — BR-13 exige o filtro que a task nao cita (feature-desc
 RALPH-CONTEST: TASK 2 — BR-13 exige o filtro que a task nao cita (feature-description.md:149)" ;;
   empty-diff)
     final="Travado: SendPubReportsTest so passa tocando o comando, proibido nesta fase" ;;
+  contest-protected|contest-protected-rejected)
+    [ "$protected_phase" -eq 1 ] && [ "$unlocked" -eq 0 ] && final="$final
+RALPH-CONTEST: TASK 1 — src/protected.txt:3 tipa o argumento errado e a fase proibe tocar nele" ;;
+  contest-protected-late)
+    [ "$protected_phase" -eq 1 ] && [ "$n" -gt 1 ] && [ "$unlocked" -eq 0 ] && final="$final
+RALPH-CONTEST: TASK 1 — src/protected.txt:3 tipa o argumento errado e a fase proibe tocar nele" ;;
 esac
 [ -n "$last" ] && printf '%s\n' "$final" > "$last"
 if [ "$name" = "claude" ]; then
@@ -373,6 +412,13 @@ if [ "$scenario" = "test-red-once" ] || [ "$scenario" = "stall-after-red" ] || [
     exit 1
   fi
 fi
+case "$scenario" in
+  contest-protected|contest-protected-late|contest-protected-rejected)
+    if [ -d src ] && [ ! -f src/unlocked.txt ]; then
+      echo "1 failing test: ProtectedTypeTest (500 em src/protected.txt:3)"
+      exit 1
+    fi ;;
+esac
 echo "all green"
 exit 0
 TESTCMD
@@ -1950,10 +1996,90 @@ if case_enabled log-archive; then
   test -f "$d/repo/.phases/logs/phase-01.cycle-3.log" && bad "log velho saiu de logs/" || ok "log velho saiu de logs/"
   assert_eq 1 "$(ls "$d/repo/.phases/logs/archive"/*/phase-01.cycle-3.log 2>/dev/null | wc -l | tr -d ' ')" "log velho arquivado"
   test -f "$d/repo/.phases/logs/phase-01.cycle-1.log" && ok "log deste run no lugar de sempre" || bad "log deste run no lugar de sempre"
-  test -f "$d/repo/.phases/logs/phase-09.cycle-1.log" && ok "fase que nao reabriu fica onde esta" || bad "fase que nao reabriu fica onde esta"
+  # phase-09 nao existe neste plano de 2 fases: sobra de uma feature anterior.
+  test -f "$d/repo/.phases/logs/phase-09.cycle-1.log" && bad "log de fase fora do plano saiu de logs/" || ok "log de fase fora do plano saiu de logs/"
+  assert_eq 1 "$(ls "$d/repo/.phases/logs/archive"/*/phase-09.cycle-1.log 2>/dev/null | wc -l | tr -d ' ')" "log de fase fora do plano arquivado"
+  assert_contains "$d/out.log" "Logs de fases fora deste plano (1 arquivo(s))" "avisa dos logs fora do plano"
   assert_eq 10 "$(ls -1d "$d/repo/.phases/logs/archive"/*/ | wc -l | tr -d ' ')" "archive guarda os 10 mais recentes"
   test -d "$d/repo/.phases/logs/archive/20000101-000001" && bad "o mais antigo saiu" || ok "o mais antigo saiu"
   assert_contains "$d/out.log" "Logs anteriores de phase-01 arquivados" "avisa onde foram parar"
+
+  # Fase do plano que nao reabre (--from 2) fica onde esta.
+  d=$(new_case log-archive-from)
+  mkdir -p "$d/repo/.phases/logs"
+  echo "fase pulada" > "$d/repo/.phases/logs/phase-01.cycle-1.log"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh" --from 2)
+  assert_eq 0 "$rc" "--from 2: exit 0"
+  test -f "$d/repo/.phases/logs/phase-01.cycle-1.log" && ok "fase do plano que nao reabriu fica onde esta" || bad "fase do plano que nao reabriu fica onde esta"
+  assert_not_contains "$d/out.log" "Logs de fases fora deste plano" "fase do plano nao conta como fora dele"
+fi
+
+# ---------------------------------------------------------------------------
+# 55. Contestacao com o gate 2 vermelho vai para um juiz. O gate 3 so roda com a
+#     suite verde: nas fases 6 e 10 de social-proof a contestacao estava certa,
+#     o ciclo de correcao respeitou a trava, nao escreveu nada e o run parou.
+# ---------------------------------------------------------------------------
+if case_enabled contest-judge; then
+  header "55. contestacao com a suite vermelha vai para o juiz"
+  for engine in claude codex; do
+    d=$(new_case "contest-judge-$engine")
+    rc=$(run_ralph "$d" contest-protected --engine "$engine" --test-cmd "$d/test.sh" --max-cycles 3)
+    assert_eq 0 "$rc" "$engine: exit 0, sem parar o run"
+    assert_eq 1 "$(cat "$d/state/judge_calls")" "$engine: um juiz"
+    assert_eq 1 "$(cat "$d/state/judge_readonly")" "$engine: juiz read-only"
+    assert_eq 3 "$(cat "$d/state/impl_calls")" "$engine: 2 ciclos na fase 1 + fase 2"
+    jp="$d/repo/.phases/prompts/phase-01.judge-1.txt"
+    assert_contains "$jp" "RALPH-CONTEST: TASK 1 — src/protected.txt:3" "$engine: juiz recebe a contestacao"
+    assert_contains "$jp" "ProtectedTypeTest" "$engine: e o fim da saida da suite"
+    fp="$d/repo/.phases/prompts/phase-01.cycle-2.txt"
+    assert_contains "$fp" "## Travas liberadas pelo juiz" "$engine: correcao recebe a trava liberada"
+    assert_contains "$fp" "TASK 1: liberado pelo juiz — src/protected.txt: aceitar o tipo" "$engine: com a mudanca autorizada"
+    assert_contains "$d/repo/.phases/prompts/phase-01.verify-2.txt" "## Travas liberadas pelo juiz" "$engine: gate 3 sabe da trava liberada"
+    assert_not_contains "$d/repo/.phases/prompts/phase-02.cycle-1.txt" "Travas liberadas" "trava nao vaza para a fase seguinte"
+    assert_contains "$d/out.log" "Travas liberadas pelo juiz (1)" "$engine: relatorio lista a trava"
+    assert_contains "$d/out.log" "Phase 1: TASK 1: liberado pelo juiz" "$engine: com a fase"
+    assert_eq 3 "$(commits "$d")" "$engine: as 2 fases commitadas"
+  done
+  test -s "$d/state/judge_model" && ok "juiz recebe modelo explicito" || bad "juiz recebe modelo explicito"
+  assert_eq "$(cat "$d/state/verify_model")" "$(cat "$d/state/judge_model")" "juiz usa o modelo do verificador"
+
+  # Juiz recusa: a correcao recebe a recusa; a mesma contestacao nao volta ao
+  # juiz, e a correcao que nao escreve nada continua sendo fase travada.
+  d=$(new_case contest-judge-rejected)
+  rc=$(run_ralph "$d" contest-protected-rejected --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 1 "$rc" "recusada: fase travada encerra o run"
+  assert_eq 1 "$(cat "$d/state/judge_calls")" "recusada: mesma contestacao nao volta ao juiz"
+  fp="$d/repo/.phases/prompts/phase-01.cycle-2.txt"
+  assert_contains "$fp" "## Contestacoes recusadas pelo juiz" "recusada: correcao recebe a recusa"
+  assert_contains "$fp" "TASK 1: contestacao recusada pelo juiz — a suite fica verde" "recusada: com o motivo"
+  assert_not_contains "$fp" "## Travas liberadas pelo juiz" "recusada: nada liberado"
+  assert_contains "$d/out.log" "Julgamento das contestacoes (juiz, suite vermelha):" "recusada: julgamento no relatorio de falha"
+  assert_contains "$d/out.log" "parando em vez de repetir" "recusada: correcao sem escrita e travada"
+
+  # Contestacao na correcao que nao escreveu nada: a trava liberada muda o
+  # prompt seguinte, entao nao e fase travada.
+  d=$(new_case contest-judge-late)
+  rc=$(run_ralph "$d" contest-protected-late --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 0 "$rc" "tardia: liberada, exit 0"
+  assert_eq 4 "$(cat "$d/state/impl_calls")" "tardia: 3 ciclos na fase 1 + fase 2"
+  assert_not_contains "$d/out.log" "parando em vez de repetir" "tardia: nao tratou como ciclo travado"
+
+  # Ultimo ciclo: nao ha correcao que use o veredito.
+  d=$(new_case contest-judge-last)
+  rc=$(run_ralph "$d" contest-protected --engine claude --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 1 "$rc" "ultimo ciclo: fase falha"
+  test -f "$d/state/judge_calls" && bad "ultimo ciclo nao chama o juiz" || ok "ultimo ciclo nao chama o juiz"
+
+  # --no-verify desliga o juiz junto com o gate 3.
+  d=$(new_case contest-judge-off)
+  rc=$(run_ralph "$d" contest-protected --engine claude --test-cmd "$d/test.sh" --max-cycles 3 --no-verify)
+  test -f "$d/state/judge_calls" && bad "--no-verify nao chama o juiz" || ok "--no-verify nao chama o juiz"
+
+  # Suite vermelha sem contestacao: ciclo de correcao normal, sem juiz.
+  d=$(new_case contest-judge-none)
+  rc=$(run_ralph "$d" test-red-once --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 0 "$rc" "sem contestacao: exit 0"
+  test -f "$d/state/judge_calls" && bad "sem contestacao nao chama o juiz" || ok "sem contestacao nao chama o juiz"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

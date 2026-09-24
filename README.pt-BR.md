@@ -134,8 +134,15 @@ verificador recebe as contestações da fase e confere a evidência no código:
 procede, julga a task pelo objetivo e não pela letra; não procede, a task volta
 `INCOMPLETE — contestacao recusada` e o ciclo de correção recebe a recusa.
 Suíte vermelha nunca é aceita — task que quebraria algo que a fase proíbe tocar
-fica por fazer e é contestada. Nada espera uma pessoa: o run segue, e as
-contestações aceitas saem no relatório final para revisar de manhã. Quando a
+fica por fazer e é contestada. O verificador só roda com a suíte verde, então a
+contestação com a suíte vermelha vai para um **juiz**: mesmo modelo barato,
+só leitura, com as contestações e o fim da saída da suíte. Se procede, o
+próximo ciclo de correção pode fazer a menor mudança que ele indica, mesmo no
+que a fase protegia; se não, o ciclo recebe a recusa. Num run real, duas fases
+pararam exatamente aí — as duas contestações certas, as duas corrigidas à mão na
+manhã seguinte do jeito que a sessão tinha descrito. Nada espera uma pessoa: o
+run segue, e as contestações aceitas e as travas liberadas saem no relatório
+final para revisar de manhã. Quando a
 fase falha por outro motivo, o relatório mostra o fim da última mensagem da
 sessão: quase sempre ela já diz por que travou.
 

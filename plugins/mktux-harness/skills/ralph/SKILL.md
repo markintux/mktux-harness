@@ -167,6 +167,27 @@ em *Contestacoes aceitas pelo verificador* no relatorio final, para revisar
 antes do PR. O memo do gate 3 inclui as contestacoes: correcao que nao escreveu
 nada mas trouxe evidencia nova e julgada de novo.
 
+**Juiz com a suite vermelha.** O gate 3 so roda com o gate 2 verde, e a
+contestacao "deixar a suite verde exige mexer no que a fase protege" deixa o
+gate 2 vermelho por definicao. Sem julgamento, o ciclo de correcao respeitava a
+trava, nao escrevia nada e a fase travava — nas fases 6 e 10 de social-proof,
+as duas com a contestacao certa. Agora, gate 2 vermelho com contestacao ainda
+nao julgada abre um **juiz** (mesma engine, modelo e travas de leitura do
+verificador; log `phase-NN.judge-M.log`, prompt `phase-NN.judge-M.txt`). Ele
+recebe as contestacoes e o fim da saida da suite, e emite uma linha por task:
+
+- `CONTEST TASK n: UPHELD — <arquivo>: <menor mudanca>` → o prompt de correcao
+  ganha *Travas liberadas pelo juiz*: a sessao faz essa mudanca, mesmo no que a
+  fase protegia, e nada alem. O gate 3 recebe a mesma lista. Sai em *Travas
+  liberadas pelo juiz* no relatorio final.
+- `CONTEST TASK n: REJECTED — <motivo>` → o prompt de correcao ganha
+  *Contestacoes recusadas pelo juiz*: cumpra a task.
+
+Cada contestacao vai ao juiz uma vez por fase. Nao ha juiz no ultimo ciclo (nao
+sobra correcao para usar o veredito) nem com `--no-verify`. Correcao que nao
+escreveu nada mas ganhou trava liberada nao conta como fase travada: o prompt
+seguinte e outro. Tokens do juiz saem com `ralph_mode: judge`.
+
 Fase que falha por outro motivo mostra no relatorio o fim da mensagem final da
 sessao — quase sempre ela ja diz por que travou.
 

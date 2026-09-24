@@ -134,9 +134,16 @@ The verifier gets the phase's contests and checks the cited evidence in the
 code: if it holds, it judges the task by its goal rather than its wording; if
 not, the task comes back `INCOMPLETE — contestacao recusada`, and the fix cycle
 gets the refusal. A red suite is never accepted — a task that would break
-something the phase forbids touching is left undone and contested. Nothing
-waits for a person: the run goes on, and accepted contests are listed in the
-final report for review in the morning. When a phase fails for any other
+something the phase forbids touching is left undone and contested. The
+verifier only runs on a green suite, so a contest over a red one goes to a
+**judge** instead: same cheap model, read-only, given the contests and the end
+of the suite output. If the contest holds, the next fix cycle may make the
+smallest change it names, even in something the phase protected; if not, the
+fix cycle gets the refusal. In a real run two phases stopped exactly there —
+both contests right, both fixed by hand the next morning the way the session
+had described. Nothing waits for a person: the run goes on, and accepted
+contests and unlocked files are listed in the final report for review in the
+morning. When a phase fails for any other
 reason, the report shows the end of the session's last message: it usually
 says why it got stuck.
 

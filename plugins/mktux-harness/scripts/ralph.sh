@@ -85,6 +85,11 @@
 # no codigo: procede, julga a task pelo objetivo dela; nao procede, INCOMPLETE
 # com o motivo, e o ciclo de correcao recebe a recusa. Nada para o run: a
 # contestacao aceita sai no relatorio final, para revisao depois.
+# Com o gate 2 vermelho o gate 3 nao roda, entao um juiz (mesma engine e modelo
+# do verificador, read-only) julga as contestacoes ainda nao julgadas. Procede:
+# o ciclo de correcao recebe a menor mudanca autorizada, mesmo em algo que a fase
+# protege, e a trava liberada sai no relatorio final. Nao procede: o ciclo de
+# correcao recebe a recusa.
 #
 # Sessoes frias de verdade: os hooks do ai-memory ficam de fora
 # (RALPH_HOOK_ISOLATION) e, no codex, a memoria nativa (features.memories).
@@ -1218,10 +1223,11 @@ RALPH-CONTEST: TASK <n> — <o que esta errado, com a evidencia (arquivo:linha)>
 
 O verificador recebe a contestacao e confere a evidencia no codigo: se procede,
 julga a task pelo objetivo dela, nao pela letra; se nao procede, a task volta
-incompleta com o motivo. Suite vermelha nunca e aceita: se cumprir uma task
-quebra algo que esta fase proibe tocar, nao faca essa parte e conteste. Contestar
-nao e saida para task dificil ou trabalhosa: sem evidencia no codigo, cumpra a
-task.
+incompleta com o motivo. Suite vermelha nunca e aceita: se deixar a suite verde
+exige mexer em algo que esta fase proibe tocar, nao mexa e conteste. Com a suite
+vermelha, um juiz confere a contestacao; se ela procede, o ciclo de correcao
+recebe autorizacao para a menor mudanca nesse ponto. Contestar nao e saida para
+task dificil ou trabalhosa: sem evidencia no codigo, cumpra a task.
 CONTEST
   echo
   echo "Numeracao das tasks desta fase (a mesma do verificador):"
@@ -1304,10 +1310,31 @@ INTRO
       echo
       echo "## Contestacoes de sessoes anteriores desta fase"
       echo "O verificador ja as recebeu. Recusada aparece no motivo abaixo como"
-      echo "\"contestacao recusada\": cumpra a task. As demais continuam de pe; repita a"
-      echo "linha se continuar valendo."
+      echo "\"contestacao recusada\", ou na lista do juiz: cumpra a task. As demais"
+      echo "continuam de pe; repita a linha se continuar valendo."
       echo
       printf '%s\n' "$PHASE_CONTESTS"
+    fi
+    # Sem isto a sessao de correcao respeita a trava de novo, nao escreve nada e
+    # a fase para: foi assim nas fases 6 e 10 de social-proof, as duas com a
+    # contestacao correta.
+    if [ -n "$PHASE_UNLOCKS" ]; then
+      echo
+      echo "## Travas liberadas pelo juiz"
+      echo "Com a suite vermelha, um juiz independente conferiu estas contestacoes e"
+      echo "confirmou que a fase esta errada. Faca a mudanca descrita em cada uma, mesmo"
+      echo "que ela toque algo que a fase proibe, e nada alem dela: o resto do que a fase"
+      echo "protege continua valendo. Nao conteste de novo o que ja foi liberado."
+      echo
+      printf '%s\n' "$PHASE_UNLOCKS"
+    fi
+    if [ -n "$PHASE_REFUSALS" ]; then
+      echo
+      echo "## Contestacoes recusadas pelo juiz"
+      echo "Um juiz independente conferiu estas contestacoes e nao confirmou. Cumpra a"
+      echo "task como escrita, pelo caminho que o juiz indica."
+      echo
+      printf '%s\n' "$PHASE_REFUSALS"
     fi
     echo
     echo "## Motivo da falha ($gate)"
@@ -1438,6 +1465,15 @@ Para cada task contestada, abra o que a evidencia cita e confira:
 - nao procede: TASK <n>: INCOMPLETE — contestacao recusada: <o que voce viu>.
 Contestacao sem evidencia verificavel nao procede.
 VERIFY
+    fi
+    if [ -n "$PHASE_UNLOCKS" ]; then
+      echo
+      echo "## Travas liberadas pelo juiz"
+      echo "Com a suite vermelha, um juiz confirmou estas contestacoes e autorizou a"
+      echo "mudanca descrita, mesmo em algo que a fase protege. Mudanca dentro do que"
+      echo "foi autorizado nao reprova a task."
+      echo
+      printf '%s\n' "$PHASE_UNLOCKS"
     fi
     cat <<'VERIFY'
 
@@ -1745,8 +1781,11 @@ run_engine() {
   # primeiro: dentro de um run ele roda exatamente o comando do gate 2.
   export RALPH_TEST_CMD="$TEST_CMD"
 
-  local model_args=()
-  if [[ "$mode" == "verify" ]]; then
+  # verify (gate 3) e judge (contestacao com o gate 2 vermelho) sao sessoes de
+  # leitura: mesmo modelo barato, mesmas travas de escrita.
+  local model_args=() read_only=0
+  if [[ "$mode" == "verify" || "$mode" == "judge" ]]; then
+    read_only=1
     model_args=(${ENGINE_VERIFY_ARGS[@]+"${ENGINE_VERIFY_ARGS[@]}"})
   fi
 
@@ -1760,7 +1799,7 @@ run_engine() {
     state_log "$mode" "$log_file"
 
     if [[ "$ENGINE" == "codex" ]]; then
-      if [[ "$mode" == "verify" ]]; then
+      if [ "$read_only" -eq 1 ]; then
         # -o: so a mensagem final, sem o transcript nem o bloco que o `codex
         # exec` reimprime depois do resumo de tokens. O gate 3 le dali.
         run_logged "$log_file" "$prompt_file" codex exec --color never --sandbox read-only \
@@ -1779,7 +1818,7 @@ run_engine() {
     else
       # stdin /dev/null: claude -p le stdin quando nao e TTY. Sem o redirect ele
       # consome o stream de quem chamou (ex: o manifest do loop de fases).
-      if [[ "$mode" == "verify" ]]; then
+      if [ "$read_only" -eq 1 ]; then
         # --disallowedTools, nao --allowedTools: sob --dangerously-skip-permissions
         # a allowlist nao restringe nada (tudo ja esta auto-aprovado), e o
         # "verificador read-only" conseguia escrever. Se ele consertasse a task
@@ -2203,7 +2242,7 @@ gate3_independent_verify() {
 
   # A contestacao entra na chave: sessao que nao escreveu nada mas trouxe
   # evidencia nova merece outro julgamento; a mesma, nao.
-  tree_sig="$(tree_signature)|$PHASE_CONTESTS"
+  tree_sig="$(tree_signature)|$PHASE_CONTESTS|$PHASE_UNLOCKS"
 
   if [ -n "$GATE3_MEMO_SIG" ] && [ "$tree_sig" = "$GATE3_MEMO_SIG" ]; then
     GATE_CAUSE="$GATE3_MEMO_CAUSE"
@@ -2234,6 +2273,158 @@ gate3_independent_verify() {
   GATE3_MEMO_CAUSE="$GATE_CAUSE"
   GATE3_MEMO_RAN="$GATE3_RAN"
   return "$rc"
+}
+
+# Juiz das contestacoes com o gate 2 vermelho. O gate 3 so roda com a suite
+# verde, entao a contestacao "deixar a suite verde exige mexer no que a fase
+# protege" nunca era julgada: o ciclo de correcao respeitava a trava, nao
+# escrevia nada e o ralph encerrava o run com a fase travada. Nas fases 6 e 10 de
+# social-proof as duas contestacoes estavam certas, e a correcao feita a mao de
+# manha foi exatamente a que a sessao descreveu.
+#
+# Mesma engine, modelo e travas de leitura do verificador. Cada contestacao e
+# julgada uma vez por fase; no ultimo ciclo nao ha correcao que use o veredito.
+PHASE_JUDGED=""
+PHASE_UNLOCKS=""
+PHASE_REFUSALS=""
+JUDGE_NEW_UNLOCK=0
+UNLOCK_NOTES=()
+
+build_judge_prompt() {
+  local phase_file="$1" cycle="$2" pending="$3" test_log="$4"
+  local prompt_file="$PROMPT_DIR/${phase_file%.md}.judge-${cycle}.txt"
+
+  {
+    cat <<'JUDGE'
+RALPH_JUDGE
+
+Voce e um juiz independente. NAO escreva, edite ou crie nenhum arquivo.
+
+## Situacao
+A sessao que implementou a fase abaixo contestou tasks: diz que, como escritas,
+elas estao erradas. A suite de testes do projeto terminou vermelha, e o
+verificador das tasks so roda com a suite verde. Sem o seu julgamento a fase
+trava: a sessao de correcao respeita o que a fase proibe tocar e nao tem como
+deixar a suite verde.
+
+## Contestacoes a julgar
+JUDGE
+    printf '%s\n' "$pending"
+    echo
+    echo "## Fim da saida da suite"
+    echo '```'
+    tail -n 80 "$test_log" 2> /dev/null || true
+    echo '```'
+    cat <<'JUDGE'
+
+## O que decidir
+Para cada contestacao, abra o que a evidencia cita e o que a suite reprovou:
+- procede: a fase esta errada como a sessao diz, e deixar a suite verde exige
+  mexer em algo que a fase protege (arquivo que ela proibe tocar, teste que ela
+  manda passar sem mudanca) ou fazer diferente do que a task manda. Diga a menor
+  mudanca que resolve, com o arquivo.
+- nao procede: a evidencia nao confere, ou a suite fica verde sem mexer no que a
+  fase protege. Diga o que a sessao de correcao deve fazer.
+
+Emita EXATAMENTE uma linha por contestacao, com o numero da task contestada:
+
+CONTEST TASK <n>: UPHELD — <arquivo>: <menor mudanca autorizada>
+CONTEST TASK <n>: REJECTED — <o que voce viu e o que a sessao deve fazer>
+
+## Regras
+- Contestacao sem evidencia verificavel nao procede.
+- A mudanca autorizada e a menor que deixa a suite verde: nunca apagar, pular ou
+  esvaziar teste, e nunca afrouxar uma checagem alem do que o objetivo da task
+  exige.
+- Comece pelos arquivos que a evidencia cita e pelos testes que falharam. Leia
+  cada arquivo uma vez.
+- NAO rode build, testes, typecheck nem lint: a saida da suite esta acima.
+- NAO leia codigo de dependencias de terceiros (node_modules, vendor, .venv) nem
+  lockfiles.
+- Nao emita nenhum outro texto alem das linhas CONTEST.
+
+## Fase
+JUDGE
+    cat "$PHASES_DIR/$phase_file"
+  } > "$prompt_file"
+
+  echo "$prompt_file"
+}
+
+# contest_judge <phase_file> <cycle> — julga as contestacoes pendentes depois de
+# um gate 2 vermelho. Alimenta PHASE_UNLOCKS/PHASE_REFUSALS para o prompt de
+# correcao e liga JUDGE_NEW_UNLOCK quando liberou algo novo: o ciclo seguinte
+# recebe outro prompt, entao nao escrever nada neste nao e fase travada.
+contest_judge() {
+  local phase_file="$1" cycle="$2"
+  local judge_log="$LOG_DIR/${phase_file%.md}.judge-${cycle}.log"
+  local test_log="$LOG_DIR/${phase_file%.md}.test-${cycle}.log"
+  local pending n_pending prompt_file last_msg verdict_src lines judged_nums line num
+
+  JUDGE_NEW_UNLOCK=0
+  [ "$VERIFY_MODE" != "off" ] || return 0
+  [ "$cycle" -lt "$MAX_CYCLES" ] || return 0
+
+  # -F -x: contestacao e texto livre (caminho com \, colchete, ponto).
+  if [ -n "$PHASE_JUDGED" ]; then
+    pending=$(printf '%s\n' "$PHASE_CONTESTS" | grep . | grep -vxF -f <(printf '%s\n' "$PHASE_JUDGED" | grep .) || true)
+  else
+    pending=$(printf '%s\n' "$PHASE_CONTESTS" | grep . || true)
+  fi
+  [ -n "$pending" ] || return 0
+  n_pending=$(printf '%s\n' "$pending" | grep -c .)
+
+  log "Juiz — suite vermelha com contestacao: julgando $n_pending contestacao(oes)${VERIFY_MODEL:+ (modelo: $VERIFY_MODEL)}"
+  prompt_file=$(build_judge_prompt "$phase_file" "$cycle" "$pending" "$test_log")
+  last_msg=$(last_message_file "$judge_log")
+  rm -f "$last_msg"
+  run_engine "$prompt_file" "$judge_log" judge || true
+
+  verdict_src="$judge_log"
+  [ -s "$last_msg" ] && verdict_src="$last_msg"
+  lines=$(sed 's/^[[:space:]]*//' "$verdict_src" | grep -E '^CONTEST TASK [0-9]+: (UPHELD|REJECTED)' | awk '!seen[$0]++' || true)
+
+  if [ -z "$lines" ]; then
+    warn "Juiz — nenhum veredito 'CONTEST TASK <n>: UPHELD|REJECTED'; contestacoes seguem sem julgamento (log: $judge_log)"
+    return 0
+  fi
+
+  # Julgada e so a contestacao cuja task recebeu veredito: a que o juiz pulou
+  # volta no proximo gate 2 vermelho.
+  judged_nums=$(printf '%s\n' "$lines" | sed -E 's/^CONTEST TASK ([0-9]+):.*/\1/' | sort -u)
+  while IFS= read -r line; do
+    num=$(printf '%s\n' "$line" | sed -nE 's/^RALPH-CONTEST: TASK ([0-9]+).*/\1/p')
+    if [ -n "$num" ] && grep -qx "$num" <<< "$judged_nums"; then
+      PHASE_JUDGED=$(printf '%s\n%s\n' "$PHASE_JUDGED" "$line" | awk 'NF && !seen[$0]++')
+    fi
+  done <<< "$pending"
+
+  local upheld refused
+  upheld=$(printf '%s\n' "$lines" | grep -E '^CONTEST TASK [0-9]+: UPHELD' | sed -E 's/^CONTEST (TASK [0-9]+): UPHELD/\1: liberado pelo juiz/' || true)
+  refused=$(printf '%s\n' "$lines" | grep -E '^CONTEST TASK [0-9]+: REJECTED' | sed -E 's/^CONTEST (TASK [0-9]+): REJECTED/\1: contestacao recusada pelo juiz/' || true)
+
+  if [ -n "$upheld" ]; then
+    success "Juiz — contestacao procede; o ciclo de correcao pode mexer no que a fase protegia:"
+    printf '%s\n' "$upheld" | sed 's/^/    /'
+    PHASE_UNLOCKS=$(printf '%s\n%s\n' "$PHASE_UNLOCKS" "$upheld" | awk 'NF && !seen[$0]++')
+    JUDGE_NEW_UNLOCK=1
+  fi
+  if [ -n "$refused" ]; then
+    warn "Juiz — contestacao nao procede; o ciclo de correcao recebe a recusa:"
+    printf '%s\n' "$refused" | sed 's/^/    /'
+    PHASE_REFUSALS=$(printf '%s\n%s\n' "$PHASE_REFUSALS" "$refused" | awk 'NF && !seen[$0]++')
+  fi
+  return 0
+}
+
+record_unlocks() {
+  local phase_num="$1" line
+  [ -n "$PHASE_UNLOCKS" ] || return 0
+  while IFS= read -r line; do
+    if [ -n "$line" ]; then
+      UNLOCK_NOTES+=("Phase $phase_num: $line")
+    fi
+  done <<< "$PHASE_UNLOCKS"
 }
 
 # ---------------------------------------------------------------------------
@@ -2338,12 +2529,39 @@ archive_phase_logs() {
   log "Logs anteriores de ${phase_file%.md} arquivados em $dest/"
 }
 
+# Logs de fase que o plano atual nao tem: phase-12.* de uma feature anterior com
+# mais fases. archive_phase_logs so move os da fase que vai rodar, entao estes
+# ficavam ao lado do run novo para sempre — no relevio, os de 11/09 junto com os
+# de 24/09.
+archive_orphan_logs() {
+  local f base known dest moved=0
+  known=$(manifest_entries | cut -d'|' -f1 | sed 's/\.md$//')
+  dest="$LOG_DIR/archive/$RUN_STAMP"
+  for f in "$LOG_DIR"/phase-*; do
+    [ -f "$f" ] || continue
+    base=$(basename "$f")
+    base="${base%%.*}"
+    if grep -qxF "$base" <<< "$known"; then
+      continue
+    fi
+    mkdir -p "$dest"
+    mv -f "$f" "$dest"/
+    moved=$((moved + 1))
+  done
+  if [ "$moved" -gt 0 ]; then
+    log "Logs de fases fora deste plano ($moved arquivo(s)) arquivados em $dest/"
+  fi
+}
+
 # run_phase <phase_file> <phase_num> <phase_title> <seq> <total>
 run_phase() {
   local phase_file="$1" phase_num="$2" phase_title="$3" seq="$4" total="$5"
   local phase_start contests="" log_file=""
   phase_start=$(date +%s)
   PHASE_CONTESTS=""
+  PHASE_JUDGED=""
+  PHASE_UNLOCKS=""
+  PHASE_REFUSALS=""
 
   export RALPH_PHASE_TITLE="$phase_title"
   export RALPH_PHASE_NUM="$phase_num"
@@ -2404,6 +2622,7 @@ run_phase() {
   local cycle=1 cycles_run=0
   while [ "$cycle" -le "$MAX_CYCLES" ]; do
     cycles_run="$cycle"
+    JUDGE_NEW_UNLOCK=0
     export RALPH_PHASE_ATTEMPT="$cycle"
     [ "$cycle" -gt 1 ] && warn "Ciclo de correcao $cycle/$MAX_CYCLES..."
     state_cycle "$seq" "$cycle"
@@ -2449,6 +2668,7 @@ run_phase() {
       LAST_GATE="gate 2 — suite de testes do projeto"
       GATE_CAUSE="${no_change_note}${GATE_CAUSE}"
       fail "Gate 2 vermelho — testes do projeto falharam"
+      contest_judge "$phase_file" "$cycle"
     elif ! gate3_independent_verify "$phase_file" "$cycle" "$session_wrote"; then
       LAST_GATE="gate 3 — verificacao independente"
       GATE_CAUSE="${no_change_note}${GATE_CAUSE}"
@@ -2467,6 +2687,7 @@ run_phase() {
         fi
         mark_phase_done "$phase_file"
         record_contests "$phase_num" "$PHASE_CONTESTS"
+        record_unlocks "$phase_num"
         state_tasks_all "$seq" done
         state_phase "$seq" done
         return 0
@@ -2482,6 +2703,7 @@ run_phase() {
       save_memory "$phase_file" "$phase_num" "$phase_title" "$cycles_run" "$phase_duration"
       mark_phase_done "$phase_file"
       record_contests "$phase_num" "$PHASE_CONTESTS"
+      record_unlocks "$phase_num"
       state_tasks_all "$seq" done
       state_phase "$seq" done
       return 0
@@ -2491,8 +2713,9 @@ run_phase() {
     # nada, o proximo ciclo recebe o mesmo codigo e o mesmo prompt de correcao —
     # nao ha de onde vir um resultado diferente. A fase esta travada, nao
     # incompleta. (No ciclo 1 nao escrever e legitimo: a fase pode ja estar em
-    # HEAD; por isso a condicao so vale da segunda tentativa em diante.)
-    if [ "$cycle" -gt 1 ] && [ "$session_wrote" -eq 0 ]; then
+    # HEAD; por isso a condicao so vale da segunda tentativa em diante.) Trava
+    # que o juiz acabou de liberar muda o prompt seguinte: ai vale tentar.
+    if [ "$cycle" -gt 1 ] && [ "$session_wrote" -eq 0 ] && [ "$JUDGE_NEW_UNLOCK" -eq 0 ]; then
       warn "Ciclo $cycle nao alterou nenhum arquivo — parando em vez de repetir"
       # Sessao que nao escreveu porque JULGOU e sessao que nao escreveu porque
       # MORREU pedem investigacao em lugares opostos. Culpar as tasks quando a
@@ -2526,6 +2749,10 @@ run_phase() {
     fail "Ultima mensagem da sessao (fim):"
     printf '%s\n' "$final_msg" | grep -v '^[[:space:]]*$' | tail -n 12 | sed 's/^/    /'
   fi
+  if [ -n "$PHASE_UNLOCKS$PHASE_REFUSALS" ]; then
+    fail "Julgamento das contestacoes (juiz, suite vermelha):"
+    printf '%s\n%s\n' "$PHASE_UNLOCKS" "$PHASE_REFUSALS" | grep . | sed 's/^/    /'
+  fi
   fail "Logs em: $LOG_DIR/${phase_file%.md}.*"
 
   # O trabalho parcial fica na arvore; o preflight da proxima execucao exige
@@ -2549,6 +2776,7 @@ main() {
   preflight_checks
   split_phases
   apply_from_override
+  archive_orphan_logs
 
   local total_phases
   total_phases=$(manifest_entries | wc -l)
@@ -2687,6 +2915,12 @@ main() {
     echo ""
     warn "Contestacoes aceitas pelo verificador (${#CONTEST_NOTES[@]}) — a sessao desviou da letra da task; confira antes do PR:"
     for phase in "${CONTEST_NOTES[@]}"; do printf '    %s\n' "$phase"; done
+  fi
+
+  if [ ${#UNLOCK_NOTES[@]} -gt 0 ]; then
+    echo ""
+    warn "Travas liberadas pelo juiz (${#UNLOCK_NOTES[@]}) — a sessao mexeu no que a fase protegia; confira antes do PR:"
+    for phase in "${UNLOCK_NOTES[@]}"; do printf '    %s\n' "$phase"; done
   fi
 
   echo ""
