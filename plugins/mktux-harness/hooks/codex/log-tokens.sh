@@ -2,16 +2,21 @@
 # Stop hook (Codex) — grava snapshot de tokens da sessao em .harness/tokens.jsonl.
 #
 # O rollout do Codex reporta o ACUMULADO da sessao em payload.info.total_token_usage
-# na linha `token_count`. Pegamos a ULTIMA ocorrencia (total final) — nao somamos
+# na linha `token_count`. Pegamos a ULTIMA ocorrencia (total ate aqui) — nao somamos
 # linha a linha (sao cumulativos; somar contaria em dobro). O modelo real (gpt-5.x)
 # vive em linhas `turn_context`, nao no session_meta.
+#
+# O Stop do Codex dispara a cada turno, e o profile-hook do Stop pode abrir outro:
+# a mesma sessao ganha uma linha por turno, cada uma com o acumulado ate ali.
+# Agregadores pegam a ULTIMA linha por session_id — no run social-proof, 74
+# sessoes tinham duas linhas, e somar tudo contava essas em dobro.
 #
 # Subagents (spawn_agent) gravam rollout proprio, e o do pai nao inclui o consumo
 # deles. Cada subagent vira uma linha com o proprio session_id e `parent`. Num run
 # real do ralph eram 28 subagents, +26% de input que o tokens.jsonl nao via.
 #
 # Sessao do ralph (RALPH_PHASE_NUM no ambiente): cada linha leva ralph_phase,
-# ralph_cycle e ralph_mode (impl|verify). Sem isso, medir um run por fase era
+# ralph_cycle e ralph_mode (impl|verify|judge). Sem isso, medir um run por fase era
 # casar timestamp com o log do ralph na mao.
 set -euo pipefail
 

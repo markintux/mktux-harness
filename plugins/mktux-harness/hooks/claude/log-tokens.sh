@@ -8,7 +8,7 @@
 # com session_id = agentId e `parent` = sessão.
 #
 # Sessao do ralph (RALPH_PHASE_NUM no ambiente): cada linha leva ralph_phase,
-# ralph_cycle e ralph_mode (impl|verify). Sem isso, medir um run por fase era
+# ralph_cycle e ralph_mode (impl|verify|judge). Sem isso, medir um run por fase era
 # casar timestamp com o log do ralph na mao.
 
 set -euo pipefail
