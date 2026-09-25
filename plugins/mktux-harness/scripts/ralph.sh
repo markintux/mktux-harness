@@ -165,6 +165,7 @@
 #                            commitada)
 #   RALPH_SESSION_MODE       impl | verify — o log-tokens grava fase, ciclo e
 #                            modo em cada linha do tokens.jsonl
+#   RALPH_RUN_ID             identidade unica desta invocacao, inclusive retomadas
 #   RALPH_PHASE_MAX_ATTEMPTS igual a RALPH_MAX_CYCLES
 #   RALPH_TEST_CMD           o comando do gate 2 (vazio quando desabilitado): o
 #                            subagent test-runner roda o mesmo que o gate
@@ -282,6 +283,35 @@ fi
 . "$RALPH_LIB"
 # shellcheck disable=SC1091
 . "$(dirname "$RALPH_LIB")/phase-context.sh"
+TELEMETRY_BIN="$(dirname "$RALPH_LIB")/../telemetry.py"
+
+telemetry_finish() {
+  [ -n "${RALPH_RUN_ID:-}" ] || return 0
+  python3 "$TELEMETRY_BIN" summary --run-id "$RALPH_RUN_ID" --finished > /dev/null 2>&1 || true
+}
+
+telemetry_start() {
+  if ! command -v python3 > /dev/null 2>&1; then
+    warn "Telemetria por run indisponivel: python3 nao encontrado. Gates seguem normalmente."
+    return 0
+  fi
+  export RALPH_RUN_ID
+  RALPH_RUN_ID=$(python3 -c 'import uuid; print(uuid.uuid4())')
+  local plugin_root version revision
+  plugin_root=$(cd "$(dirname "$RALPH_LIB")/../.." && pwd)
+  version=$(jq -r '.version' "$plugin_root/.codex-plugin/plugin.json")
+  revision=$(git -C "$plugin_root" rev-parse HEAD 2> /dev/null || true)
+  export RALPH_HARNESS_REVISION="$revision"
+  if ! python3 "$TELEMETRY_BIN" init --run-id "$RALPH_RUN_ID" --root "$PWD" \
+    --plan "$INPUT_FILE" --version "$version" --engine "$ENGINE" \
+    --model "$MODEL" --effort "$EFFORT" \
+    --verify-model "$VERIFY_MODEL" --verify-effort "$VERIFY_EFFORT"; then
+    warn "Nao consegui iniciar a telemetria por run. Gates seguem normalmente."
+    unset RALPH_RUN_ID
+    return 0
+  fi
+  trap 'cleanup_run; telemetry_finish' EXIT
+}
 
 format_duration() {
   local total_seconds=$1
@@ -1090,7 +1120,7 @@ start_dashboard() {
   bash "$watch" --embedded "$PWD" < /dev/tty > /dev/tty 2>&1 &
   DASHBOARD_PID=$!
 
-  trap 'stop_dashboard; cleanup_run' EXIT
+  trap 'stop_dashboard; cleanup_run; telemetry_finish' EXIT
   trap 'stop_dashboard; exit 130' INT
   trap 'stop_dashboard; exit 143' TERM
 }
@@ -1169,10 +1199,8 @@ PREAMBLE
   # O gate 2 roda ESTE comando. Se o agente rodar outro (ex: o runner no host em
   # vez de dentro do container), ele ve verde e o gate ve vermelho.
   #
-  # Suite completa so no fim. "Rode a suite SEMPRE com <cmd>" fazia o agente
-  # rodar o comando inteiro a cada item: num run real, 20 suites completas de
-  # ~2 min numa unica sessao, e nenhuma execucao filtrada em fase nenhuma. O
-  # runner e o mesmo; o que muda e o recorte.
+  # O gate 2 roda a suite completa fora da sessao. Na implementacao, testes
+  # focados evitam repetir esse trabalho; a suite pode ser util para investigar.
   if [ -n "$TEST_CMD" ]; then
     echo
     echo "## Comando de teste deste projeto"
@@ -1180,11 +1208,14 @@ PREAMBLE
     echo
     echo "    $TEST_CMD"
     echo
-    echo "- Durante o trabalho, rode so os testes afetados, pelo MESMO runner (filtro"
-    echo "  por nome ou caminho de arquivo). Suite completa a cada item custa minutos"
-    echo "  e nao prova nada a mais."
-    echo "- Ao terminar, rode o comando acima UMA vez. Nao troque de runner: fora dele"
-    echo "  voce pode ver verde onde a validacao ve vermelho."
+    echo "- Durante o trabalho, rode os testes afetados pelo mesmo runner, com filtro"
+    echo "  por nome ou caminho de arquivo, e corrija as falhas encontradas."
+    echo "- O gate 2 roda o comando completo apos esta sessao e devolve a falha ao"
+    echo "  proximo ciclo. Rode a suite completa aqui se precisar investigar uma falha"
+    echo "  ou se as instrucoes do projeto ou desta fase a exigirem."
+    echo "- Se delegar testes, passe so raiz do projeto, comando resolvido, arquivo ou"
+    echo "  filtro, notas do perfil e formato do resumo. Preserve as instrucoes locais"
+    echo "  obrigatorias. Se a engine permitir, nao herde a conversa inteira nessa tarefa."
     # Stdin fechado: nao ha humano na sessao. Na fase 9 de pub-email-alerts um
     # teste pediu confirmacao, o runner via container anexou o TTY da sessao, e
     # a sessao esperou a resposta por 2h.
@@ -1255,8 +1286,8 @@ Para cada item:
 4. Se um teste falhar, corrija o codigo e rode novamente
 5. So passe pro proximo item quando esses testes passarem
 
-Com todos os itens prontos, rode a suite completa UMA vez e corrija o que
-quebrar.
+Com todos os itens prontos, deixe os testes afetados verdes. O gate 2 executa
+a suite completa fora desta sessao; se falhar, a causa volta para correcao.
 
 ## Regras obrigatorias
 - Use SEMPRE os comandos, o runner de testes e as ferramentas ja adotados pelo
@@ -1297,8 +1328,8 @@ antes de mudar qualquer coisa.
 ## Regras obrigatorias
 - Corrija APENAS o que falta. Nao reimplemente o que ja esta correto e testado.
 - Nao deixe TODOs, placeholders ou testes pulados.
-- Durante a correcao, rode so os testes afetados. Ao final, rode a suite
-  completa UMA vez e garanta que ela passa.
+- Durante a correcao, rode os testes afetados e corrija as falhas. O gate 2
+  executa a suite completa fora desta sessao e devolve a causa se falhar.
 - Motivo do gate 3 vem de um verificador que le so a fase, nao os documentos
   do plano: se o que ele pede e justamente o erro, conteste em vez de obedecer.
 INTRO
@@ -1847,6 +1878,13 @@ run_engine() {
       fi
     fi
 
+    # Stop pode nao disparar em erro, timeout ou Ctrl-C. Registre a tentativa e
+    # reconcilie o transcript disponivel antes de decidir retry ou abort.
+    if [ -n "${RALPH_RUN_ID:-}" ]; then
+      python3 "$TELEMETRY_BIN" record --run-id "$RALPH_RUN_ID" --root "$PWD" \
+        --engine "$ENGINE" --log "$log_file" --rc "$rc" > /dev/null 2>&1 || true
+    fi
+
     # Ctrl-C (130) ou SIGTERM (143) sao decisao de quem esta olhando a tela, nao
     # falha de implementacao. Sem isto o gate 0 trata a interrupcao como fase
     # ruim e abre um ciclo de correcao: o usuario aperta Ctrl-C e o ralph
@@ -1864,6 +1902,9 @@ run_engine() {
 
     local reset_epoch
     if reset_epoch=$(detect_usage_limit "$log_file"); then
+      # O retry usa o mesmo caminho de log. Guarde a tentativa anterior para
+      # reconciliar uso tardio mesmo quando o Stop nao tiver disparado.
+      cp "$log_file" "${log_file%.log}.limit-$((LIMIT_WAITS + 1)).log" 2> /dev/null || true
       wait_for_reset "$reset_epoch"
       continue
     fi
@@ -2774,6 +2815,7 @@ RUN_STAMP="$(date '+%Y%m%d-%H%M%S')"
 
 main() {
   preflight_checks
+  telemetry_start
   split_phases
   apply_from_override
   archive_orphan_logs

@@ -677,8 +677,9 @@ O perfil também valida o ambiente no preflight — containers parados,
 dependências Node.js ausentes ou pytest fora do ambiente do projeto → abort
 antes que cada portão 2 queime um ciclo de correção — e acrescenta notas ao prompt de
 implementação, incluindo como rodar um teste focado naquela stack. O prompt pede
-teste focado durante o trabalho e o comando completo uma vez, no fim: rodar a
-suite inteira a cada item custava minutos por item. O comando resolvido chega a
+testes focados durante o trabalho. O portão 2 roda o comando completo depois da
+sessão; o agente pode executá-lo para investigar uma falha ou cumprir instruções
+explícitas do projeto ou da fase. O comando resolvido chega a
 toda sessão como `RALPH_TEST_CMD`,
 então o subagent `test-runner` roda exatamente o que o portão 2 roda. Para ver o
 que o ralph vai resolver num projeto sem rodar nada:
@@ -727,7 +728,13 @@ que o ralph vai resolver num projeto sem rodar nada:
 
 Os nomes de log se repetem entre runs e features, então a fase move os logs
 antigos para `archive/` antes de reabrir: o que está em `logs/` é do run mais
-recente.
+recente. Cada invocação também grava `.harness/runs/<run-id>.json` com caminho e
+hash do plano, versão e revisão do harness, modelos configurados, tentativas e
+resumo de consumo. Os snapshots compatíveis em `.harness/tokens.jsonl` levam
+run, fase, ciclo, modo, modelo observado e sessão pai. O resumo usa o último
+acumulado por sessão no Codex e por sessão/modelo no Claude. A entrada do Codex
+já inclui cache lido; no Claude, entrada, cache criado e cache lido são campos
+separados. Uso ausente aparece como `partial`, sem estimativa de tokens ou preço.
 
 `.phases/` e `.harness/` (telemetria dos hooks) são registrados em
 `.git/info/exclude` automaticamente — o ralph **não mexe** no `.gitignore` do

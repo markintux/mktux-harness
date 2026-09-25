@@ -8,6 +8,8 @@
 # Logo: vermelho -> emitimos block (Codex corrige); verde -> não bloqueia.
 set -euo pipefail
 
+[[ "${RALPH_SESSION_MODE:-}" == "verify" || "${RALPH_SESSION_MODE:-}" == "judge" ]] && exit 0
+
 input=$(cat)
 
 root=$(git rev-parse --show-toplevel 2>/dev/null || pwd)

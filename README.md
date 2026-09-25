@@ -680,8 +680,9 @@ The profile also checks the environment in preflight — containers down,
 Node.js dependencies absent, or pytest missing from the project environment →
 abort before every gate 2 burns a fix cycle — and adds notes to the
 implementation prompt, including how to run a focused test in that stack. The
-prompt asks for focused tests while working and the full command once, at the
-end: running the whole suite after every item cost minutes per item. The
+prompt asks for focused tests while working. Gate 2 runs the full command after
+the session; the agent may run it to investigate or follow explicit project or
+phase instructions. The
 resolved command reaches every session as
 `RALPH_TEST_CMD`, so the `test-runner` subagent runs exactly what gate 2 runs.
 To see what ralph will resolve in a project without running anything:
@@ -730,6 +731,16 @@ To see what ralph will resolve in a project without running anything:
 
 Log names repeat across runs and features, so a phase moves its old logs to
 `archive/` before it reopens: what sits in `logs/` belongs to the latest run.
+
+Each invocation also writes `.harness/runs/<run-id>.json` with the plan path and
+hash, harness version and revision, configured models, attempts, and a usage
+summary. `.harness/tokens.jsonl` keeps compatible snapshots tagged with that
+run ID, phase, cycle, mode, observed model, and parent session. The summary
+counts the latest Codex cumulative snapshot per session and the latest Claude
+snapshot per session/model. Codex input already includes cache reads; Claude
+input, cache creation, and cache reads are separate categories. Missing usage
+is marked `partial`; an interrupted process may need reconciliation from the
+original engine transcript. No token estimate or dollar cost is inferred.
 
 `.phases/` and `.harness/` (hook telemetry) are registered in `.git/info/exclude`
 automatically — ralph **does not touch** your project's `.gitignore`. A tracked

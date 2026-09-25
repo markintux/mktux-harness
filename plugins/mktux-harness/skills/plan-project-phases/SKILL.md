@@ -235,7 +235,9 @@ ela consegue rodar (formatador, build); o que exige pessoa ou aparelho fica.
 Sao `(manual)`:
 
 - rodar o formatador do projeto;
-- rodar a suite completa pelo subagent `test-runner`;
+- rodar a suite completa pelo subagent `test-runner` somente quando o plano
+  exigir explicitamente essa tarefa; o gate 2 ja roda a suite completa ao fim
+  da fase;
 - o build de assets, quando o projeto tem um;
 - sanity check com `git diff --stat`;
 - verificar algo em dispositivo real, ou fazer uma pergunta ao usuario.

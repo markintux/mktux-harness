@@ -14,6 +14,11 @@
 set -u
 
 event="${1:?uso: profile-hook.sh <evento>}"
+# Estes eventos podem formatar arquivos, rodar testes e bloquear a conclusao.
+# Gate 3 e juiz sao sessoes de leitura; os demais hooks seguem ativos.
+if [[ "${RALPH_SESSION_MODE:-}" == "verify" || "${RALPH_SESSION_MODE:-}" == "judge" ]]; then
+  case "$event" in claude-post-edit|codex-stop) exit 0 ;; esac
+fi
 plugin="$(cd "$(dirname "$0")/../.." && pwd)"
 # shellcheck disable=SC1091
 . "$plugin/scripts/lib/profile.sh" 2> /dev/null || exit 0

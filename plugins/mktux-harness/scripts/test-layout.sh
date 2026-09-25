@@ -181,6 +181,47 @@ else
   assert_eq 0 "$(cat "$TMP/stop.rc")" "codex-stop: exit 0"
   assert_eq "" "$(codex_stop "$plain_proj")" "codex-stop: projeto sem perfil -> sem saida"
   assert_eq 0 "$(cat "$TMP/stop.rc")" "codex-stop sem perfil: exit 0"
+
+  # Dispatcher dos manifests e chamadas diretas: verificacao nao pode formatar,
+  # testar ou pedir continuacao, mesmo com Sail disponivel e teste alterado.
+  hook_proj="$TMP/hook-mode"
+  mkdir -p "$hook_proj/vendor/bin" "$hook_proj/tests"
+  touch "$hook_proj/artisan" "$hook_proj/tests/ExampleTest.php"
+  git -C "$hook_proj" init -q
+  cat > "$hook_proj/vendor/bin/sail" <<'SAIL'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$HOOK_CALLS"
+if [ "${1:-}" = ps ]; then echo Up; fi
+if [ "${1:-}" = artisan ]; then exit 1; fi
+SAIL
+  chmod +x "$hook_proj/vendor/bin/sail"
+  for mode in verify judge; do
+    calls="$TMP/hook-$mode.calls"
+    : > "$calls"
+    out=$(cd "$hook_proj" && echo '{"stop_hook_active":false}' |
+      RALPH_SESSION_MODE="$mode" HOOK_CALLS="$calls" bash "$DISPATCH" codex-stop)
+    assert_eq "" "$out" "$mode: codex dispatcher nao bloqueia"
+    edit_in "$hook_proj/tests/ExampleTest.php" |
+      RALPH_SESSION_MODE="$mode" HOOK_CALLS="$calls" CLAUDE_PROJECT_DIR="$hook_proj" \
+      bash "$DISPATCH" claude-post-edit > /dev/null 2>&1
+    (cd "$hook_proj" && echo '{"stop_hook_active":false}' |
+      RALPH_SESSION_MODE="$mode" HOOK_CALLS="$calls" \
+      bash "$PLUGIN/profiles/laravel/hooks/codex/pint-and-test.sh") > /dev/null
+    edit_in "$hook_proj/tests/ExampleTest.php" |
+      RALPH_SESSION_MODE="$mode" HOOK_CALLS="$calls" CLAUDE_PROJECT_DIR="$hook_proj" \
+      bash "$PLUGIN/profiles/laravel/hooks/claude/pint-and-test.sh" > /dev/null 2>&1
+    assert_eq 0 "$(wc -l < "$calls" | tr -d ' ')" "$mode: nenhum formatter ou teste por dispatcher ou direto"
+    assert_eq 2 "$(RALPH_SESSION_MODE="$mode" pre_bash "$sail_proj" 'php artisan migrate')" "$mode: guarda de seguranca segue ativa"
+  done
+  calls="$TMP/hook-impl.calls"; : > "$calls"
+  (cd "$hook_proj" && echo '{"stop_hook_active":false}' |
+    RALPH_SESSION_MODE=impl HOOK_CALLS="$calls" bash "$DISPATCH" codex-stop) > /dev/null
+  assert_contains "$calls" "bin pint" "impl: hook codex continua executando"
+  : > "$calls"
+  edit_in "$hook_proj/tests/ExampleTest.php" |
+    HOOK_CALLS="$calls" CLAUDE_PROJECT_DIR="$hook_proj" \
+    bash "$DISPATCH" claude-post-edit > /dev/null 2>&1 || true
+  assert_contains "$calls" "bin pint" "sem modo: hook claude continua executando"
 fi
 
 # ---------------------------------------------------------------------------
@@ -413,6 +454,8 @@ rollout 21-01-00 filho      pai     20
 rollout 21-02-00 neto       filho   3
 rollout 21-03-00 outro      -       7
 rollout 21-04-00 alheio     outro   9
+printf '%s\n' '{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":20,"output_tokens":1,"total_tokens":101}}}}' \
+  >> "$cx/sessions/2026/09/19/rollout-2026-09-19T21-00-00-pai.jsonl"
 (cd "$cx/repo" && echo '{"session_id":"pai"}' | CODEX_HOME="$cx" bash "$PLUGIN/hooks/codex/log-tokens.sh")
 assert_eq "pai - 100
 filho pai 20
@@ -445,6 +488,82 @@ abc 3 2 impl" "$(jq -r '"\(.session_id) \(.ralph_phase) \(.ralph_cycle) \(.ralph
   CODEX_HOME="$cx" bash "$PLUGIN/hooks/codex/log-tokens.sh")
 assert_eq "11 0 verify number" "$(jq -r '"\(.ralph_phase) \(.ralph_cycle) \(.ralph_mode) \(.ralph_phase | type)"' "$cx/repo/.harness/tokens.jsonl" | sort -u)" \
   "codex: fase e ciclo numericos, modo do gate 3"
+
+# A mesma fase em dois runs tem identidades distintas. Stop repetido nao
+# duplica snapshots; a finalizacao recupera um transcript mesmo sem Stop.
+header "7b. telemetria por run e reconciliacao"
+tel="$PLUGIN/scripts/telemetry.py"
+printf '# plano\n' > "$cx/repo/plan.md"
+for rid in run-a run-b; do
+  python3 "$tel" init --root "$cx/repo" --run-id "$rid" --plan "$cx/repo/plan.md" \
+    --version 0.12.0 --engine codex --model requested --effort low \
+    --verify-model verifier --verify-effort low
+  assert_eq partial "$(jq -r '.summary.status' "$cx/repo/.harness/runs/$rid.json")" \
+    "$rid: run iniciado ja sinaliza consumo incompleto"
+  (cd "$cx/repo" && echo '{"session_id":"pai"}' | RALPH_RUN_ID="$rid" \
+    RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl CODEX_HOME="$cx" \
+    bash "$PLUGIN/hooks/codex/log-tokens.sh")
+done
+(cd "$cx/repo" && echo '{"session_id":"pai"}' | RALPH_RUN_ID=run-a \
+  RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl CODEX_HOME="$cx" \
+  bash "$PLUGIN/hooks/codex/log-tokens.sh")
+assert_eq 3 "$(jq -r 'select(.ralph_run_id == "run-a") | .session_id' "$cx/repo/.harness/tokens.jsonl" | wc -l | tr -d ' ')" \
+  "Stop repetido: pai e dois filhos uma vez cada"
+assert_eq 3 "$(jq -r 'select(.ralph_run_id == "run-b") | .session_id' "$cx/repo/.harness/tokens.jsonl" | wc -l | tr -d ' ')" \
+  "mesma fase e ciclo em outro run separados"
+printf 'session id: pai\n' > "$cx/repo/engine.log"
+RALPH_RUN_ID=run-a RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl CODEX_HOME="$cx" \
+  python3 "$tel" record --root "$cx/repo" --run-id run-a --engine codex --log "$cx/repo/engine.log" --rc 124
+printf 'session id: outro\n' > "$cx/repo/engine-2.log"
+RALPH_RUN_ID=run-a RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl CODEX_HOME="$cx" \
+  python3 "$tel" record --root "$cx/repo" --run-id run-a --engine codex --log "$cx/repo/engine-2.log" --rc 0
+RALPH_RUN_ID=run-a RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl CODEX_HOME="$cx" \
+  python3 "$tel" record --root "$cx/repo" --run-id run-a --engine codex --log "$cx/repo/engine-2.log" --rc 0
+python3 "$tel" summary --root "$cx/repo" --run-id run-a --finished
+python3 "$tel" summary --root "$cx/repo" --run-id run-a --finished
+printf '%s\n' '{"ralph_run_id":"run-a","session_id":"pai","vendor":"codex","model":"gpt-x","input":1,"output":1,"cache_read":0}' \
+  >> "$cx/repo/.harness/tokens.jsonl"
+python3 "$tel" summary --root "$cx/repo" --run-id run-a --finished
+assert_eq "complete 139 20 3 0 2 124" "$(jq -r '"\(.summary.status) \(.summary.vendors.codex.input) \(.summary.vendors.codex.cache_read) \(.summary.subagents) \(.summary.missing_attempts) \(.attempts | length) \(.attempts[0].exit_code)"' "$cx/repo/.harness/runs/run-a.json")" \
+  "Codex: acumulado resiste a Stop tardio, cache, retries, filhos e timeout"
+assert_eq "$(jq -r '.plan_sha256' "$cx/repo/.harness/runs/run-a.json")" \
+  "$(jq -r '.plan_sha256' "$cx/repo/.harness/runs/run-b.json")" "mesmo plano preservado em dois resumos"
+assert_eq 2 "$(find "$cx/repo/.harness/runs" -name 'run-*.json' | wc -l | tr -d ' ')" "resumo anterior sobrevive"
+
+clhome="$TMP/claude-home"; mkdir -p "$clhome/projects/example"
+cp "$cl/t/sess.jsonl" "$clhome/projects/example/sess.jsonl"
+mkdir -p "$clhome/projects/example/sess/subagents"
+cp "$cl/t/sess/subagents/agent-abc.jsonl" "$clhome/projects/example/sess/subagents/"
+msg haiku 2 >> "$clhome/projects/example/sess.jsonl"
+printf '%s\n' '{"type":"assistant","message":{"model":"opus","usage":{"input_tokens":3,"output_tokens":1,"cache_creation_input_tokens":4,"cache_read_input_tokens":2}}}' >> "$clhome/projects/example/sess.jsonl"
+printf '{"type":"assistant","message":' >> "$clhome/projects/example/sess.jsonl"
+printf '# plano\n' > "$cl/proj/plan.md"
+python3 "$tel" init --root "$cl/proj" --run-id claude-a --plan "$cl/proj/plan.md" \
+  --version 0.12.0 --engine claude
+printf '{"type":"result","session_id":"sess"}\n' > "$cl/proj/engine.log"
+RALPH_RUN_ID=claude-a RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl \
+  CLAUDE_CONFIG_DIR="$clhome" python3 "$tel" record --root "$cl/proj" --run-id claude-a \
+  --engine claude --log "$cl/proj/engine.log" --rc 1
+python3 "$tel" summary --root "$cl/proj" --run-id claude-a --finished
+assert_eq "complete 27 4 2 1 1 0" "$(jq -r '"\(.summary.status) \(.summary.vendors.claude.input) \(.summary.vendors.claude.cache_creation) \(.summary.vendors.claude.cache_read) \(.summary.subagents) \(.attempts[0].exit_code) \(.summary.missing_attempts)"' "$cl/proj/.harness/runs/claude-a.json")" \
+  "Claude: Stop ausente, dois modelos, cache separado e JSONL truncado"
+python3 "$tel" init --root "$cl/proj" --run-id claude-b --plan "$cl/proj/plan.md" --engine claude
+echo "{\"transcript_path\":\"$cl/t/sess.jsonl\",\"session_id\":\"sess\"}" |
+  RALPH_RUN_ID=claude-b RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl \
+  CLAUDE_PROJECT_DIR="$cl/proj" bash "$PLUGIN/hooks/claude/log-tokens.sh"
+RALPH_RUN_ID=claude-b RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl \
+  CLAUDE_CONFIG_DIR="$TMP/no-claude-home" python3 "$tel" record --root "$cl/proj" --run-id claude-b \
+  --engine claude --log "$cl/proj/engine.log" --rc 0
+python3 "$tel" summary --root "$cl/proj" --run-id claude-b --finished
+assert_eq "complete 0 $cl/t/sess.jsonl" "$(jq -r '"\(.summary.status) \(.summary.missing_attempts) \(.sources.sess)"' "$cl/proj/.harness/runs/claude-b.json")" \
+  "Claude: caminho conhecido pelo Stop evita busca global na finalizacao"
+python3 "$tel" init --root "$cl/proj" --run-id unknown --plan "$cl/proj/plan.md" --engine claude
+: > "$cl/proj/unknown.log"
+RALPH_RUN_ID=unknown RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl \
+  python3 "$tel" record --root "$cl/proj" --run-id unknown --engine claude --log "$cl/proj/unknown.log" --rc 130
+python3 "$tel" summary --root "$cl/proj" --run-id unknown --finished
+assert_eq "partial 1 130" "$(jq -r '"\(.summary.status) \(.summary.missing_attempts) \(.attempts[0].exit_code)"' "$cl/proj/.harness/runs/unknown.json")" \
+  "interrupcao sem usage aparece parcial, nao zero confirmado"
 
 # ---------------------------------------------------------------------------
 # 8. Auto-checagem de BR do plan-project-phases (Parte 7)

@@ -218,9 +218,10 @@ Primeira regra que resolver vence:
 5. nada resolvido → aviso alto e gate 2 pulado (o gate 3 segura sozinho)
 
 O perfil tambem valida o ambiente no preflight e acrescenta notas ao prompt de
-implementacao, incluindo como rodar um teste focado. O prompt pede teste focado
-durante o trabalho e o comando completo uma vez, no fim: a suite inteira a cada
-item custava minutos por item. O comando resolvido vai para as sessoes em
+implementacao, incluindo como rodar um teste focado. O prompt pede testes
+focados durante o trabalho; o gate 2 roda a suite completa depois da sessao.
+Uma suite completa na sessao continua possivel para investigar falhas ou cumprir
+instrucoes explicitas do projeto ou da fase. O comando resolvido vai para as sessoes em
 `RALPH_TEST_CMD`: o subagent `test-runner` roda exatamente o que o gate 2 roda.
 
 Para ver o que o ralph vai resolver num projeto, sem rodar nada:
@@ -304,6 +305,14 @@ anteriores para dentro da sessao fria.
 
 O que esta em `logs/` e do run mais recente de cada fase. Diagnostico de um run
 antigo: `logs/archive/`.
+
+Cada invocacao tem um UUID em `.harness/runs/<run-id>.json`, com hash do plano,
+versao/revisao do harness, modelos configurados, tentativas e resumo de tokens.
+O hook preserva `.harness/tokens.jsonl` e acrescenta run, fase, ciclo, modo,
+modelo observado e pai. O resumo usa o ultimo acumulado Codex por sessao e o
+ultimo Claude por sessao/modelo; cache do Codex ja integra `input`, enquanto
+cache do Claude fica separado. `partial` indica consumo ausente ou interrupcao
+sem transcript recuperavel; nao equivale a zero.
 
 `.phases/` e `.harness/` (telemetria dos hooks) sao registrados em
 `.git/info/exclude` automaticamente — o ralph nao mexe no `.gitignore` do
