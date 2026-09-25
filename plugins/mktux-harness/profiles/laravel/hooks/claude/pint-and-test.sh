@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+[[ "${RALPH_SESSION_MODE:-}" == "verify" || "${RALPH_SESSION_MODE:-}" == "judge" ]] && exit 0
+
 # hooks podem rodar com cwd fora do projeto — ancora tudo na raiz.
 # Fallback pela raiz do git, igual ao port do Codex: o script mora no plugin,
 # entao um caminho relativo a "$0" ancoraria no plugin, nao no projeto.

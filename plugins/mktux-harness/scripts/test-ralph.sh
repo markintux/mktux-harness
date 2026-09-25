@@ -70,6 +70,7 @@ verify=0
 printf '%s\n' "${RALPH_TEST_CMD-<unset>}" >> "$state/session_test_cmd"
 # Fase, ciclo e modo: o log-tokens grava os tres em cada linha do tokens.jsonl.
 printf '%s %s %s\n' "${RALPH_PHASE_NUM-}" "${RALPH_PHASE_ATTEMPT-}" "${RALPH_SESSION_MODE-}" >> "$state/session_env"
+printf '%s\n' "${RALPH_RUN_ID-}" >> "$state/session_run_ids"
 
 bump() {
   local f="$state/$1" n=0
@@ -569,6 +570,9 @@ if case_enabled ok-first; then
 1 1 verify
 2 1 impl
 2 1 verify" "$(cat "$d/state/session_env")" "sessoes recebem fase, ciclo e modo (para o tokens.jsonl)"
+  assert_eq 1 "$(sort -u "$d/state/session_run_ids" | wc -l | tr -d ' ')" "todas as sessoes recebem o mesmo run id"
+  assert_eq 1 "$(find "$d/repo/.harness/runs" -name '*.json' | wc -l | tr -d ' ')" "resumo local criado pela invocacao"
+  assert_eq "partial" "$(jq -r '.summary.status' "$d/repo/.harness/runs/"*.json)" "engine mock sem usage fica parcial"
 fi
 
 # ---------------------------------------------------------------------------
@@ -584,6 +588,8 @@ if case_enabled test-red-once; then
   assert_contains "$d/out.log" "Ciclo de correcao 2/2" "entrou em ciclo de correcao"
   # o prompt de correcao carrega a causa REAL, nao "os testes falharam" generico
   assert_contains "$d/repo/.phases/prompts/phase-01.cycle-2.txt" "ExpectedFooTest" "prompt de correcao carrega a saida do teste"
+  assert_contains "$d/repo/.phases/prompts/phase-01.cycle-2.txt" "O gate 2" "correcao deixa suite completa para o gate 2"
+  assert_not_contains "$d/repo/.phases/prompts/phase-01.cycle-2.txt" "suite completa UMA vez" "correcao sem suite completa obrigatoria"
   assert_contains "$d/repo/.phases/prompts/phase-01.cycle-2.txt" "## Fase a completar" "prompt de correcao e auto-contido (fase inteira)"
   # logs por ciclo, nunca sobrescritos
   test -f "$d/repo/.phases/logs/phase-01.cycle-1.log" && test -f "$d/repo/.phases/logs/phase-01.cycle-2.log" \
@@ -632,6 +638,9 @@ if case_enabled limit-epoch; then
   assert_eq 3 "$(commits "$d")" "fases commitadas apos a espera"
   assert_contains "$d/out.log" "Limite de uso atingido" "limite detectado"
   assert_contains "$d/out.log" "Reset previsto para" "epoch de reset extraido do log"
+  test -f "$d/repo/.phases/logs/phase-01.cycle-1.limit-1.log" \
+    && ok "log da tentativa antes do retry preservado" \
+    || bad "log da tentativa antes do retry preservado"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1222,6 +1231,8 @@ DOC
   assert_contains "$prompt" "Table sales {" "tabela citada: bloco DBML"
   assert_not_contains "$prompt" "Table refunds {" "tabela nao citada fica fora"
   assert_contains "$prompt" "Nao leia inteiros" "docs completos so para consulta pontual"
+  assert_contains "$prompt" "O gate 2 executa" "implementacao delega suite completa ao gate 2"
+  assert_not_contains "$prompt" "rode a suite completa UMA vez" "implementacao sem suite completa obrigatoria"
   assert_not_contains "$prompt" "docs/features/barcode/feature-brief.md" "brief fora da lista de consulta"
   p2="$d/repo/.phases/prompts/phase-02.cycle-1.txt"
   assert_not_contains "$p2" "## Contexto desta fase" "fase sem citacao: sem recorte"
@@ -1587,14 +1598,15 @@ fi
 #     numa sessao, sem nenhuma execucao filtrada.
 # ---------------------------------------------------------------------------
 if case_enabled impl-prompt; then
-  header "42. prompt: teste focado, suite uma vez, sem memoria"
+  header "42. prompt: teste focado, suite pelo gate 2, sem memoria"
   d=$(new_case impl-prompt)
   rc=$(run_ralph "$d" test-red-once --engine claude --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "exit 0"
   for p in "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "$d/repo/.phases/prompts/phase-01.cycle-2.txt"; do
     kind=$(basename "$p" .txt)
-    assert_contains "$p" "rode so os testes afetados" "$kind: teste focado durante o trabalho"
-    assert_contains "$p" "rode o comando acima UMA vez" "$kind: suite completa uma vez"
+    assert_contains "$p" "rode os testes afetados" "$kind: teste focado durante o trabalho"
+    assert_contains "$p" "O gate 2 roda o comando completo" "$kind: suite completa no gate 2"
+    assert_not_contains "$p" "rode o comando acima UMA vez" "$kind: sem suite completa obrigatoria"
     assert_not_contains "$p" "Rode a suite SEMPRE" "$kind: sem a ordem de suite a cada item"
     assert_not_contains "$p" "use-a para entender o historico" "$kind: sem convite a memoria"
     assert_contains "$p" "nao consulte memoria de sessoes anteriores" "$kind: sessao fria declarada"
