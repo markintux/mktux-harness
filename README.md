@@ -110,6 +110,14 @@ TASK 3: NOT-CODE — needs a human to run `sail npm run build`
 `INCOMPLETE` fails the phase and triggers a fix cycle. `NOT-CODE` does not fail —
 it becomes a manual pending item in the report.
 
+The cheap verifier misreads. In a real run it read lines 1-260 of a 397-line
+file and failed the methods it never reached; the fix cycle checked the code,
+changed nothing, and the phase got stuck with correct code. So when a fix cycle
+leaves the failed code untouched, ralph sends the same code once to an
+**appeal**: a fresh verifier session on the implementation model and effort.
+If it passes, the phase closes; if it fails, both readings agree and the phase
+stops.
+
 A task the plan types as `- [ ] (manual) …` — run the formatter, build assets,
 check on a real phone — never reaches the verifier. ralph leaves it out of the
 numbered list, drops any verdict on it, and lists it under *Pendencias manuais*
@@ -1101,6 +1109,8 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | a task always comes back `NOT-CODE` | it is worded as a command (`run`, `confirm with git diff`). Reword it as a code state, or tag it `(manual)` if it really is a procedure |
 | a close-out phase fails with nothing wrong in the code | a procedure task without `(manual)`: the verifier tries to judge what it cannot read. Tag it `(manual)` |
 | phase fails every cycle until exhausted | a task with a conditional escape hatch (*"do X, but if it feels awkward, leave it"*). In doubt, the verifier picks INCOMPLETE |
+| `Gate 3 — recurso aprovou` | the cheap verifier failed the phase, the fix cycle changed nothing, and the implementation model passed the same code. Normal. If it happens on every phase, the cheap verifier is not reading the code: raise `RALPH_VERIFY_EFFORT` or change `RALPH_VERIFY_MODEL` |
+| phase stuck after `recurso tambem reprovou` | the cheap verifier and the implementation model read the same code and both failed it: now the task is the likely cause |
 | gate 2 red on the very first run | Laravel: Sail is down, or `.env.testing` is missing. Other stacks: the dev environment was never set up (dependencies, virtualenv) |
 | ralph or `test-runner` picks the wrong test command | check with `mktux-profile.sh test-cmd` (see [Stack profiles](#stack-profiles)); override with `--test-cmd` or `RALPH_TEST_CMD` |
 | `test-runner` returns `ERROR:` about a missing dependency | the environment is not set up. It never installs on its own: run the setup the line names (e.g. `uv sync --extra dev`) |

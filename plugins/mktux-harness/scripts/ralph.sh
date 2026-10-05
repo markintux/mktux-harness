@@ -75,7 +75,9 @@
 #      modelo de implementacao. Recebe as tasks ja numeradas pelo ralph e os
 #      arquivos alterados na fase como ponto de partida. Ferramentas: claude so
 #      tem Read/Glob/Grep; codex roda em sandbox read-only, instruido a nao
-#      rodar build nem teste.
+#      rodar build nem teste. Reprovacao que o ciclo de correcao nao aceitou
+#      (nao mudou o codigo) vai uma vez por fase a um recurso: verificador novo
+#      com o modelo e o effort de implementacao.
 #
 # Contestacao: a sessao que confirma um erro no plano (task que cita o que nao
 # existe, contradiz uma BR/US, ou exige quebrar teste que a fase proibe tocar)
@@ -264,6 +266,11 @@ VERIFY_FALLBACK_MODEL=""
 # Liga o plano B na proxima sessao de leitura, sem esperar erro (gate 3 que
 # terminou sem veredito e vai tentar de novo).
 ENGINE_FORCE_FALLBACK=0
+# Recurso do gate 3: o modelo E o effort de implementacao. O plano B acima troca
+# so o modelo; com verificador e implementacao no mesmo modelo, ele repetiria o
+# mesmo juiz. Ver gate3_appeal.
+ENGINE_VERIFY_APPEAL_ARGS=()
+ENGINE_VERIFY_APPEAL=0
 # 1 quando run_engine desistiu de um erro passageiro que nao passou.
 ENGINE_TRANSIENT_EXHAUSTED=0
 # Flags que tiram os hooks do ai-memory de TODA sessao do ralph (smoke, impl,
@@ -744,6 +751,19 @@ preflight_checks() {
     else
       ENGINE_VERIFY_ARGS+=(--effort "$VERIFY_EFFORT")
       ENGINE_VERIFY_FALLBACK_ARGS+=(--effort "$VERIFY_EFFORT")
+    fi
+  fi
+  # Recurso: exatamente o modelo e o effort da implementacao. Sem --effort, o
+  # default da engine — o mesmo que a sessao de implementacao recebeu.
+  ENGINE_VERIFY_APPEAL_ARGS=()
+  if [ -n "$MODEL" ]; then
+    ENGINE_VERIFY_APPEAL_ARGS+=(--model "$MODEL")
+  fi
+  if [ -n "$EFFORT" ]; then
+    if [[ "$ENGINE" == "codex" ]]; then
+      ENGINE_VERIFY_APPEAL_ARGS+=(-c "model_reasoning_effort=$EFFORT")
+    else
+      ENGINE_VERIFY_APPEAL_ARGS+=(--effort "$EFFORT")
     fi
   fi
 
@@ -1558,11 +1578,17 @@ VERIFY
       echo "Nenhum arquivo alterado nesta fase: o codigo pode ja estar em HEAD. Procure"
       echo "pelos caminhos e nomes que as tasks citam."
     fi
+    # "Leia cada arquivo uma vez" sozinho virou "leia um trecho e pare": na fase 2
+    # de superadmin-email-digest o verificador leu as linhas 1-260 de um arquivo
+    # de 397 e reprovou os metodos que ficavam depois, "o arquivo lido termina
+    # antes desses metodos". A fase travou com o codigo certo.
     cat <<'VERIFY'
 
 - Comece pelos arquivos acima. Abra outro so quando a task ou uma contestacao o
   citar, ou o codigo o importar.
-- Leia cada arquivo uma vez.
+- Leia cada arquivo ate o fim, uma vez. Arquivo grande vai em trechos seguidos
+  ate a ultima linha, sem reler trecho: o que fica depois de uma leitura cortada
+  continua no arquivo.
 - NAO rode build, testes, typecheck nem lint: outro gate ja cuida disso.
 - NAO leia codigo de dependencias de terceiros (node_modules, vendor, .venv) nem
   lockfiles.
@@ -1571,7 +1597,9 @@ VERIFY
 - Uma linha TASK para cada numero da lista acima, sem excecao, sem agrupar.
 - Nao emita nenhum outro texto alem das linhas TASK.
 - Codigo ausente, TODO, placeholder ou teste faltando => INCOMPLETE.
-- Na duvida entre DONE e INCOMPLETE, INCOMPLETE.
+- INCOMPLETE diz o que falta no CODIGO. Trecho que voce nao leu nao e falta:
+  leia antes de julgar.
+- Na duvida entre DONE e INCOMPLETE, depois de ler, INCOMPLETE.
 
 ## Fase a verificar
 VERIFY
@@ -1892,7 +1920,9 @@ run_engine() {
   local model_args=() read_only=0
   if [[ "$mode" == "verify" || "$mode" == "judge" ]]; then
     read_only=1
-    if [ "$ENGINE_FORCE_FALLBACK" -eq 1 ]; then
+    if [ "$ENGINE_VERIFY_APPEAL" -eq 1 ]; then
+      model_args=(${ENGINE_VERIFY_APPEAL_ARGS[@]+"${ENGINE_VERIFY_APPEAL_ARGS[@]}"})
+    elif [ "$ENGINE_FORCE_FALLBACK" -eq 1 ]; then
       model_args=(${ENGINE_VERIFY_FALLBACK_ARGS[@]+"${ENGINE_VERIFY_FALLBACK_ARGS[@]}"})
       warn "Sessao $mode com o modelo de implementacao ($VERIFY_FALLBACK_MODEL)"
     else
@@ -2017,7 +2047,8 @@ run_engine() {
       [ "$delay" -gt "$cap" ] && delay=$cap
       warn "Erro passageiro do provedor ($mode): $(transient_error_line "$log_file")"
       warn "Re-execucao $transient/$MAX_TRANSIENT_RETRIES da MESMA sessao em $(format_duration "$delay") — nao consome ciclo de correcao"
-      if [ "$read_only" -eq 1 ] && [ "$transient" -ge 2 ] && [ "$ENGINE_FORCE_FALLBACK" -eq 0 ]; then
+      if [ "$read_only" -eq 1 ] && [ "$transient" -ge 2 ] && [ "$ENGINE_FORCE_FALLBACK" -eq 0 ] \
+        && [ "$ENGINE_VERIFY_APPEAL" -eq 0 ]; then
         model_args=(${ENGINE_VERIFY_FALLBACK_ARGS[@]+"${ENGINE_VERIFY_FALLBACK_ARGS[@]}"})
         warn "Sessao $mode passa para o modelo de implementacao ($VERIFY_FALLBACK_MODEL)"
       fi
@@ -2214,7 +2245,11 @@ gate3_verify_uncached() {
   fi
 
   GATE3_RAN=1
-  log "Gate 3 — sessao verificadora independente ($expected tasks${VERIFY_MODEL:+, modelo: $VERIFY_MODEL}${VERIFY_EFFORT:+, effort: $VERIFY_EFFORT})"
+  if [ "$ENGINE_VERIFY_APPEAL" -eq 1 ]; then
+    log "Gate 3 — recurso: sessao verificadora nova ($expected tasks, modelo: $VERIFY_FALLBACK_MODEL${EFFORT:+, effort: $EFFORT})"
+  else
+    log "Gate 3 — sessao verificadora independente ($expected tasks${VERIFY_MODEL:+, modelo: $VERIFY_MODEL}${VERIFY_EFFORT:+, effort: $VERIFY_EFFORT})"
+  fi
   state_gate 3 run
 
   local prompt_file verdict_src last_msg engine_rc=0
@@ -2351,12 +2386,15 @@ GATE3_MEMO_RAN=0
 # 1 quando o gate 3 terminou sem veredito (verificador nao respondeu). Lido por
 # run_phase: nao abre ciclo de correcao.
 GATE3_NO_VERDICT=0
+# 1 depois do recurso da fase: um por fase, como o juiz por contestacao.
+GATE3_APPEALED=0
 
 gate3_memo_reset() {
   GATE3_MEMO_SIG=""
   GATE3_MEMO_RC=0
   GATE3_MEMO_CAUSE=""
   GATE3_MEMO_RAN=0
+  GATE3_APPEALED=0
 }
 
 # Fase operacional: a propria fase se declara com `**Operational phase**` numa
@@ -2415,6 +2453,10 @@ gate3_independent_verify() {
   tree_sig="$(tree_signature)|$PHASE_CONTESTS|$PHASE_UNLOCKS"
 
   if [ -n "$GATE3_MEMO_SIG" ] && [ "$tree_sig" = "$GATE3_MEMO_SIG" ]; then
+    if [ "$GATE3_MEMO_RC" -ne 0 ] && [ "$GATE3_MEMO_RAN" -eq 1 ] && [ "$GATE3_APPEALED" -eq 0 ]; then
+      gate3_appeal "$phase_file" "$cycle" "$session_wrote" "$tree_sig" && return 0
+      return 1
+    fi
     GATE_CAUSE="$GATE3_MEMO_CAUSE"
     GATE3_RAN="$GATE3_MEMO_RAN"
     if [ "$GATE3_MEMO_RC" -eq 0 ]; then
@@ -2454,6 +2496,45 @@ gate3_independent_verify() {
 
   if [ "$rc" -eq 2 ]; then
     return 1
+  fi
+
+  GATE3_MEMO_SIG="$tree_sig"
+  GATE3_MEMO_RC="$rc"
+  GATE3_MEMO_CAUSE="$GATE_CAUSE"
+  GATE3_MEMO_RAN="$GATE3_RAN"
+  return "$rc"
+}
+
+# Recurso: a correcao leu a reprovacao, conferiu o codigo e nao mudou nada. Sao
+# duas leituras discordando, e o memo ficava com a do verificador barato. Na
+# fase 2 de superadmin-email-digest ele leu as linhas 1-260 de um arquivo de 397,
+# reprovou os metodos que nao chegou a ler, a correcao confirmou que estavam la,
+# e a fase travou com o codigo certo. O mesmo codigo vai uma vez por fase a uma
+# sessao verificadora nova, com o modelo e o effort de implementacao. Reprovar
+# de novo e trava de verdade: as duas leituras concordam.
+gate3_appeal() {
+  local phase_file="$1" cycle="$2" session_wrote="$3" tree_sig="$4" rc=0
+  GATE3_APPEALED=1
+  warn "Gate 3 — a correcao nao mudou o codigo reprovado; recurso com o modelo de implementacao"
+  ENGINE_VERIFY_APPEAL=1
+  gate3_verify_uncached "$phase_file" "$cycle" "$session_wrote" || rc=$?
+  ENGINE_VERIFY_APPEAL=0
+
+  # Recurso sem veredito nao julgou nada: vale a reprovacao que ja existia.
+  if [ "$rc" -eq 2 ]; then
+    warn "Gate 3 — recurso sem veredito; mantida a reprovacao anterior"
+    GATE3_NO_VERDICT=0
+    GATE_CAUSE="$GATE3_MEMO_CAUSE"
+    GATE3_RAN="$GATE3_MEMO_RAN"
+    state_gate 3 fail
+    return 1
+  fi
+
+  if [ "$rc" -eq 0 ]; then
+    success "Gate 3 — recurso aprovou: o verificador anterior reprovou o mesmo codigo"
+  else
+    warn "Gate 3 — recurso tambem reprovou: o modelo de implementacao confirma a reprovacao"
+    GATE_CAUSE="O recurso com o modelo de implementacao julgou o mesmo codigo e tambem reprovou."$'\n'"$GATE_CAUSE"
   fi
 
   GATE3_MEMO_SIG="$tree_sig"
@@ -2525,7 +2606,7 @@ CONTEST TASK <n>: REJECTED — <o que voce viu e o que a sessao deve fazer>
   esvaziar teste, e nunca afrouxar uma checagem alem do que o objetivo da task
   exige.
 - Comece pelos arquivos que a evidencia cita e pelos testes que falharam. Leia
-  cada arquivo uma vez.
+  cada arquivo ate o fim, uma vez; arquivo grande em trechos seguidos.
 - NAO rode build, testes, typecheck nem lint: a saida da suite esta acima.
 - NAO leia codigo de dependencias de terceiros (node_modules, vendor, .venv) nem
   lockfiles.
