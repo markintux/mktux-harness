@@ -71,7 +71,7 @@
 #      nao escreveu nada (claim "ja implementada"), ciclo de correcao, ou
 #      gate 2 desabilitado. --no-verify / RALPH_VERIFY=off desliga. O
 #      verificador usa modelo barato por default (claude: haiku; codex:
-#      gpt-5.6-luna com esforco baixo) — e leitura + checklist, nao precisa do
+#      gpt-6-luna com esforco baixo) — e leitura + checklist, nao precisa do
 #      modelo de implementacao. Recebe as tasks ja numeradas pelo ralph e os
 #      arquivos alterados na fase como ponto de partida. Ferramentas: claude so
 #      tem Read/Glob/Grep; codex roda em sandbox read-only, instruido a nao
@@ -122,7 +122,7 @@
 #   RALPH_TEST_CMD           comando de teste (gate 2); --test-cmd tem prioridade
 #   RALPH_VERIFY             gate 3: always (default) | auto | off
 #   RALPH_VERIFY_MODEL       modelo das sessoes auxiliares (gate 3)
-#                            (default: haiku no claude, gpt-5.6-luna no codex)
+#                            (default: haiku no claude, gpt-6-luna no codex)
 #   RALPH_VERIFY_EFFORT      esforco dessas sessoes (default: low no codex; no
 #                            claude fica com o default do modelo)
 #   RALPH_MAX_CYCLES         ciclos de correcao por fase (default: 3)
@@ -714,7 +714,7 @@ preflight_checks() {
   elif [[ "$ENGINE" == "claude" ]]; then
     VERIFY_MODEL="haiku"
   else
-    VERIFY_MODEL="gpt-5.6-luna"
+    VERIFY_MODEL="gpt-6-luna"
   fi
 
   # No codex o effort vem do ~/.codex/config.toml quando nao passamos flag —
