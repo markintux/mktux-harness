@@ -992,9 +992,9 @@ if case_enabled verify-codex-defaults; then
   git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat: trabalho previo"
   rc=$(run_ralph "$d" already-done --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
   assert_eq 0 "$rc" "exit 0"
-  assert_eq "gpt-5.6-luna" "$(cat "$d/state/verify_model" 2>/dev/null)" "verify no codex usa gpt-5.6-luna"
+  assert_eq "gpt-6-luna" "$(cat "$d/state/verify_model" 2>/dev/null)" "verify no codex usa gpt-6-luna"
   assert_eq "low" "$(cat "$d/state/verify_effort" 2>/dev/null)" "verify no codex usa effort low"
-  assert_contains "$d/out.log" "modelo: gpt-5.6-luna, effort: low" "log do gate 3 informa modelo e effort"
+  assert_contains "$d/out.log" "modelo: gpt-6-luna, effort: low" "log do gate 3 informa modelo e effort"
 
   d2=$(new_case verify-codex-override)
   mkdir -p "$d2/repo/src"

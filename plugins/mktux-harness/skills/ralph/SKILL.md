@@ -92,7 +92,7 @@ como feita, sem commit.
 ### Gate 3 em detalhe
 
 Roda em toda fase por default (`RALPH_VERIFY=always`). Usa modelo barato (claude:
-haiku; codex: gpt-5.6-luna com esforco baixo) — e leitura e checklist, nao precisa
+haiku; codex: gpt-6-luna com esforco baixo) — e leitura e checklist, nao precisa
 do modelo de implementacao.
 
 O ralph numera as tasks da fase no prompt do verificador e lista os arquivos
