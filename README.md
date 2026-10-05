@@ -630,7 +630,9 @@ To change the `docs/features/` root, set `MKTUX_SPEC_DIR`.
 2. Zero questions. Start to finish without human interaction.
 3. A phase is "complete" only when it clears all 4 gates.
 4. Usage limit hit → waits for the reset and re-runs the **same** phase, without
-   consuming a fix cycle.
+   consuming a fix cycle. Transient provider error (model at capacity,
+   overloaded, 5xx) → re-runs the **same** session with backoff, also without
+   consuming a cycle.
 5. One commit per completed phase.
 
 ### Flags
@@ -699,6 +701,8 @@ To see what ralph will resolve in a project without running anything:
 | `RALPH_MAX_CYCLES` | fix cycles per phase |
 | `RALPH_SESSION_TIMEOUT` | seconds an engine session may run before ralph kills it and everything it started (default `3600`, `0` disables). The killed session fails gate 0 with the cause |
 | `RALPH_MAX_LIMIT_WAITS` | consecutive limit waits, per phase |
+| `RALPH_MAX_TRANSIENT_RETRIES` | re-runs of a session that died on a transient provider error (default `6`). A verifier or judge session switches to the implementation model from the 2nd re-run on |
+| `RALPH_TRANSIENT_BACKOFF` | wait before the 1st re-run, in seconds; doubles each time, up to 600 (default `30`) |
 | `RALPH_SMOKE` | `0` disables the smoke test |
 | `RALPH_MEMORY` | `0` disables the per-phase page in [ai-memory](#long-term-memory-ai-memory). Turns itself off when the binary is missing or the server is down |
 | `RALPH_MEMORY_BIN` | ai-memory binary (default `ai-memory` on PATH) |

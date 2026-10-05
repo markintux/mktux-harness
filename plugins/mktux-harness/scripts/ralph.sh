@@ -132,6 +132,11 @@
 #   RALPH_MAX_LIMIT_WAITS    esperas consecutivas por limite, por fase (default: 20)
 #   RALPH_LIMIT_WAIT_DEFAULT fallback de espera em segundos (default: 1800)
 #   RALPH_LIMIT_BUFFER       segundos extras apos o reset (default: 60)
+#   RALPH_MAX_TRANSIENT_RETRIES  re-execucoes de uma sessao que caiu por erro
+#                            passageiro do provedor (modelo sem capacidade,
+#                            sobrecarga, 5xx), sem consumir ciclo (default: 6)
+#   RALPH_TRANSIENT_BACKOFF  espera antes da 1a re-execucao, em segundos; dobra a
+#                            cada tentativa, ate 600 (default: 30)
 #   RALPH_SMOKE              0 desliga o smoke test da engine (default: 1)
 #   RALPH_MEMORY             0 desliga a pagina por fase no ai-memory (default: 1;
 #                            sem o binario ou com o servidor fora do ar, desliga
@@ -237,6 +242,8 @@ RUN_LOG="$LOG_DIR/run.log"
 MAX_LIMIT_WAITS="${RALPH_MAX_LIMIT_WAITS:-20}"
 LIMIT_WAIT_DEFAULT="${RALPH_LIMIT_WAIT_DEFAULT:-1800}"
 LIMIT_BUFFER="${RALPH_LIMIT_BUFFER:-60}"
+MAX_TRANSIENT_RETRIES="${RALPH_MAX_TRANSIENT_RETRIES:-6}"
+TRANSIENT_BACKOFF="${RALPH_TRANSIENT_BACKOFF:-30}"
 SESSION_TIMEOUT="${RALPH_SESSION_TIMEOUT:-3600}"
 # 1 quando o watchdog encerrou a ultima sessao (run_logged). Lido pelo gate 0.
 SESSION_TIMED_OUT=0
@@ -250,6 +257,15 @@ ENGINE_IMPL_ARGS=()
 # Flags das sessoes auxiliares (gate 3): modelo barato, nunca o de
 # implementacao. Sao leitura + checklist, nao valem opus/xhigh por fase.
 ENGINE_VERIFY_ARGS=()
+# Plano B das sessoes de leitura quando o modelo barato nao responde: o modelo
+# de implementacao, com o effort do verificador. Ver run_engine.
+ENGINE_VERIFY_FALLBACK_ARGS=()
+VERIFY_FALLBACK_MODEL=""
+# Liga o plano B na proxima sessao de leitura, sem esperar erro (gate 3 que
+# terminou sem veredito e vai tentar de novo).
+ENGINE_FORCE_FALLBACK=0
+# 1 quando run_engine desistiu de um erro passageiro que nao passou.
+ENGINE_TRANSIENT_EXHAUSTED=0
 # Flags que tiram os hooks do ai-memory de TODA sessao do ralph (smoke, impl,
 # gate 3). Montadas no preflight por resolve_hook_isolation.
 ENGINE_ISOLATION_ARGS=()
@@ -670,6 +686,16 @@ preflight_checks() {
     exit 1
   fi
 
+  if ! [[ "$MAX_TRANSIENT_RETRIES" =~ ^[0-9]+$ ]]; then
+    fail "Valor invalido para RALPH_MAX_TRANSIENT_RETRIES: '$MAX_TRANSIENT_RETRIES'. Use um inteiro >= 0."
+    exit 1
+  fi
+
+  if ! [[ "$TRANSIENT_BACKOFF" =~ ^[0-9]+$ ]]; then
+    fail "Valor invalido para RALPH_TRANSIENT_BACKOFF: '$TRANSIENT_BACKOFF'. Use segundos."
+    exit 1
+  fi
+
   case "$VERIFY_MODE" in
     auto|always|off) ;;
     *)
@@ -704,11 +730,20 @@ preflight_checks() {
   if [ -n "$VERIFY_MODEL" ]; then
     ENGINE_VERIFY_ARGS+=(--model "$VERIFY_MODEL")
   fi
+  # Plano B: o modelo de implementacao acabou de rodar a fase, entao esta de pe.
+  # Sem --model, o default da engine.
+  ENGINE_VERIFY_FALLBACK_ARGS=()
+  VERIFY_FALLBACK_MODEL="${MODEL:-default da engine}"
+  if [ -n "$MODEL" ]; then
+    ENGINE_VERIFY_FALLBACK_ARGS+=(--model "$MODEL")
+  fi
   if [ -n "$VERIFY_EFFORT" ]; then
     if [[ "$ENGINE" == "codex" ]]; then
       ENGINE_VERIFY_ARGS+=(-c "model_reasoning_effort=$VERIFY_EFFORT")
+      ENGINE_VERIFY_FALLBACK_ARGS+=(-c "model_reasoning_effort=$VERIFY_EFFORT")
     else
       ENGINE_VERIFY_ARGS+=(--effort "$VERIFY_EFFORT")
+      ENGINE_VERIFY_FALLBACK_ARGS+=(--effort "$VERIFY_EFFORT")
     fi
   fi
 
@@ -1657,6 +1692,46 @@ detect_usage_limit() {
   return 0
 }
 
+# Erro passageiro do provedor: modelo sem capacidade, sobrecarga, 5xx, stream
+# cortado. Nao e limite de uso (nao ha reset a esperar) nem falha da fase: a
+# mesma sessao, minutos depois, passa. Na fase 1 de superadmin-email-digest o
+# verificador morreu em 4s com "Selected model is at capacity", o ralph leu a
+# falta de veredito como fase incompleta, abriu uma correcao sem nada a corrigir
+# e o memo do gate 3 guardou a reprovacao — fase travada com o codigo certo.
+#
+# So conta sessao que falhou: exit code, is_error do claude, ou codex sem
+# mensagem final (-o). Sessao que terminou limpa pode ter citado o erro.
+detect_transient_error() {
+  local log_file="$1" rc="$2" tail_txt
+
+  [ "$SESSION_TIMED_OUT" -eq 1 ] && return 1
+  grep -qE '"is_error"[[:space:]]*:[[:space:]]*false' "$log_file" 2> /dev/null && return 1
+
+  if [ "$rc" -eq 0 ]; then
+    if [[ "$ENGINE" == "claude" ]]; then
+      grep -qE '"is_error"[[:space:]]*:[[:space:]]*true' "$log_file" 2> /dev/null || return 1
+    else
+      [ -s "$(last_message_file "$log_file")" ] && return 1
+    fi
+  fi
+
+  tail_txt=$(engine_tail "$log_file" 20)
+
+  if [[ "$ENGINE" == "claude" ]]; then
+    grep -qiE 'API Error: 5[0-9]{2}|overloaded' <<< "$tail_txt"
+  else
+    # O codex encerra o turno com uma linha "ERROR: <mensagem>". Casar so nela
+    # evita confundir a saida de teste do projeto com erro do provedor.
+    grep -E '^ERROR:' <<< "$tail_txt" \
+      | grep -qiE 'capacity|overloaded|different model|temporarily unavailable|service unavailable|internal server error|bad gateway|gateway timeout|stream disconnected|error sending request|connection (reset|refused|closed)|status 5[0-9]{2}'
+  fi
+}
+
+# Primeira linha de erro do provedor, para o aviso na tela.
+transient_error_line() {
+  engine_tail "$1" 20 | grep -iE '^ERROR:|API Error|overloaded' | head -n 1 | cut -c1-160
+}
+
 wait_for_reset() {
   local epoch="$1"
   local now wait_secs
@@ -1817,8 +1892,16 @@ run_engine() {
   local model_args=() read_only=0
   if [[ "$mode" == "verify" || "$mode" == "judge" ]]; then
     read_only=1
-    model_args=(${ENGINE_VERIFY_ARGS[@]+"${ENGINE_VERIFY_ARGS[@]}"})
+    if [ "$ENGINE_FORCE_FALLBACK" -eq 1 ]; then
+      model_args=(${ENGINE_VERIFY_FALLBACK_ARGS[@]+"${ENGINE_VERIFY_FALLBACK_ARGS[@]}"})
+      warn "Sessao $mode com o modelo de implementacao ($VERIFY_FALLBACK_MODEL)"
+    else
+      model_args=(${ENGINE_VERIFY_ARGS[@]+"${ENGINE_VERIFY_ARGS[@]}"})
+    fi
   fi
+
+  local transient=0 delay cap shift_by
+  ENGINE_TRANSIENT_EXHAUSTED=0
 
   while true; do
     local rc=0
@@ -1828,6 +1911,10 @@ run_engine() {
     fi
 
     state_log "$mode" "$log_file"
+
+    # A mensagem final de uma tentativa anterior nao pode passar por esta: e
+    # dela que saem o veredito do gate 3 e o sinal de sessao que falhou.
+    [[ "$ENGINE" == "codex" ]] && rm -f "$(last_message_file "$log_file")"
 
     if [[ "$ENGINE" == "codex" ]]; then
       if [ "$read_only" -eq 1 ]; then
@@ -1840,7 +1927,6 @@ run_engine() {
       else
         # -o tambem aqui: a mensagem final carrega as contestacoes da sessao e
         # e o que o relatorio de falha mostra.
-        rm -f "$(last_message_file "$log_file")"
         run_logged "$log_file" "$prompt_file" codex exec --color never --sandbox danger-full-access \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} \
@@ -1906,6 +1992,36 @@ run_engine() {
       # reconciliar uso tardio mesmo quando o Stop nao tiver disparado.
       cp "$log_file" "${log_file%.log}.limit-$((LIMIT_WAITS + 1)).log" 2> /dev/null || true
       wait_for_reset "$reset_epoch"
+      continue
+    fi
+
+    # Erro passageiro: a MESMA sessao de novo, com backoff, sem consumir ciclo
+    # de correcao (invariante 4, como o limite de uso). Sessao de leitura muda
+    # para o modelo de implementacao a partir da 2a re-execucao: "at capacity"
+    # costuma ser do modelo, e o de implementacao acabou de responder.
+    if detect_transient_error "$log_file" "$rc"; then
+      transient=$((transient + 1))
+      cp "$log_file" "${log_file%.log}.transient-$transient.log" 2> /dev/null || true
+      if [ "$transient" -gt "$MAX_TRANSIENT_RETRIES" ]; then
+        fail "Erro do provedor persistiu apos $MAX_TRANSIENT_RETRIES re-execucoes ($mode): $(transient_error_line "$log_file")"
+        ENGINE_TRANSIENT_EXHAUSTED=1
+        [ "$rc" -eq 0 ] && rc=1
+        return "$rc"
+      fi
+      cap=600
+      [ "$TRANSIENT_BACKOFF" -gt "$cap" ] && cap=$TRANSIENT_BACKOFF
+      # Expoente limitado: com muitas re-execucoes o shift estouraria o inteiro.
+      shift_by=$((transient - 1))
+      [ "$shift_by" -gt 10 ] && shift_by=10
+      delay=$((TRANSIENT_BACKOFF << shift_by))
+      [ "$delay" -gt "$cap" ] && delay=$cap
+      warn "Erro passageiro do provedor ($mode): $(transient_error_line "$log_file")"
+      warn "Re-execucao $transient/$MAX_TRANSIENT_RETRIES da MESMA sessao em $(format_duration "$delay") — nao consome ciclo de correcao"
+      if [ "$read_only" -eq 1 ] && [ "$transient" -ge 2 ] && [ "$ENGINE_FORCE_FALLBACK" -eq 0 ]; then
+        model_args=(${ENGINE_VERIFY_FALLBACK_ARGS[@]+"${ENGINE_VERIFY_FALLBACK_ARGS[@]}"})
+        warn "Sessao $mode passa para o modelo de implementacao ($VERIFY_FALLBACK_MODEL)"
+      fi
+      [ "$delay" -gt 0 ] && sleep "$delay"
       continue
     fi
 
@@ -2061,6 +2177,7 @@ gate3_verify_uncached() {
   local verify_log="$LOG_DIR/${phase_file%.md}.verify-${cycle}.log"
 
   GATE3_RAN=0
+  GATE3_NO_VERDICT=0
 
   case "$VERIFY_MODE" in
     off)
@@ -2100,13 +2217,13 @@ gate3_verify_uncached() {
   log "Gate 3 — sessao verificadora independente ($expected tasks${VERIFY_MODEL:+, modelo: $VERIFY_MODEL}${VERIFY_EFFORT:+, effort: $VERIFY_EFFORT})"
   state_gate 3 run
 
-  local prompt_file verdict_src last_msg
+  local prompt_file verdict_src last_msg engine_rc=0
   prompt_file=$(build_verify_prompt "$phase_file" "$cycle")
   # Logs sobrevivem ao re-run com o mesmo nome: a mensagem final de um run
   # anterior nao pode passar pelo veredito deste.
   last_msg=$(last_message_file "$verify_log")
   rm -f "$last_msg"
-  run_engine "$prompt_file" "$verify_log" verify || true
+  run_engine "$prompt_file" "$verify_log" verify || engine_rc=$?
 
   # A mensagem final quando a engine a grava (codex -o); o log inteiro senao.
   verdict_src="$verify_log"
@@ -2115,12 +2232,20 @@ gate3_verify_uncached() {
   local task_lines
   task_lines=$(sed 's/^[[:space:]]*//' "$verdict_src" | grep -E '^TASK [0-9]+: (DONE|INCOMPLETE|NOT-CODE)' || true)
 
+  # Sem veredito nao e reprovacao: ninguem julgou o codigo. Retorno 2, que o
+  # memo nao guarda e o ciclo de correcao nao recebe — a sessao de correcao nao
+  # tem o que corrigir num verificador que nao respondeu.
   if [ -z "$task_lines" ]; then
+    GATE3_NO_VERDICT=1
     GATE_CAUSE=""
     [ "$SESSION_TIMED_OUT" -eq 1 ] && GATE_CAUSE="$(session_timeout_cause)"$'\n'
-    GATE_CAUSE="${GATE_CAUSE}O verificador independente nao emitiu nenhuma linha 'TASK <n>: DONE|INCOMPLETE|NOT-CODE' — nao foi possivel confirmar que a fase esta completa. Ultimas linhas do verificador:"$'\n'"$(engine_tail "$verify_log" 40)"
+    if [ "$engine_rc" -ne 0 ]; then
+      GATE_CAUSE="${GATE_CAUSE}A sessao do verificador falhou (exit $engine_rc) antes de julgar a fase — falha de infra (provedor, rede, cota), nao das tasks. Ultimas linhas do verificador:"$'\n'"$(engine_tail "$verify_log" 40)"
+    else
+      GATE_CAUSE="${GATE_CAUSE}O verificador independente nao emitiu nenhuma linha 'TASK <n>: DONE|INCOMPLETE|NOT-CODE' — o codigo nao foi julgado. Ultimas linhas do verificador:"$'\n'"$(engine_tail "$verify_log" 40)"
+    fi
     state_gate 3 fail
-    return 1
+    return 2
   fi
 
   # Consolida por NUMERO da task, nao por linha. Sem o -o (codex antigo, ou
@@ -2223,6 +2348,9 @@ GATE3_MEMO_SIG=""
 GATE3_MEMO_RC=0
 GATE3_MEMO_CAUSE=""
 GATE3_MEMO_RAN=0
+# 1 quando o gate 3 terminou sem veredito (verificador nao respondeu). Lido por
+# run_phase: nao abre ciclo de correcao.
+GATE3_NO_VERDICT=0
 
 gate3_memo_reset() {
   GATE3_MEMO_SIG=""
@@ -2280,6 +2408,7 @@ phase_committed() {
 gate3_independent_verify() {
   local phase_file="$1" cycle="$2" session_wrote="$3"
   local tree_sig rc=0
+  GATE3_NO_VERDICT=0
 
   # A contestacao entra na chave: sessao que nao escreveu nada mas trouxe
   # evidencia nova merece outro julgamento; a mesma, nao.
@@ -2300,13 +2429,31 @@ gate3_independent_verify() {
 
   gate3_verify_uncached "$phase_file" "$cycle" "$session_wrote" || rc=$?
 
+  # Sem veredito: uma sessao verificadora nova, com o modelo de implementacao.
+  # Nao quando o erro do provedor ja esgotou as re-execucoes — run_engine ja
+  # tentou os dois modelos.
+  if [ "$rc" -eq 2 ] && [ "$ENGINE_TRANSIENT_EXHAUSTED" -eq 0 ]; then
+    local verify_log="$LOG_DIR/${phase_file%.md}.verify-${cycle}.log"
+    cp "$verify_log" "${verify_log%.log}.no-verdict.log" 2> /dev/null || true
+    warn "Gate 3 — o verificador terminou sem veredito; nova sessao verificadora (log anterior: ${verify_log%.log}.no-verdict.log)"
+    ENGINE_FORCE_FALLBACK=1
+    rc=0
+    gate3_verify_uncached "$phase_file" "$cycle" "$session_wrote" || rc=$?
+    ENGINE_FORCE_FALLBACK=0
+  fi
+
   if [ "$rc" -ne 0 ] && phase_is_operational "$phase_file"; then
     warn "Gate 3 — fase declarada operacional (**Operational phase**); reporta, nao reprova"
     warn "Gate 3 — corretude desta fase fica por conta do gate 2 (suite do projeto). Pendente:"
     printf '%s\n' "$GATE_CAUSE" | sed 's/^/    /'
     GATE_CAUSE=""
+    GATE3_NO_VERDICT=0
     rc=0
     state_gate 3 pass
+  fi
+
+  if [ "$rc" -eq 2 ]; then
+    return 1
   fi
 
   GATE3_MEMO_SIG="$tree_sig"
@@ -2594,6 +2741,42 @@ archive_orphan_logs() {
   fi
 }
 
+# Relatorio de fase que falhou. cycles_run 0: falhou nos gates contra HEAD,
+# antes de abrir sessao.
+report_phase_failure() {
+  local phase_file="$1" phase_num="$2" phase_title="$3" seq="$4" cycles_run="$5" phase_start="$6" log_file="$7"
+  local phase_duration=$(($(date +%s) - phase_start)) how
+  how="apos $cycles_run ciclo(s)"
+  [ "$cycles_run" -eq 0 ] && how="sem sessao"
+  state_phase "$seq" failed
+  fail "Phase $phase_num: $phase_title — FALHOU $how ($(format_duration "$phase_duration"))"
+  fail "Ultima causa ($LAST_GATE):"
+  printf '%s\n' "$GATE_CAUSE" | head -n 20 | sed 's/^/    /'
+  # A sessao costuma saber por que travou — na fase 3 de pub-email-alerts ela
+  # disse que o comando que quebrava era proibido nesta fase — e so o log
+  # guardava isso.
+  local final_msg=""
+  [ -n "$log_file" ] && final_msg=$(session_final_message "$log_file")
+  if [ -n "$final_msg" ]; then
+    fail "Ultima mensagem da sessao (fim):"
+    printf '%s\n' "$final_msg" | grep -v '^[[:space:]]*$' | tail -n 12 | sed 's/^/    /'
+  fi
+  if [ -n "$PHASE_UNLOCKS$PHASE_REFUSALS" ]; then
+    fail "Julgamento das contestacoes (juiz, suite vermelha):"
+    printf '%s\n%s\n' "$PHASE_UNLOCKS" "$PHASE_REFUSALS" | grep . | sed 's/^/    /'
+  fi
+  fail "Logs em: $LOG_DIR/${phase_file%.md}.*"
+
+  # O trabalho parcial fica na arvore; o preflight da proxima execucao exige
+  # arvore limpa. Diga o que fazer em vez de deixar o dev descobrir no abort.
+  if [ -n "$(git status --porcelain)" ]; then
+    warn "O trabalho parcial desta fase ficou na arvore. Antes de re-rodar o ralph:"
+    warn "    commite como 'feat(phase-$phase_num): $phase_title' (o ralph revalida a fase contra HEAD, sem sessao)"
+    warn "    ou 'git checkout -- . && git clean -fd' (descarta)"
+  fi
+  return 1
+}
+
 # run_phase <phase_file> <phase_num> <phase_title> <seq> <total>
 run_phase() {
   local phase_file="$1" phase_num="$2" phase_title="$3" seq="$4" total="$5"
@@ -2646,6 +2829,13 @@ run_phase() {
     elif ! gate3_independent_verify "$phase_file" 0 0; then
       LAST_GATE="gate 3 — verificacao independente"
       precheck_failed=1
+      # Sessao de implementacao nao destrava um verificador que nao responde.
+      if [ "$GATE3_NO_VERDICT" -eq 1 ]; then
+        LAST_GATE="gate 3 — verificador sem veredito"
+        fail "Gate 3 sem veredito — o codigo em HEAD nao foi julgado; nenhuma sessao aberta"
+        report_phase_failure "$phase_file" "$phase_num" "$phase_title" "$seq" 0 "$phase_start" ""
+        return 1
+      fi
     elif [ -z "$(git status --porcelain)" ]; then
       success "Phase $phase_num: $phase_title — VERIFICADA sem sessao ($(format_duration $(($(date +%s) - phase_start))))"
       log "Gates 2 e 3 verdes contra o codigo em HEAD; nenhum commit criado."
@@ -2711,6 +2901,14 @@ run_phase() {
       fail "Gate 2 vermelho — testes do projeto falharam"
       contest_judge "$phase_file" "$cycle"
     elif ! gate3_independent_verify "$phase_file" "$cycle" "$session_wrote"; then
+      # Sem veredito, o ciclo de correcao recebe "nada reprovado" e nao escreve
+      # nada — e o ralph encerrava a fase culpando as tasks. Encerra ja, com a
+      # causa certa: o codigo continua na arvore para o proximo run julgar.
+      if [ "$GATE3_NO_VERDICT" -eq 1 ]; then
+        LAST_GATE="gate 3 — verificador sem veredito"
+        fail "Gate 3 sem veredito — o codigo da fase nao foi julgado; sem ciclo de correcao (nao ha o que corrigir)"
+        break
+      fi
       LAST_GATE="gate 3 — verificacao independente"
       GATE_CAUSE="${no_change_note}${GATE_CAUSE}"
       fail "Gate 3 vermelho — implementacao incompleta"
@@ -2776,34 +2974,7 @@ run_phase() {
     cycle=$((cycle + 1))
   done
 
-  local phase_duration=$(($(date +%s) - phase_start))
-  state_phase "$seq" failed
-  fail "Phase $phase_num: $phase_title — FALHOU apos $cycles_run ciclo(s) ($(format_duration "$phase_duration"))"
-  fail "Ultima causa ($LAST_GATE):"
-  printf '%s\n' "$GATE_CAUSE" | head -n 20 | sed 's/^/    /'
-  # A sessao costuma saber por que travou — na fase 3 de pub-email-alerts ela
-  # disse que o comando que quebrava era proibido nesta fase — e so o log
-  # guardava isso.
-  local final_msg=""
-  [ -n "$log_file" ] && final_msg=$(session_final_message "$log_file")
-  if [ -n "$final_msg" ]; then
-    fail "Ultima mensagem da sessao (fim):"
-    printf '%s\n' "$final_msg" | grep -v '^[[:space:]]*$' | tail -n 12 | sed 's/^/    /'
-  fi
-  if [ -n "$PHASE_UNLOCKS$PHASE_REFUSALS" ]; then
-    fail "Julgamento das contestacoes (juiz, suite vermelha):"
-    printf '%s\n%s\n' "$PHASE_UNLOCKS" "$PHASE_REFUSALS" | grep . | sed 's/^/    /'
-  fi
-  fail "Logs em: $LOG_DIR/${phase_file%.md}.*"
-
-  # O trabalho parcial fica na arvore; o preflight da proxima execucao exige
-  # arvore limpa. Diga o que fazer em vez de deixar o dev descobrir no abort.
-  if [ -n "$(git status --porcelain)" ]; then
-    warn "O trabalho parcial desta fase ficou na arvore. Antes de re-rodar o ralph:"
-    warn "    commite como 'feat(phase-$phase_num): $phase_title' (o ralph revalida a fase contra HEAD, sem sessao)"
-    warn "    ou 'git checkout -- . && git clean -fd' (descarta)"
-  fi
-  return 1
+  report_phase_failure "$phase_file" "$phase_num" "$phase_title" "$seq" "$cycles_run" "$phase_start" "$log_file"
 }
 
 # ---------------------------------------------------------------------------

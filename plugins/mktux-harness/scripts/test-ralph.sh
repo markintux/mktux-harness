@@ -195,6 +195,30 @@ fi
 if [ "$verify" -eq 1 ]; then
   n=$(bump verify_calls)
   tasks=$(grep -cE '^[[:space:]]*- \[[ x]\]' <<< "$prompt")
+  echo "${model:-<default>}" >> "$state/verify_models"
+
+  # Provedor fora do ar: o texto que cada CLI imprime ao cair por capacidade.
+  provider_down() {
+    if [ "$name" = "claude" ]; then
+      echo 'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}'
+    else
+      echo "ERROR: Selected model is at capacity. Please try a different model."
+    fi
+    exit 1
+  }
+  # Sessao que terminou limpa sem o formato pedido.
+  no_verdict() {
+    [ -n "$last" ] && printf '%s' "Li os arquivos; parece tudo certo." > "$last"
+    echo "Li os arquivos; parece tudo certo."
+    exit 0
+  }
+  case "$scenario" in
+    capacity-verify-once) [ "$n" -eq 1 ] && provider_down ;;
+    capacity-verify-twice) [ "$n" -le 2 ] && provider_down ;;
+    capacity-verify-always) provider_down ;;
+    no-verdict-once) [ "$n" -eq 1 ] && no_verdict ;;
+    no-verdict-always) no_verdict ;;
+  esac
 
   implemented=0
   compgen -G "src/impl-*.txt" > /dev/null 2>&1 && implemented=1
@@ -284,6 +308,12 @@ case "$scenario" in
       exit 1
     fi
     ;;
+  overloaded-impl-once)
+    if [ "$n" -eq 1 ]; then
+      echo '{"type":"result","subtype":"success","is_error":true,"result":"API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}"}'
+      exit 1
+    fi
+    ;;
   sigint)
     # Ctrl-C durante a sessao: o shell devolve 128+SIGINT.
     echo "Interrompido."
@@ -321,6 +351,11 @@ if [ "$scenario" = "false-limit-json" ] && [ "$name" = "claude" ]; then
   # modo impl e UMA linha de JSON, nenhum `tail` isola esse texto.
   echo '{"type":"result","subtype":"success","is_error":false,"result":"Rodei a suite. O log da app tinha a linha: Claude AI usage limit reached. Corrigido."}'
   exit 0
+fi
+
+if [ "$scenario" = "false-transient" ]; then
+  # A sessao terminou limpa (-o gravado, exit 0); a linha e saida de teste.
+  echo "ERROR: GET /health -> 503 Service Unavailable"
 fi
 
 if [ "$scenario" = "false-429" ]; then
@@ -522,6 +557,8 @@ run_ralph() {
     MOCK_TEST_CMD="$dir/test.sh" \
     RALPH_LIMIT_WAIT_DEFAULT=1 \
     RALPH_LIMIT_BUFFER=1 \
+    RALPH_TRANSIENT_BACKOFF=0 \
+    RALPH_MAX_TRANSIENT_RETRIES="${CASE_TRANSIENT_RETRIES:-}" \
     RALPH_VERIFY="${CASE_VERIFY:-}" \
     RALPH_VERIFY_MODEL="${CASE_VERIFY_MODEL:-}" \
     RALPH_VERIFY_EFFORT="${CASE_VERIFY_EFFORT:-}" \
@@ -2092,6 +2129,129 @@ if case_enabled contest-judge; then
   rc=$(run_ralph "$d" test-red-once --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
   assert_eq 0 "$rc" "sem contestacao: exit 0"
   test -f "$d/state/judge_calls" && bad "sem contestacao nao chama o juiz" || ok "sem contestacao nao chama o juiz"
+fi
+
+# ---------------------------------------------------------------------------
+# 56. Verificador cai com "model at capacity" -> a MESMA sessao de novo, sem
+#     ciclo de correcao. Na fase 1 de superadmin-email-digest a falta de
+#     veredito virou INCOMPLETE, a correcao nao tinha o que corrigir, o memo
+#     guardou a reprovacao e a fase travou com o codigo certo.
+# ---------------------------------------------------------------------------
+if case_enabled transient-verify; then
+  header "56. erro passageiro no verificador -> mesma sessao de novo, sem correcao"
+  d=$(new_case transient-verify)
+  rc=$(run_ralph "$d" capacity-verify-once --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "exit 0 (erro passageiro nao consome ciclo)"
+  assert_eq 3 "$(commits "$d")" "as duas fases commitadas"
+  assert_eq 2 "$(cat "$d/state/impl_calls")" "nenhuma sessao de correcao"
+  assert_eq 3 "$(cat "$d/state/verify_calls")" "verificador re-executado uma vez"
+  assert_contains "$d/out.log" "Erro passageiro do provedor (verify): ERROR: Selected model is at capacity" "erro do provedor reportado"
+  assert_contains "$d/out.log" "nao consome ciclo de correcao" "re-execucao fora dos ciclos"
+  assert_not_contains "$d/out.log" "Gate 3 vermelho" "sem reprovacao do gate 3"
+  test -f "$d/repo/.phases/logs/phase-01.verify-1.transient-1.log" \
+    && ok "log da tentativa que caiu preservado" || bad "log da tentativa que caiu preservado"
+
+  # claude: "API Error: 529 ... overloaded" no modo texto do verificador.
+  d=$(new_case transient-verify-claude)
+  rc=$(run_ralph "$d" capacity-verify-once --engine claude --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "claude: exit 0"
+  assert_contains "$d/out.log" "Erro passageiro do provedor (verify): API Error: 529" "claude: overloaded detectado"
+fi
+
+# ---------------------------------------------------------------------------
+# 57. Modelo barato sem capacidade de novo -> o verificador passa para o modelo
+#     de implementacao, que acabou de responder. A fase seguinte volta ao barato.
+# ---------------------------------------------------------------------------
+if case_enabled transient-verify-fallback; then
+  header "57. verificador sem capacidade 2x -> modelo de implementacao"
+  d=$(new_case transient-verify-fallback)
+  rc=$(CASE_VERIFY_MODEL=cheap-model run_ralph "$d" capacity-verify-twice --engine codex --model impl-model --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq "cheap-model
+cheap-model
+impl-model
+cheap-model" "$(cat "$d/state/verify_models")" "2a re-execucao com o modelo de implementacao; fase 2 volta ao barato"
+  assert_contains "$d/out.log" "Sessao verify passa para o modelo de implementacao (impl-model)" "troca de modelo reportada"
+fi
+
+# ---------------------------------------------------------------------------
+# 58. Provedor fora do ar alem das re-execucoes -> fase encerrada como falha de
+#     infra, sem sessao de correcao e sem culpar as tasks.
+# ---------------------------------------------------------------------------
+if case_enabled transient-exhausted; then
+  header "58. provedor fora do ar -> falha de infra, sem correcao"
+  d=$(new_case transient-exhausted)
+  rc=$(CASE_TRANSIENT_RETRIES=2 run_ralph "$d" capacity-verify-always --engine codex --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 1 "$rc" "exit 1"
+  assert_eq 1 "$(cat "$d/state/impl_calls")" "nenhuma sessao de correcao"
+  assert_eq 3 "$(cat "$d/state/verify_calls")" "1 sessao + 2 re-execucoes, sem nova tentativa por falta de veredito"
+  assert_contains "$d/out.log" "Erro do provedor persistiu apos 2 re-execucoes (verify)" "desistencia reportada"
+  assert_contains "$d/out.log" "Ultima causa (gate 3 — verificador sem veredito)" "causa: verificador sem veredito"
+  assert_contains "$d/out.log" "falha de infra (provedor, rede, cota), nao das tasks" "relatorio aponta a infra"
+  assert_not_contains "$d/out.log" "Revise as tasks" "nao culpa as tasks"
+  assert_not_contains "$d/out.log" "Ciclo de correcao" "sem ciclo de correcao"
+  assert_contains "$d/out.log" "commite como 'feat(phase-1): Foundation'" "orienta a retomada com o codigo na arvore"
+fi
+
+# ---------------------------------------------------------------------------
+# 59. Verificador terminou limpo sem o formato pedido -> nova sessao com o
+#     modelo de implementacao; sem veredito de novo -> falha sem correcao.
+# ---------------------------------------------------------------------------
+if case_enabled no-verdict; then
+  header "59. verificador sem veredito -> nova sessao; persistente -> falha sem correcao"
+  d=$(new_case no-verdict)
+  rc=$(CASE_VERIFY_MODEL=cheap-model run_ralph "$d" no-verdict-once --engine codex --model impl-model --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq "cheap-model
+impl-model" "$(head -n 2 "$d/state/verify_models")" "nova sessao com o modelo de implementacao"
+  assert_eq 2 "$(cat "$d/state/impl_calls")" "nenhuma sessao de correcao"
+  assert_contains "$d/out.log" "o verificador terminou sem veredito; nova sessao verificadora" "nova tentativa reportada"
+  test -f "$d/repo/.phases/logs/phase-01.verify-1.no-verdict.log" \
+    && ok "log sem veredito preservado" || bad "log sem veredito preservado"
+
+  d=$(new_case no-verdict-always)
+  rc=$(run_ralph "$d" no-verdict-always --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 1 "$rc" "persistente: exit 1"
+  assert_eq 1 "$(cat "$d/state/impl_calls")" "persistente: nenhuma sessao de correcao"
+  assert_eq 2 "$(cat "$d/state/verify_calls")" "persistente: duas sessoes verificadoras"
+  assert_contains "$d/out.log" "o codigo nao foi julgado" "persistente: causa certa"
+  assert_not_contains "$d/out.log" "Revise as tasks" "persistente: nao culpa as tasks"
+
+  # Fase commitada revalidada contra HEAD: sem veredito, nenhuma sessao abre.
+  d=$(new_case no-verdict-precheck)
+  mkdir -p "$d/repo/src" && echo "feito a mao" > "$d/repo/src/impl-manual.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat(phase-1): Foundation"
+  rc=$(run_ralph "$d" no-verdict-always --engine claude --test-cmd "$d/test.sh")
+  assert_eq 1 "$rc" "precheck: exit 1"
+  test -f "$d/state/impl_calls" && bad "precheck: nenhuma sessao de implementacao" || ok "precheck: nenhuma sessao de implementacao"
+  assert_contains "$d/out.log" "Phase 1: Foundation — FALHOU sem sessao" "precheck: falha sem sessao"
+fi
+
+# ---------------------------------------------------------------------------
+# 60. Implementacao cai com "overloaded" -> mesma sessao de novo, sem ciclo.
+# ---------------------------------------------------------------------------
+if case_enabled transient-impl; then
+  header "60. erro passageiro na implementacao -> mesma sessao de novo"
+  d=$(new_case transient-impl)
+  rc=$(run_ralph "$d" overloaded-impl-once --engine claude --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "exit 0 (nao consome ciclo)"
+  assert_eq 3 "$(commits "$d")" "as duas fases commitadas"
+  assert_eq 3 "$(cat "$d/state/impl_calls")" "fase 1 re-executada uma vez"
+  assert_contains "$d/out.log" "Erro passageiro do provedor (impl)" "erro do provedor reportado"
+  test -f "$d/repo/.phases/logs/phase-01.cycle-1.transient-1.log" \
+    && ok "log da tentativa que caiu preservado" || bad "log da tentativa que caiu preservado"
+fi
+
+# ---------------------------------------------------------------------------
+# 61. "ERROR: ... 503" numa sessao que terminou limpa -> nao re-executa.
+# ---------------------------------------------------------------------------
+if case_enabled false-transient; then
+  header "61. linha de erro numa sessao que terminou limpa nao re-executa"
+  d=$(new_case false-transient)
+  rc=$(run_ralph "$d" false-transient --engine codex --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq 2 "$(cat "$d/state/impl_calls")" "uma sessao por fase"
+  assert_not_contains "$d/out.log" "Erro passageiro" "nao confundiu saida de teste com erro do provedor"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
