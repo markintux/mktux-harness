@@ -110,6 +110,14 @@ TASK 3: NOT-CODE — needs a human to run `sail npm run build`
 `INCOMPLETE` reprova a fase e dispara um ciclo de correção. `NOT-CODE` não
 reprova — vira pendência manual no relatório.
 
+O verificador barato erra a leitura. Num run real ele leu as linhas 1-260 de um
+arquivo de 397 e reprovou os métodos que não chegou a ler; o ciclo de correção
+conferiu o código, não mudou nada, e a fase travou com o código certo. Então,
+quando a correção não muda nada no código reprovado, o ralph manda o mesmo
+código uma vez a um **recurso**: uma sessão verificadora nova com o modelo e o
+esforço de implementação. Aprovou, a fase fecha; reprovou, as duas leituras
+concordam e a fase trava.
+
 Task que o plano tipa como `- [ ] (manual) …` — rodar o formatador, o build de
 assets, conferir num celular de verdade — nunca chega ao verificador. O ralph a
 tira da lista numerada, descarta qualquer veredito sobre ela e a lista em
@@ -1098,6 +1106,8 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do código, ou marque `(manual)` se for mesmo procedimento |
 | fase de fechamento reprova sem nada de errado no código | task de procedimento sem `(manual)`: o verificador tenta julgar o que não tem como ler. Marque `(manual)` |
 | fase reprova em todo ciclo até esgotar | task com escape condicional (*"faça X, mas se ficar estranho, deixe"*). Na dúvida, o verificador escolhe INCOMPLETE |
+| `Gate 3 — recurso aprovou` | o verificador barato reprovou, o ciclo de correção não mudou nada e o modelo de implementação aprovou o mesmo código. Normal. Se acontecer em toda fase, o verificador barato não está lendo o código: suba `RALPH_VERIFY_EFFORT` ou troque `RALPH_VERIFY_MODEL` |
+| fase travada depois de `recurso tambem reprovou` | o verificador barato e o modelo de implementação leram o mesmo código e reprovaram: agora a causa provável é a task |
 | portão 2 sempre vermelho no primeiro run | Laravel: Sail parado, ou `.env.testing` ausente. Outras stacks: o ambiente de desenvolvimento nunca foi preparado (dependências, virtualenv) |
 | o ralph ou o `test-runner` escolhe o comando de teste errado | confira com `mktux-profile.sh test-cmd` (veja [Perfis de stack](#perfis-de-stack)); sobreponha com `--test-cmd` ou `RALPH_TEST_CMD` |
 | o `test-runner` devolve `ERROR:` de dependência faltando | o ambiente não está preparado. Ele nunca instala sozinho: rode o preparo que a linha cita (ex: `uv sync --extra dev`) |

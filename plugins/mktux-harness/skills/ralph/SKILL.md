@@ -142,6 +142,17 @@ alterou nenhum arquivo nao paga outra sessao de verificacao: o gate 3 e funcao d
 codigo, e os mesmos bytes tem que dar o mesmo veredito. Sem isso um verificador
 barato muda de ideia entre ciclos sobre codigo identico.
 
+**Recurso antes de travar.** A excecao ao memo e a reprovacao que a correcao nao
+aceitou: ela leu o veredito, conferiu o codigo e nao mudou nada. Ai sao duas
+leituras discordando, e o memo mantinha a do verificador barato — na fase 2 de
+superadmin-email-digest ele leu as linhas 1-260 de um arquivo de 397 e reprovou
+os metodos que nao chegou a ler; a fase travou com o codigo certo. Agora, uma vez
+por fase, o mesmo codigo vai a uma sessao verificadora nova com o **modelo e o
+esforco de implementacao** (`phase-NN.verify-M.log` do ciclo da correcao).
+Aprovou → a fase fecha. Reprovou → as duas leituras concordam e a fase trava,
+com o veredito do recurso no relatorio. Recurso sem veredito mantem a reprovacao
+original.
+
 **Fase declarada `**Check-only phase**` nao abre sessao de cara.** E a fase de
 fechamento que so afirma estado. O ralph roda os gates 2 e 3 contra HEAD
 (`test-0.log`, `verify-0.log`): verde fecha a fase como **VERIFICADA sem
@@ -355,6 +366,8 @@ sessao.
 | `Erro passageiro do provedor` e o run segue | normal: a sessao caiu por capacidade, sobrecarga ou 5xx e foi re-executada sem consumir ciclo. Tentativas em `*.transient-K.log` |
 | `Erro do provedor persistiu apos N re-execucoes` | o provedor ficou fora do ar alem do backoff. Nada a corrigir no plano; re-rode o ralph quando voltar (com o trabalho commitado como `feat(phase-N): <titulo>`, a fase e revalidada sem sessao) |
 | `gate 3 — verificador sem veredito` | o codigo nao foi julgado: verificador caiu ou respondeu fora do formato duas vezes. Leia `verify-M.log` e `verify-M.no-verdict.log`; as tasks nao sao a causa |
+| `Gate 3 — recurso aprovou` | o verificador barato reprovou, a correcao nao mudou nada e o modelo de implementacao aprovou o mesmo codigo. Normal. Se acontecer em toda fase, o verificador barato nao esta lendo o codigo: suba `RALPH_VERIFY_EFFORT` ou troque `RALPH_VERIFY_MODEL` |
+| fase travada depois de `recurso tambem reprovou` | o verificador barato e o modelo de implementacao leram o mesmo codigo e reprovaram: agora a causa provavel e a task |
 | gate 0 vermelho com `passou de RALPH_SESSION_TIMEOUT` | um comando da sessao esperou input que nunca veio (prompt de confirmacao, modo watch, servidor em primeiro plano). O prompt ja pede stdin fechado; ache e corrija o teste ou comando que pergunta — o fim do `cycle-M.log` mostra o ultimo comando |
 | fase reprova em todo ciclo ate esgotar | task com escape condicional (*"faca X, mas se ficar estranho, deixe"*). O verificador escolhe INCOMPLETE na duvida |
 | gate 2 sempre vermelho no primeiro run | ambiente do perfil incompleto. A causa de cada perfil esta em *Perfis de stack* |

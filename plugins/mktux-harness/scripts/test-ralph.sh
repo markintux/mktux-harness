@@ -196,6 +196,7 @@ if [ "$verify" -eq 1 ]; then
   n=$(bump verify_calls)
   tasks=$(grep -cE '^[[:space:]]*- \[[ x]\]' <<< "$prompt")
   echo "${model:-<default>}" >> "$state/verify_models"
+  echo "${effort:-<default>}" >> "$state/verify_efforts"
 
   # Provedor fora do ar: o texto que cada CLI imprime ao cair por capacidade.
   provider_down() {
@@ -252,6 +253,12 @@ if [ "$verify" -eq 1 ]; then
       for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
     elif [ "$scenario" = "contest-rejected" ] && [ "$n" -eq 1 ]; then
       echo "TASK 1: INCOMPLETE — contestacao recusada: border-border esta definido em tailwind.config.js:30"
+      for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
+    elif [ "$scenario" = "verify-misread" ] && grep -q '^## Phase 1:' <<< "$prompt" \
+      && [ "$model" != "impl-model" ]; then
+      # O verificador barato leu so o comeco do arquivo; o modelo de
+      # implementacao le inteiro.
+      echo "TASK 1: INCOMPLETE — o arquivo lido termina antes do metodo"
       for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
     elif { [ "$scenario" = "verify-incomplete-once" ] || [ "$scenario" = "contest-other" ]; } && [ "$n" -eq 1 ]; then
       echo "TASK 1: INCOMPLETE — o arquivo nao foi criado"
@@ -328,6 +335,8 @@ write=1
 [ "$scenario" = "already-done" ] && write=0
 [ "$scenario" = "stall-after-red" ] && [ "$n" -gt 1 ] && write=0
 [ "$scenario" = "contest-late" ] && [ "$n" -eq 2 ] && write=0
+# verify-misread: a correcao confere o codigo reprovado e nao muda nada.
+[ "$scenario" = "verify-misread" ] && [ "$n" -eq 2 ] && write=0
 # contest-protected*: a suite so fica verde com src/unlocked.txt, que a fase
 # proibe criar. A sessao respeita a trava (nao escreve na correcao) ate o prompt
 # trazer a trava liberada pelo juiz.
@@ -2252,6 +2261,54 @@ if case_enabled false-transient; then
   assert_eq 0 "$rc" "exit 0"
   assert_eq 2 "$(cat "$d/state/impl_calls")" "uma sessao por fase"
   assert_not_contains "$d/out.log" "Erro passageiro" "nao confundiu saida de teste com erro do provedor"
+fi
+
+# ---------------------------------------------------------------------------
+# 62. Verificador barato reprova o que nao leu, a correcao confere e nao muda
+#     nada -> recurso com o modelo e o effort de implementacao, que aprova. Na
+#     fase 2 de superadmin-email-digest o memo guardava a reprovacao e a fase
+#     travava com o codigo certo.
+# ---------------------------------------------------------------------------
+if case_enabled verify-appeal; then
+  header "62. correcao sem mudanca no codigo reprovado -> recurso aprova"
+  d=$(new_case verify-appeal)
+  rc=$(CASE_VERIFY_MODEL=cheap-model CASE_VERIFY_EFFORT=low run_ralph "$d" verify-misread --engine codex --model impl-model --effort high --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq 3 "$(commits "$d")" "as duas fases commitadas"
+  assert_eq 3 "$(cat "$d/state/impl_calls")" "fase 1: implementacao + 1 correcao; fase 2: 1"
+  assert_eq "cheap-model
+impl-model
+cheap-model" "$(cat "$d/state/verify_models")" "recurso com o modelo de implementacao; fase 2 volta ao barato"
+  assert_eq "low
+high
+low" "$(cat "$d/state/verify_efforts")" "recurso com o effort de implementacao"
+  assert_contains "$d/out.log" "a correcao nao mudou o codigo reprovado; recurso" "recurso anunciado"
+  assert_contains "$d/out.log" "Gate 3 — recurso aprovou" "recurso aprovou"
+  assert_not_contains "$d/out.log" "parando em vez de repetir" "nao tratou como fase travada"
+  test -f "$d/repo/.phases/logs/phase-01.verify-2.log" \
+    && ok "log do recurso no ciclo da correcao" || bad "log do recurso no ciclo da correcao"
+  vp="$d/repo/.phases/prompts/phase-01.verify-1.txt"
+  assert_contains "$vp" "Leia cada arquivo ate o fim" "verificador le o arquivo inteiro"
+  assert_contains "$vp" "Trecho que voce nao leu nao e falta" "trecho nao lido nao e INCOMPLETE"
+fi
+
+# ---------------------------------------------------------------------------
+# 63. Recurso tambem reprova -> trava de verdade, com o recurso na causa. Um
+#     recurso por fase: a correcao seguinte que nao muda nada nao abre outro.
+# ---------------------------------------------------------------------------
+if case_enabled verify-appeal-upheld; then
+  header "63. recurso tambem reprova -> fase travada, um recurso por fase"
+  d=$(new_case verify-appeal-upheld)
+  echo "fora da fase" > "$d/repo/notes.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat(phase-1): Foundation"
+  rc=$(run_ralph "$d" empty-diff --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 1 "$rc" "exit 1"
+  assert_eq 2 "$(cat "$d/state/impl_calls")" "duas correcoes sem escrita"
+  assert_eq 2 "$(cat "$d/state/verify_calls")" "verify-0 + um recurso, nenhum outro"
+  assert_eq 1 "$(grep -c 'a correcao nao mudou o codigo reprovado' "$d/out.log")" "um recurso por fase"
+  assert_contains "$d/out.log" "Gate 3 — recurso tambem reprovou" "recurso reprovou"
+  assert_contains "$d/out.log" "O recurso com o modelo de implementacao julgou o mesmo codigo e tambem reprovou" "causa cita o recurso"
+  assert_contains "$d/out.log" "parando em vez de repetir" "fase travada"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
