@@ -20,7 +20,8 @@ acompanhar.
 3. Fase so e "completa" quando passa por 4 gates mecanicos — **nunca** pelo exit
    code da engine.
 4. Limite de uso → espera o reset e re-executa a MESMA fase, sem consumir ciclo
-   de correcao.
+   de correcao. Erro passageiro do provedor (modelo sem capacidade, sobrecarga,
+   5xx) → re-executa a MESMA sessao com backoff, tambem sem consumir ciclo.
 5. Um commit por fase concluida.
 
 ## Uso
@@ -116,6 +117,22 @@ numerada do verificador, mantendo a posicao das outras (`1, 2, 4`), descarta
 veredito que ele emita para ela, e a lista em **Pendencias manuais** no
 relatorio final, junto com os `NOT-CODE`. No painel ela aparece como Manual e
 nao conta na barra de tasks. Fase so com tasks `(manual)` pula o gate 3.
+
+**Sem veredito nao e reprovacao.** Verificador que nao emite nenhuma linha
+`TASK` (a sessao caiu, ou terminou fora do formato) nao julgou o codigo. O ralph
+abre uma sessao verificadora nova, com o modelo de implementacao; sem veredito de
+novo, encerra a fase como `gate 3 — verificador sem veredito`, **sem ciclo de
+correcao** — a sessao de correcao nao tem o que corrigir — e sem guardar nada no
+memo. O codigo fica na arvore: commitado como `feat(phase-N): <titulo>`, o
+proximo run o revalida sem sessao.
+
+**Erro passageiro do provedor** (`model at capacity`, `overloaded`, 5xx, stream
+cortado) em qualquer sessao — implementacao, gate 3, juiz — re-executa a mesma
+sessao com backoff (`RALPH_TRANSIENT_BACKOFF`, dobrando ate 600s), ate
+`RALPH_MAX_TRANSIENT_RETRIES` vezes, sem consumir ciclo. Sessao de leitura passa
+para o modelo de implementacao a partir da 2a re-execucao. So conta sessao que
+falhou (exit code, `is_error`, codex sem mensagem final): a que terminou limpa e
+so citou o erro nao re-executa.
 
 `RALPH_VERIFY=auto` economiza: so roda quando o veredito do gate 2 nao basta.
 `--no-verify` / `RALPH_VERIFY=off` desliga.
@@ -272,6 +289,8 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd   # Codex: $PLUGIN_
 | `RALPH_MAX_CYCLES` | ciclos de correcao por fase (default: 3) |
 | `RALPH_SESSION_TIMEOUT` | segundos que uma sessao de engine pode durar (default: 3600; `0` desliga). Passou, o ralph encerra a arvore da sessao e o gate 0 reprova com a causa |
 | `RALPH_MAX_LIMIT_WAITS` | esperas consecutivas por limite, por fase (default: 20) |
+| `RALPH_MAX_TRANSIENT_RETRIES` | re-execucoes de uma sessao que caiu por erro passageiro do provedor (default: 6). Verificador e juiz passam para o modelo de implementacao a partir da 2a |
+| `RALPH_TRANSIENT_BACKOFF` | espera antes da 1a re-execucao, em segundos; dobra a cada uma, ate 600 (default: 30) |
 | `RALPH_SMOKE` | `0` desliga o smoke test da engine |
 | `RALPH_MEMORY` | pagina por fase no ai-memory (`ralph/<feature>/phase-NN.md`, pos-commit, sem LLM); `0` desliga. Sem o binario ou com o servidor fora do ar, desliga sozinha |
 | `RALPH_MEMORY_BIN` | binario do ai-memory (default `ai-memory` no PATH) |
@@ -298,6 +317,8 @@ anteriores para dentro da sessao fria.
     ├── phase-NN.test-M.log     saida do gate 2
     ├── phase-NN.verify-M.log   sessao do gate 3
     ├── phase-NN.verify-M.last.txt  veredito final do gate 3 (codex)
+    ├── phase-NN.*.transient-K.log  tentativa K que caiu por erro do provedor
+    ├── phase-NN.verify-M.no-verdict.log  verificador que terminou sem veredito
     ├── phase-NN.memory.log     saida do `ai-memory write-page`
     └── archive/<inicio do run>/    logs de um run anterior da fase, movidos
                                     quando ela reabre (ficam os 10 ultimos)
@@ -331,6 +352,9 @@ sessao.
 | task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do codigo, ou marque `(manual)` se ela for mesmo procedimento |
 | fase de fechamento reprova sem nada de errado no codigo | task procedural sem `(manual)`: o verificador tenta julgar o que nao tem como ler. Marque os procedimentos com `(manual)` |
 | `gate 0 vermelho` e o relatorio manda revisar as tasks | leia o FIM do `phase-NN.cycle-M.log` antes de mexer no plano: engine que morre por cota, rede ou crash cai no mesmo lugar. Task correta nao e a causa mais provavel |
+| `Erro passageiro do provedor` e o run segue | normal: a sessao caiu por capacidade, sobrecarga ou 5xx e foi re-executada sem consumir ciclo. Tentativas em `*.transient-K.log` |
+| `Erro do provedor persistiu apos N re-execucoes` | o provedor ficou fora do ar alem do backoff. Nada a corrigir no plano; re-rode o ralph quando voltar (com o trabalho commitado como `feat(phase-N): <titulo>`, a fase e revalidada sem sessao) |
+| `gate 3 — verificador sem veredito` | o codigo nao foi julgado: verificador caiu ou respondeu fora do formato duas vezes. Leia `verify-M.log` e `verify-M.no-verdict.log`; as tasks nao sao a causa |
 | gate 0 vermelho com `passou de RALPH_SESSION_TIMEOUT` | um comando da sessao esperou input que nunca veio (prompt de confirmacao, modo watch, servidor em primeiro plano). O prompt ja pede stdin fechado; ache e corrija o teste ou comando que pergunta — o fim do `cycle-M.log` mostra o ultimo comando |
 | fase reprova em todo ciclo ate esgotar | task com escape condicional (*"faca X, mas se ficar estranho, deixe"*). O verificador escolhe INCOMPLETE na duvida |
 | gate 2 sempre vermelho no primeiro run | ambiente do perfil incompleto. A causa de cada perfil esta em *Perfis de stack* |

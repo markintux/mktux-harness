@@ -627,7 +627,9 @@ Para mudar a raiz `docs/features/`, defina `MKTUX_SPEC_DIR`.
 2. Zero perguntas. Do início ao fim sem interação humana.
 3. Fase só é "completa" quando passa pelos 4 portões.
 4. Bateu limite de uso → espera o reset e re-executa a **mesma** fase, sem
-   consumir ciclo de correção.
+   consumir ciclo de correção. Erro passageiro do provedor (modelo sem
+   capacidade, sobrecarga, 5xx) → re-executa a **mesma** sessão com backoff,
+   também sem consumir ciclo.
 5. Um commit por fase concluída.
 
 ### Flags
@@ -696,6 +698,8 @@ que o ralph vai resolver num projeto sem rodar nada:
 | `RALPH_MAX_CYCLES` | ciclos de correção por fase |
 | `RALPH_SESSION_TIMEOUT` | segundos que uma sessão de engine pode durar antes de o ralph encerrá-la, com tudo o que ela abriu (default `3600`, `0` desliga). A sessão encerrada reprova no portão 0 com a causa |
 | `RALPH_MAX_LIMIT_WAITS` | esperas consecutivas por limite, por fase |
+| `RALPH_MAX_TRANSIENT_RETRIES` | re-execuções de uma sessão que caiu por erro passageiro do provedor (default `6`). Sessão do verificador ou do juiz passa para o modelo de implementação a partir da 2ª |
+| `RALPH_TRANSIENT_BACKOFF` | espera antes da 1ª re-execução, em segundos; dobra a cada uma, até 600 (default `30`) |
 | `RALPH_SMOKE` | `0` desliga o smoke test |
 | `RALPH_MEMORY` | `0` desliga a página por fase no [ai-memory](#memória-de-longo-prazo-ai-memory). Sem o binário ou com o servidor fora do ar, desliga sozinha |
 | `RALPH_MEMORY_BIN` | binário do ai-memory (default `ai-memory` no PATH) |
