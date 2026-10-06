@@ -12,6 +12,14 @@ import sys
 from datetime import datetime, timedelta, timezone
 
 
+SESSION_UUID_PATTERN = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+SESSION_HEADER = re.compile(
+    rf"^\s*session[ _-]+id\s*:\s*({SESSION_UUID_PATTERN})\s*$", re.IGNORECASE
+)
+CODEX_BANNER = re.compile(r"OpenAI Codex \(?v[0-9].*")
+CODEX_SEPARATOR = re.compile(r"-{4,}")
+
+
 def lines(path):
     try:
         with path.open(encoding="utf-8", errors="replace") as stream:
@@ -24,6 +32,91 @@ def lines(path):
                     continue
     except FileNotFoundError:
         return
+
+
+def structured_rows(content):
+    """Yield JSON or the leading JSONL stream, never JSON printed later by a tool."""
+    try:
+        value = json.loads(content)
+        if isinstance(value, dict):
+            yield value
+            return
+    except json.JSONDecodeError:
+        pass
+    for line in content.splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except json.JSONDecodeError:
+            break
+        if not isinstance(value, dict):
+            break
+        yield value
+
+
+def structured_session_ids(content, engine, mode=None):
+    """Extract IDs only from the engine's own identity events."""
+    if engine == "claude" and mode in ("verify", "judge"):
+        return set()  # Claude runs these sessions with --output-format text.
+    found = set()
+    for row in structured_rows(content):
+        if engine == "codex":
+            payload = row.get("payload")
+            if row.get("type") == "session_meta" and isinstance(payload, dict):
+                value = payload.get("id")
+                if isinstance(value, str) and value.strip():
+                    found.add(value.strip())
+            if row.get("type") == "thread.started":
+                value = row.get("thread_id") or row.get("session_id")
+                if isinstance(value, str) and value.strip():
+                    found.add(value.strip())
+        elif engine == "claude" and row.get("type") == "result":
+            value = row.get("session_id")
+            if isinstance(value, str) and value.strip():
+                found.add(value.strip())
+    return found
+
+
+def text_session_ids(content, engine, mode=None):
+    """Read the Codex CLI metadata block or a leading standalone header."""
+    if engine == "claude" and mode in ("verify", "judge"):
+        return set()  # Plain-text output is the model response, not CLI metadata.
+    rows = content.splitlines()
+    start = next((i for i, line in enumerate(rows) if line.strip()), None)
+    if start is None:
+        return set()
+
+    if engine == "codex" and CODEX_BANNER.fullmatch(rows[start].strip()):
+        if start + 1 >= len(rows) or not CODEX_SEPARATOR.fullmatch(rows[start + 1].strip()):
+            return set()
+        end = next((i for i in range(start + 2, len(rows))
+                    if CODEX_SEPARATOR.fullmatch(rows[i].strip())), None)
+        if end is None:
+            return set()
+        header_lines = rows[start + 2:end]
+    else:
+        header_lines = []
+        for line in rows[start:]:
+            if not SESSION_HEADER.fullmatch(line):
+                break
+            header_lines.append(line)
+    return {match.group(1) for line in header_lines
+            if (match := SESSION_HEADER.fullmatch(line))}
+
+
+def extract_session_id(content, engine, mode=None):
+    """Return (session_id, ambiguous) from structured metadata or a full header."""
+    structured = structured_session_ids(content, engine, mode)
+    if structured:
+        return (next(iter(structured)), False) if len(structured) == 1 else (None, True)
+
+    headers = text_session_ids(content, engine, mode)
+    if len(headers) == 1:
+        return next(iter(headers)), False
+    if len(headers) > 1:
+        return None, True
+    return None, False
 
 
 def root_dir():
@@ -291,13 +384,8 @@ def main():
         log = Path(args.log)
         content = log.read_text(errors="replace") if log.exists() else ""
         log_digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
-        ids = re.findall(r"(?i)session[_ ]id[\s\"':=]+([a-z0-9-]+)", content)
-        for row in lines(log):
-            ident = row.get("session_id")
-            if ident:
-                ids.append(ident)
-        ident = ids[-1] if ids else None
-        if not ident:
+        ident, ambiguous = extract_session_id(content, args.engine, run_fields().get("ralph_mode"))
+        if not ident and not ambiguous:
             candidates = {row.get("session_id") for row in lines(root / ".harness" / "tokens.jsonl")
                           if row.get("ralph_run_id") == run_id and not row.get("parent")
                           and row.get("ralph_phase") == run_fields().get("ralph_phase")

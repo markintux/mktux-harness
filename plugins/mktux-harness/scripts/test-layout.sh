@@ -511,10 +511,12 @@ assert_eq 3 "$(jq -r 'select(.ralph_run_id == "run-a") | .session_id' "$cx/repo/
   "Stop repetido: pai e dois filhos uma vez cada"
 assert_eq 3 "$(jq -r 'select(.ralph_run_id == "run-b") | .session_id' "$cx/repo/.harness/tokens.jsonl" | wc -l | tr -d ' ')" \
   "mesma fase e ciclo em outro run separados"
-printf 'session id: pai\n' > "$cx/repo/engine.log"
+printf '%s\n' '{"type":"session_meta","payload":{"id":"pai"}}' \
+  '{"type":"assistant","session_id":"absence"}' > "$cx/repo/engine.log"
 RALPH_RUN_ID=run-a RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl CODEX_HOME="$cx" \
   python3 "$tel" record --root "$cx/repo" --run-id run-a --engine codex --log "$cx/repo/engine.log" --rc 124
-printf 'session id: outro\n' > "$cx/repo/engine-2.log"
+printf '%s\n' '{"type":"session_meta","payload":{"id":"outro"}}' \
+  '{"type":"assistant","session_id":"absence"}' > "$cx/repo/engine-2.log"
 RALPH_RUN_ID=run-a RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl CODEX_HOME="$cx" \
   python3 "$tel" record --root "$cx/repo" --run-id run-a --engine codex --log "$cx/repo/engine-2.log" --rc 0
 RALPH_RUN_ID=run-a RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl CODEX_HOME="$cx" \
@@ -526,6 +528,8 @@ printf '%s\n' '{"ralph_run_id":"run-a","session_id":"pai","vendor":"codex","mode
 python3 "$tel" summary --root "$cx/repo" --run-id run-a --finished
 assert_eq "complete 139 20 3 0 2 124" "$(jq -r '"\(.summary.status) \(.summary.vendors.codex.input) \(.summary.vendors.codex.cache_read) \(.summary.subagents) \(.summary.missing_attempts) \(.attempts | length) \(.attempts[0].exit_code)"' "$cx/repo/.harness/runs/run-a.json")" \
   "Codex: acumulado resiste a Stop tardio, cache, retries, filhos e timeout"
+assert_eq "$(printf 'pai\noutro')" "$(jq -r '.attempts[].session_id' "$cx/repo/.harness/runs/run-a.json")" \
+  "tentativas do Codex preservam identidades distintas"
 assert_eq "$(jq -r '.plan_sha256' "$cx/repo/.harness/runs/run-a.json")" \
   "$(jq -r '.plan_sha256' "$cx/repo/.harness/runs/run-b.json")" "mesmo plano preservado em dois resumos"
 assert_eq 2 "$(find "$cx/repo/.harness/runs" -name 'run-*.json' | wc -l | tr -d ' ')" "resumo anterior sobrevive"
@@ -565,6 +569,62 @@ python3 "$tel" summary --root "$cl/proj" --run-id unknown --finished
 assert_eq "partial 1 130" "$(jq -r '"\(.summary.status) \(.summary.missing_attempts) \(.attempts[0].exit_code)"' "$cl/proj/.harness/runs/unknown.json")" \
   "interrupcao sem usage aparece parcial, nao zero confirmado"
 
+# A associação por texto aceita apenas um cabeçalho completo com UUID. Prosa
+# posterior pode mencionar "session ID absence" sem substituir a sessão real.
+codex_header_id=123e4567-e89b-42d3-a456-426614174000
+python3 "$tel" init --root "$cx/repo" --run-id codex-header --plan "$cx/repo/plan.md" --engine codex
+printf 'OpenAI Codex v0.160.0\n--------\nworkdir: /tmp\nmodel: gpt-x\nSession ID: %s\n--------\nO relatório menciona session ID absence como texto comum.\nSession ID: 123e4567-e89b-42d3-a456-426614174009\n{"type":"assistant","session_id":"absence"}\n' "$codex_header_id" \
+  > "$cx/repo/codex-header.log"
+RALPH_RUN_ID=codex-header RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl \
+  python3 "$tel" record --root "$cx/repo" --run-id codex-header --engine codex \
+  --log "$cx/repo/codex-header.log" --rc 1
+assert_eq "$codex_header_id" "$(jq -r '.attempts[0].session_id' "$cx/repo/.harness/runs/codex-header.json")" \
+  "Codex: cabeçalho do CLI vence prosa, outro cabeçalho e JSON do corpo"
+
+python3 "$tel" init --root "$cx/repo" --run-id body-only --plan "$cx/repo/plan.md" --engine codex
+printf 'O log começa com saída da sessão.\nSession ID: 123e4567-e89b-42d3-a456-426614174008\n{"type":"assistant","session_id":"absence"}\n' \
+  > "$cx/repo/body-only.log"
+RALPH_RUN_ID=body-only RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl \
+  python3 "$tel" record --root "$cx/repo" --run-id body-only --engine codex \
+  --log "$cx/repo/body-only.log" --rc 1
+assert_eq "null partial 1" "$(jq -r '"\(.attempts[0].session_id // "null") \(.summary.status) \(.summary.missing_attempts)"' "$cx/repo/.harness/runs/body-only.json")" \
+  "sem cabeçalho do CLI, IDs vistos no corpo não viram identidade"
+
+# Duas identidades válidas no mesmo log tornam a associação ambígua. Mesmo com
+# um snapshot candidato único, a tentativa fica sem ID e o resumo, parcial.
+python3 "$tel" init --root "$cx/repo" --run-id ambiguous --plan "$cx/repo/plan.md" --engine codex
+printf '%s\n' \
+  '{"ralph_run_id":"ambiguous","ralph_phase":1,"ralph_cycle":1,"ralph_mode":"impl","session_id":"123e4567-e89b-42d3-a456-426614174001","vendor":"codex","model":"gpt-x","input":9,"output":1,"cache_read":0}' \
+  >> "$cx/repo/.harness/tokens.jsonl"
+printf 'Session ID: 123e4567-e89b-42d3-a456-426614174001\nSession ID: 123e4567-e89b-42d3-a456-426614174002\n' \
+  > "$cx/repo/ambiguous.log"
+RALPH_RUN_ID=ambiguous RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl \
+  python3 "$tel" record --root "$cx/repo" --run-id ambiguous --engine codex \
+  --log "$cx/repo/ambiguous.log" --rc 1
+python3 "$tel" summary --root "$cx/repo" --run-id ambiguous
+assert_eq "null partial 1" "$(jq -r '"\(.attempts[0].session_id // "null") \(.summary.status) \(.summary.missing_attempts)"' "$cx/repo/.harness/runs/ambiguous.json")" \
+  "identidade ambígua não é inferida do único snapshot candidato"
+
+# Claude usa resultado JSON na implementação; em verify/judge, a saída textual
+# é a resposta do modelo e não fornece um cabeçalho de identidade confiável.
+claude_header_id=123e4567-e89b-42d3-a456-426614174003
+python3 "$tel" init --root "$cl/proj" --run-id claude-structured --plan "$cl/proj/plan.md" --engine claude
+printf '{"type":"result","session_id":"%s"}\n{"type":"assistant","session_id":"absence"}\n' "$claude_header_id" \
+  > "$cl/proj/claude-structured.log"
+RALPH_RUN_ID=claude-structured RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=impl \
+  python3 "$tel" record --root "$cl/proj" --run-id claude-structured --engine claude \
+  --log "$cl/proj/claude-structured.log" --rc 1
+assert_eq "$claude_header_id" "$(jq -r '.attempts[0].session_id' "$cl/proj/.harness/runs/claude-structured.json")" \
+  "Claude: evento JSON usa a identidade estruturada"
+python3 "$tel" init --root "$cl/proj" --run-id claude-text --plan "$cl/proj/plan.md" --engine claude
+printf 'Session ID: %s\nO log cita session ID absence em prosa.\n{"type":"assistant","session_id":"absence"}\n' "$claude_header_id" \
+  > "$cl/proj/claude-text.log"
+RALPH_RUN_ID=claude-text RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=verify \
+  python3 "$tel" record --root "$cl/proj" --run-id claude-text --engine claude \
+  --log "$cl/proj/claude-text.log" --rc 0
+assert_eq "null partial 1" "$(jq -r '"\(.attempts[0].session_id // "null") \(.summary.status) \(.summary.missing_attempts)"' "$cl/proj/.harness/runs/claude-text.json")" \
+  "Claude verify: resposta textual com Session ID não vira metadado"
+
 # ---------------------------------------------------------------------------
 # 8. Auto-checagem de BR do plan-project-phases (Parte 7)
 # ---------------------------------------------------------------------------
@@ -599,11 +659,82 @@ BR-10   fases 11
   "fases em ordem numerica com 10+ fases, faixa expandida, preambulo ignorado, texto da regra embaixo"
 
 # ---------------------------------------------------------------------------
-# 9. log-event grava o evento enxuto e gira o arquivo
+# 9. Revisao de consistencia e suite sem duplicacao na skill de project phases
+# ---------------------------------------------------------------------------
+# Este contrato protege as instrucoes e os exemplos documentados; nao avalia
+# semanticamente planos gerados por um modelo (isso pertence a etapa 5).
+header "9. contrato de consistencia de project phases"
+phase_skill="$PLUGIN/skills/plan-project-phases/SKILL.md"
+consistency="$TMP/consistency-review.md"
+sed -n '/<!-- consistency-review-start -->/,/<!-- consistency-review-end -->/p' \
+  "$phase_skill" > "$consistency"
+assert_contains "$consistency" "Nao abra outra sessao nem delegue uma revisao separada" \
+  "revisao integrada na geracao, sem sessao extra"
+assert_contains "$consistency" "consumidores e testes existentes" \
+  "remocoes mapeiam consumidores e testes"
+assert_contains "$consistency" "assertions negativas nos testes" \
+  "ausencia de uso ativo preserva assertions negativas"
+assert_contains "$consistency" "mesmo comando" \
+  "fechamento nao repete o comando do Gate 2"
+assert_contains "$consistency" "weekly_monthly" \
+  "exemplo sintetico cobre a remocao de payload"
+assert_contains "$consistency" "## Phase 5: Remove deprecated digest fields" \
+  "exemplo sintetico inclui fase de remocao com teste negativo"
+assert_contains "$consistency" 'inclusive `tests/`' \
+  "exemplo sintetico distingue busca global de teste negativo"
+assert_contains "$consistency" 'Runtime files under `src/` and `lib/`' \
+  "exemplo sintetico delimita a busca de ausencia ao codigo ativo"
+assert_contains "$consistency" 'pelo `test-runner` o mesmo comando' \
+  "exemplo sintetico elimina a suite duplicada"
+assert_contains "$phase_skill" "Toda remocao ou renomeacao mapeia consumidores e testes" \
+  "checklist final exige revisar consumidores, testes e transicao"
+assert_contains "$PLUGIN/skills/plan-project-phases/references/laravel.md" \
+  "nao a duplique como task do" \
+  "perfil Laravel segue o contrato de suite unica"
+
+assert_contains "$consistency" "### Revisao de planos existentes" \
+  "procedimento tambem cobre planos existentes"
+assert_contains "$consistency" "Nunca altere automaticamente o plano durante um run" \
+  "revisao de plano existente nao modifica o plano durante o run"
+
+# Confira a recomendacao da tabela inteira, nao apenas a regra nova acima: um
+# exemplo antigo nao pode mandar eliminar identificadores de testes negativos.
+absence_row="$TMP/absence-row.md"
+awk '/^\| .*old_key.*DONE \/ INCOMPLETE/ { print }' "$phase_skill" > "$absence_row"
+assert_contains "$absence_row" 'negative assertions in `tests/` may name it' \
+  "exemplo de task de estado permite testes negativos"
+assert_eq 0 "$(grep -cE 'No file.*tests/.*contains the identifier' "$absence_row" || true)" \
+  "tabela nao recomenda a busca global contraditoria"
+
+# Use o detector do proprio ralph contra as fases do exemplo. Procurar o
+# marcador na skill inteira deixaria passar uma fase de fechamento sem marca.
+awk '/^phase_is_check_only\(\) \{/ { on=1 } on { print } on && /^\}/ { exit }' \
+  "$PLUGIN/scripts/ralph.sh" > "$TMP/check-only-detector.sh"
+for phase in 5 8; do
+  awk -v heading="  ## Phase $phase:" '
+    index($0, heading)==1 { on=1 }
+    on && /^  ```/ { exit }
+    on && /^  ## Phase / && index($0, heading)!=1 { exit }
+    on { sub(/^  /, ""); print }
+  ' "$consistency" > "$TMP/example-phase-$phase.md"
+done
+if ( . "$TMP/check-only-detector.sh"; PHASES_DIR="$TMP"; phase_is_check_only example-phase-8.md ); then
+  ok "ralph reconhece o fechamento sintetico como check-only"
+else
+  bad "ralph reconhece o fechamento sintetico como check-only"
+fi
+if ( . "$TMP/check-only-detector.sh"; PHASES_DIR="$TMP"; phase_is_check_only example-phase-5.md ); then
+  bad "fase sintetica que altera codigo nao e check-only"
+else
+  ok "fase sintetica que altera codigo nao e check-only"
+fi
+
+# ---------------------------------------------------------------------------
+# 10. log-event grava o evento enxuto e gira o arquivo
 # ---------------------------------------------------------------------------
 # Inteiro, o tool_response de cada Read e de cada suite levou o events.jsonl de
 # um projeto real a 146 MB, com linhas de 500 KB que ninguem le.
-header "9. log-event enxuto e com rotacao"
+header "10. log-event enxuto e com rotacao"
 ev="$TMP/events" && mkdir -p "$ev"
 git -C "$ev" init -q
 big=$(head -c 300000 /dev/zero | tr '\0' 'x')

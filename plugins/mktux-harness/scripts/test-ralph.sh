@@ -156,7 +156,7 @@ if grep -q '^RALPH_JUDGE' <<< "$prompt"; then
   echo "$model" > "$state/judge_model"
   cnum=$(grep -oE '^RALPH-CONTEST: TASK [0-9]+' <<< "$prompt" | head -1 | grep -oE '[0-9]+$' || true)
   case "$scenario" in
-    contest-protected|contest-protected-late)
+    contest-protected|contest-protected-late|contest-judge-context)
       verdict="CONTEST TASK ${cnum:-1}: UPHELD — src/protected.txt: aceitar o tipo que o framework passa" ;;
     *)
       verdict="CONTEST TASK ${cnum:-1}: REJECTED — a suite fica verde sem mexer em src/protected.txt" ;;
@@ -219,6 +219,7 @@ if [ "$verify" -eq 1 ]; then
     capacity-verify-always) provider_down ;;
     no-verdict-once) [ "$n" -eq 1 ] && no_verdict ;;
     no-verdict-always) no_verdict ;;
+    verify-appeal-no-verdict) [ "$model" = "impl-model" ] && no_verdict ;;
   esac
 
   implemented=0
@@ -254,7 +255,9 @@ if [ "$verify" -eq 1 ]; then
     elif [ "$scenario" = "contest-rejected" ] && [ "$n" -eq 1 ]; then
       echo "TASK 1: INCOMPLETE — contestacao recusada: border-border esta definido em tailwind.config.js:30"
       for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
-    elif [ "$scenario" = "verify-misread" ] && grep -q '^## Phase 1:' <<< "$prompt" \
+    elif { [ "$scenario" = "verify-misread" ] || [ "$scenario" = "verify-appeal-new-evidence" ] \
+      || [ "$scenario" = "verify-appeal-no-verdict" ]; } \
+      && grep -q '^## Phase 1:' <<< "$prompt" \
       && [ "$model" != "impl-model" ]; then
       # O verificador barato leu so o comeco do arquivo; o modelo de
       # implementacao le inteiro.
@@ -337,13 +340,15 @@ write=1
 [ "$scenario" = "contest-late" ] && [ "$n" -eq 2 ] && write=0
 # verify-misread: a correcao confere o codigo reprovado e nao muda nada.
 [ "$scenario" = "verify-misread" ] && [ "$n" -eq 2 ] && write=0
+[ "$scenario" = "verify-appeal-new-evidence" ] && [ "$n" -eq 2 ] && write=0
+[ "$scenario" = "verify-appeal-no-verdict" ] && [ "$n" -eq 2 ] && write=0
 # contest-protected*: a suite so fica verde com src/unlocked.txt, que a fase
 # proibe criar. A sessao respeita a trava (nao escreve na correcao) ate o prompt
 # trazer a trava liberada pelo juiz.
 unlocked=0 protected_phase=0
 grep -q '^## Travas liberadas pelo juiz' <<< "$prompt" && unlocked=1
 case "$scenario" in
-  contest-protected|contest-protected-late|contest-protected-rejected)
+  contest-protected|contest-protected-late|contest-protected-rejected|contest-judge-context)
     grep -q '^## Phase 1:' <<< "$prompt" && protected_phase=1
     [ "$protected_phase" -eq 1 ] && [ "$n" -gt 1 ] && [ "$unlocked" -eq 0 ] && write=0 ;;
 esac
@@ -384,6 +389,15 @@ RALPH-CONTEST: TASK 1 — o token border-border nao existe (tailwind.config.js:2
   contest-late)
     [ "$n" -eq 2 ] && final="$final
 RALPH-CONTEST: TASK 1 — o token border-border nao existe (tailwind.config.js:26)" ;;
+  verify-misread)
+    [ "$n" -le 2 ] && final="$final
+RALPH-CONTEST: TASK 1 — o arquivo lido contem o metodo (src/impl-1.txt:1)" ;;
+  verify-appeal-new-evidence)
+    [ "$n" -eq 2 ] && final="$final
+RALPH-CONTEST: TASK 1 — o arquivo lido contem o metodo (src/impl-1.txt:1)" ;;
+  verify-appeal-no-verdict)
+    [ "$n" -le 2 ] && final="$final
+RALPH-CONTEST: TASK 1 — o arquivo lido contem o metodo (src/impl-1.txt:1)" ;;
   contest-green|contest-test-red)
     final="$final
 RALPH-CONTEST: TASK 2 — BR-13 exige o filtro que a task nao cita (feature-description.md:149)" ;;
@@ -395,6 +409,9 @@ RALPH-CONTEST: TASK 2 — BR-13 exige o filtro que a task nao cita (feature-desc
   contest-protected|contest-protected-rejected)
     [ "$protected_phase" -eq 1 ] && [ "$unlocked" -eq 0 ] && final="$final
 RALPH-CONTEST: TASK 1 — src/protected.txt:3 tipa o argumento errado e a fase proibe tocar nele" ;;
+  contest-judge-context)
+    [ "$protected_phase" -eq 1 ] && [ "$unlocked" -eq 0 ] && final="$final
+RALPH-CONTEST: TASK 1 — BR-13 exige evidencia sobre src/protected.txt:3" ;;
   contest-protected-late)
     [ "$protected_phase" -eq 1 ] && [ "$n" -gt 1 ] && [ "$unlocked" -eq 0 ] && final="$final
 RALPH-CONTEST: TASK 1 — src/protected.txt:3 tipa o argumento errado e a fase proibe tocar nele" ;;
@@ -458,7 +475,7 @@ if [ "$scenario" = "test-red-once" ] || [ "$scenario" = "stall-after-red" ] || [
   fi
 fi
 case "$scenario" in
-  contest-protected|contest-protected-late|contest-protected-rejected)
+  contest-protected|contest-protected-late|contest-protected-rejected|contest-judge-context)
     if [ -d src ] && [ ! -f src/unlocked.txt ]; then
       echo "1 failing test: ProtectedTypeTest (500 em src/protected.txt:3)"
       exit 1
@@ -669,6 +686,8 @@ if case_enabled verify-incomplete; then
   assert_eq 3 "$(commits "$d")" "1 commit por fase"
   assert_contains "$d/out.log" "Gate 3 vermelho" "gate 3 reportado vermelho"
   assert_contains "$d/repo/.phases/prompts/phase-01.cycle-2.txt" "TASK 1: INCOMPLETE" "prompt de correcao carrega as tasks incompletas verbatim"
+  assert_eq 3 "$(cat "$d/state/verify_calls")" "codigo alterado recebe verificacao nova depois da correcao"
+  assert_not_contains "$d/out.log" "recurso com o modelo de implementacao" "codigo alterado nao reutiliza a reprovacao antiga"
   test -f "$d/repo/.phases/logs/phase-01.verify-1.log" && ok "log do verificador por ciclo" || bad "log do verificador por ciclo"
 fi
 
@@ -1974,12 +1993,14 @@ if case_enabled contest; then
   assert_eq 0 "$rc" "gate 2 + contestacao: exit 0 depois da correcao"
   assert_eq 3 "$(cat "$d/state/impl_calls")" "gate 2 + contestacao: ciclo de correcao"
 
-  # Correcao que nao escreve nada mas traz evidencia nova: re-julga em vez de
-  # repetir o veredito memoizado.
+  # Correcao que nao escreve nada mas traz evidencia nova: recurso com a
+  # contestacao atualizada, sem reabrir antes o verificador barato.
   d=$(new_case contest-late)
   rc=$(run_ralph "$d" contest-late --engine claude --test-cmd "$d/test.sh" --max-cycles 3)
   assert_eq 0 "$rc" "contestacao tardia: exit 0"
-  assert_eq 3 "$(cat "$d/state/verify_calls")" "contestacao nova re-julga (sem memo)"
+  assert_eq 3 "$(cat "$d/state/verify_calls")" "contestacao nova usa recurso e preserva verificacao da fase seguinte"
+  assert_contains "$d/out.log" "contestacoes novas/evidencia atualizada" "contestacao nova aciona recurso direto"
+  assert_contains "$d/repo/.phases/prompts/phase-01.verify-2.txt" "RALPH-CONTEST: TASK 1" "recurso recebe contestacao atualizada"
   assert_not_contains "$d/out.log" "parando em vez de repetir" "nao tratou como ciclo travado"
 fi
 
@@ -2100,6 +2121,87 @@ if case_enabled contest-judge; then
   done
   test -s "$d/state/judge_model" && ok "juiz recebe modelo explicito" || bad "juiz recebe modelo explicito"
   assert_eq "$(cat "$d/state/verify_model")" "$(cat "$d/state/judge_model")" "juiz usa o modelo do verificador"
+
+  # O juiz recebe apenas o plano ativo e recortes selecionados pelo Read first,
+  # pelos IDs da fase e pela contestacao, mesmo quando ha varias features.
+  d=$(new_case contest-judge-context)
+  mkdir -p "$d/repo/docs/features/target" "$d/repo/docs/features/unrelated"
+  cat > "$d/repo/docs/features/target/project-phases.md" <<'PLAN'
+# Target feature — Project Phases
+
+## Phase 1: Preserve the protected contract
+
+**Read first:** `feature-description.md` next to this file, section "Digest Rules"; `user-stories.md`, story US-2.1.
+
+**Do not touch in this phase:** `src/protected.txt`.
+
+**Tasks:**
+- [ ] `src/protected.txt` accepts the framework-provided value.
+
+## Phase 2: Finish the target feature
+
+- [ ] Target follow-up state exists.
+PLAN
+  cat > "$d/repo/docs/features/target/feature-description.md" <<'DOC'
+# Target description
+
+## Digest Rules
+
+TARGET_SECTION_CONTEXT: the target digest must preserve this contract.
+
+## Business Rules
+
+1. **BR-13 — Target value type:** TARGET_BR_CONTEXT requires InboundValue for the active feature.
+2. **BR-14 — Unrelated rule:** OTHER_BR_CONTEXT belongs to another behavior.
+DOC
+  cat > "$d/repo/docs/features/target/user-stories.md" <<'DOC'
+# Target stories
+
+**US-2.1** — TARGET_US_CONTEXT remains true for the target digest.
+
+**US-2.2** — OTHER_US_CONTEXT describes a different target story.
+DOC
+  cat > "$d/repo/docs/features/target/design-notes.md" <<'DOC'
+# Uncited target notes
+
+UNCITED_DOC_CONTEXT must not be attached wholesale to the judge prompt.
+DOC
+  cat > "$d/repo/docs/features/unrelated/project-phases.md" <<'PLAN'
+# Unrelated feature — Project Phases
+
+OTHER_FEATURE_PLAN_CONTEXT requires InboundValue under BR-13 for another feature.
+PLAN
+  cat > "$d/repo/docs/features/unrelated/feature-description.md" <<'DOC'
+# Unrelated feature
+
+1. **BR-13 — Other contract:** OTHER_FEATURE_DOC_CONTEXT forbids InboundValue for another feature.
+
+**US-2.1** — This other feature also uses InboundValue.
+DOC
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: multi-feature judge context fixture"
+  plan="$d/repo/docs/features/target/project-phases.md"
+  active_plan="$(cd "$(dirname "$plan")" && pwd -P)/$(basename "$plan")"
+  rc=$(run_ralph "$d" contest-judge-context --engine claude --test-cmd "$d/test.sh" \
+    --max-cycles 3 docs/features/target/project-phases.md)
+  assert_eq 0 "$rc" "contexto do juiz: fase corrigida conclui"
+  jp="$d/repo/.phases/prompts/phase-01.judge-1.txt"
+  assert_contains "$jp" "Plano de fases ativo: \`$active_plan\`" "juiz recebe caminho exato do plano ativo"
+  assert_contains "$jp" "Documentos da feature ativa: \`$(dirname "$active_plan")\`" "juiz recebe o diretorio documental permitido"
+  assert_contains "$jp" "TARGET_SECTION_CONTEXT" "juiz recebe secao citada pela fase"
+  assert_contains "$jp" "TARGET_US_CONTEXT" "juiz recebe story citada pela fase"
+  assert_contains "$jp" "TARGET_BR_CONTEXT" "juiz recebe regra citada pela contestacao"
+  assert_not_contains "$jp" "OTHER_BR_CONTEXT" "regra nao citada fica fora do recorte"
+  assert_not_contains "$jp" "OTHER_US_CONTEXT" "story nao citada fica fora do recorte"
+  assert_not_contains "$jp" "UNCITED_DOC_CONTEXT" "documento irmao nao citado nao e anexado"
+  assert_not_contains "$jp" "OTHER_FEATURE_PLAN_CONTEXT" "plano de outra feature nao e anexado"
+  assert_not_contains "$jp" "OTHER_FEATURE_DOC_CONTEXT" "documentos de outra feature nao sao anexados"
+  assert_contains "$jp" "Nao use Glob para listar planos de fases" "juiz recebe limite contra busca global"
+  assert_contains "$jp" "Nao execute buscas recursivas na raiz do repositorio" "juiz nao pode buscar simbolos na raiz"
+  assert_contains "$jp" "restrinja Read/Glob/Grep e comandos equivalentes ao diretorio da feature ativa" "escopo documental vale para ambas as engines"
+  assert_contains "$jp" "mesmo que contenham os mesmos simbolos ou IDs BR/US" "colisoes de simbolos nao autorizam consultar outra feature"
+  assert_contains "$jp" "Siga imports e dependencias do projeto quando precisar confirmar a evidencia" "juiz pode consultar dependencia relevante"
+  assert_eq 1 "$(cat "$d/state/judge_readonly")" "recorte preserva o juiz somente leitura"
+  assert_eq 4 "$(commits "$d")" "fixture com contexto termina com as duas fases commitadas"
 
   # Juiz recusa: a correcao recebe a recusa; a mesma contestacao nao volta ao
   # juiz, e a correcao que nao escreve nada continua sendo fase travada.
@@ -2265,7 +2367,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # 62. Verificador barato reprova o que nao leu, a correcao confere e nao muda
-#     nada -> recurso com o modelo e o effort de implementacao, que aprova. Na
+#     nada, repetindo a mesma contestacao -> recurso com modelo/effort de impl.
 #     fase 2 de superadmin-email-digest o memo guardava a reprovacao e a fase
 #     travava com o codigo certo.
 # ---------------------------------------------------------------------------
@@ -2283,6 +2385,7 @@ cheap-model" "$(cat "$d/state/verify_models")" "recurso com o modelo de implemen
 high
 low" "$(cat "$d/state/verify_efforts")" "recurso com o effort de implementacao"
   assert_contains "$d/out.log" "a correcao nao mudou o codigo reprovado; recurso" "recurso anunciado"
+  assert_contains "$d/out.log" "contestacoes identicas" "codigo e contestacao iguais preservam o recurso"
   assert_contains "$d/out.log" "Gate 3 — recurso aprovou" "recurso aprovou"
   assert_not_contains "$d/out.log" "parando em vez de repetir" "nao tratou como fase travada"
   test -f "$d/repo/.phases/logs/phase-01.verify-2.log" \
@@ -2290,6 +2393,8 @@ low" "$(cat "$d/state/verify_efforts")" "recurso com o effort de implementacao"
   vp="$d/repo/.phases/prompts/phase-01.verify-1.txt"
   assert_contains "$vp" "Leia cada arquivo ate o fim" "verificador le o arquivo inteiro"
   assert_contains "$vp" "Trecho que voce nao leu nao e falta" "trecho nao lido nao e INCOMPLETE"
+  assert_contains "$vp" "RALPH-CONTEST: TASK 1 — o arquivo lido contem o metodo" "contestacao inicial e registrada"
+  assert_contains "$d/repo/.phases/prompts/phase-01.verify-2.txt" "RALPH-CONTEST: TASK 1 — o arquivo lido contem o metodo" "recurso recebe a mesma contestacao"
 fi
 
 # ---------------------------------------------------------------------------
@@ -2309,6 +2414,42 @@ if case_enabled verify-appeal-upheld; then
   assert_contains "$d/out.log" "Gate 3 — recurso tambem reprovou" "recurso reprovou"
   assert_contains "$d/out.log" "O recurso com o modelo de implementacao julgou o mesmo codigo e tambem reprovou" "causa cita o recurso"
   assert_contains "$d/out.log" "parando em vez de repetir" "fase travada"
+fi
+
+# ---------------------------------------------------------------------------
+# 64. Codigo igual + contestacao nova: recurso direto com evidencia atualizada.
+# ---------------------------------------------------------------------------
+if case_enabled verify-appeal-new-evidence; then
+  header "64. codigo igual + contestacao nova -> recurso sem re-julgamento barato"
+  d=$(new_case verify-appeal-new-evidence)
+  rc=$(CASE_VERIFY_MODEL=cheap-model run_ralph "$d" verify-appeal-new-evidence --engine codex \
+    --model impl-model --effort high --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq "cheap-model
+impl-model
+cheap-model" "$(cat "$d/state/verify_models")" "contestacao nova vai direto ao modelo de implementacao"
+  assert_eq 3 "$(cat "$d/state/impl_calls")" "uma correcao sem escrita e implementacao da fase seguinte"
+  assert_contains "$d/out.log" "contestacoes novas" "log explica o recurso por evidencia nova"
+  assert_contains "$d/out.log" "Gate 3 — recurso aprovou" "recurso aceita com a contestacao atualizada"
+  vp="$d/repo/.phases/prompts/phase-01.verify-2.txt"
+  assert_contains "$vp" "RALPH-CONTEST: TASK 1 — o arquivo lido contem o metodo" "recurso recebe a contestacao nova"
+  assert_not_contains "$d/out.log" "parando em vez de repetir" "fase nao trava antes do recurso"
+fi
+
+# ---------------------------------------------------------------------------
+# 65. Recurso sem veredito conserva a reprovacao original e nao aprova.
+# ---------------------------------------------------------------------------
+if case_enabled verify-appeal-no-verdict; then
+  header "65. recurso sem veredito conserva a causa anterior"
+  d=$(new_case verify-appeal-no-verdict)
+  rc=$(CASE_VERIFY_MODEL=cheap-model run_ralph "$d" verify-appeal-no-verdict --engine codex \
+    --model impl-model --effort high --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 1 "$rc" "recurso sem resposta mantém a fase reprovada"
+  assert_eq 2 "$(cat "$d/state/verify_calls")" "um verificador e um recurso"
+  assert_eq 2 "$(cat "$d/state/impl_calls")" "nenhuma correcao extra apos recurso sem veredito"
+  assert_contains "$d/out.log" "Gate 3 — recurso sem veredito; mantida a reprovacao anterior" "recurso nao aprova sem julgar"
+  assert_contains "$d/out.log" "o arquivo lido termina antes do metodo" "causa original preservada"
+  assert_not_contains "$d/out.log" "Gate 3 — recurso aprovou" "sem veredito nao vira aprovacao"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

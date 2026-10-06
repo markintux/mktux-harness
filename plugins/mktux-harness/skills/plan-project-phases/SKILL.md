@@ -40,6 +40,100 @@ Depois **inspecione o codebase** pra identificar o que ja esta implementado dest
 feature. Marque as tasks ja concluidas com `[x]` — o verificador checa essas
 tambem, entao so marque o que voce confirmou lendo o codigo.
 
+<!-- consistency-review-start -->
+### Revisao de consistencia (parte da mesma geracao)
+
+Antes de gravar o arquivo final, revise o rascunho completo do plano nesta
+mesma sessao. Nao abra outra sessao nem delegue uma revisao separada. Use o
+codebase e as secoes abaixo para corrigir o plano, nao apenas para listar riscos.
+
+1. Para cada interface, chave ou comportamento removido/renomeado, procure os
+   consumidores e testes existentes. A fase que faz a mudanca inclui as
+   atualizacoes de consumidores e expectativas de teste que ela quebra. Se a
+   adaptacao precisar acontecer depois, mantenha compatibilidade ate a fase que
+   adapta o consumidor; nenhuma fase pode fechar com a suite vermelha. Nao
+   proiba tocar, nessa fase, os testes que precisam mudar.
+2. Trate invariantes como temporarias quando o plano as substitui: diga em quais
+   fases elas valem e em qual transicao deixam de valer. Remova a protecao das
+   fases posteriores quando a mudanca autorizada passa a exigir outro estado.
+3. Para ausencia de funcionalidade, separe referencias ativas no codigo de
+   assertions negativas nos testes. Especifique os diretorios de codigo em que
+   o uso ativo deve desaparecer e preserve testes que mencionam o identificador
+   para comprovar a ausencia. Nao exija que o identificador desapareca de
+   `tests/` quando os proprios testes precisam nomea-lo.
+4. O Gate 2 roda o comando completo da suite ao fim de cada fase. A fase de
+   fechamento nao deve mandar o subagent `test-runner` repetir o mesmo comando.
+   Inclua uma execucao procedural completa apenas quando uma instrucao explicita
+   do projeto exigir uma verificacao independente que o Gate 2 nao cobre; diga
+   qual e a diferenca. Preserve formatadores, builds e verificacoes adicionais
+   realmente exigidos pelo projeto.
+
+Use estes casos sinteticos como revisao de resultado:
+
+- **Remocao de payload:** um rascunho que remove `flow`, `snapshots` e
+  `weekly_monthly` numa fase, protege os testes que ainda esperam essas chaves e
+  so tenta atualiza-los no fechamento e contraditorio. A versao coerente coloca
+  a mudanca de payload e a atualizacao desses testes na mesma fase (ou mantem a
+  compatibilidade ate a fase que adapta todos os consumidores); testes da fase
+  afirmam a ausencia das chaves no comportamento final. Exemplo sintetico de
+  saida coerente:
+
+  ```markdown
+  ## Phase 5: Remove deprecated digest fields
+
+  **Goal:** Stop emitting the retired digest fields and update their consumers.
+
+  **Do not touch in this phase:** Unrelated digest categories and their tests.
+
+  **Tasks:**
+  - [ ] `src/digest/payload-builder` no longer emits `flow`, `snapshots` or `weekly_monthly`.
+  - [ ] `tests/digest-payload` (existing file; retain unrelated cases) asserts each retired field is absent from the serialized payload.
+    - serialized weekly/monthly digest → retired fields are absent (US-2.1)
+    - another digest category → existing payload stays unchanged (US-2.2)
+
+  **Completion criteria:** Updated consumers and negative assertions pass the Gate 2 suite.
+
+  ---
+
+  ## Phase 8: Confirm retired fields have no active producer
+
+  **Check-only phase**
+
+  **Goal:** Keep removed fields absent from runtime code while preserving regression coverage.
+
+  **Tasks:**
+  - [ ] Runtime files under `src/` and `lib/` contain no active reads or writes of the retired fields.
+  - [ ] `tests/digest-payload` retains negative assertions naming each retired field.
+
+  **Completion criteria:** Runtime references are absent; the tests still prove that the serialized payload omits the fields.
+  ```
+- **Busca por ausencia:** um criterio como “nenhum arquivo, inclusive `tests/`,
+  menciona `weekly_monthly`” contradiz um teste negativo que precisa citar a
+  chave. A versao coerente limita a ausencia de referencias ativas aos
+  diretorios de runtime e permite a mencao em assertions de `tests/` que provam
+  que o payload nao e emitido.
+- **Fechamento:** uma task manual para rodar pelo `test-runner` o mesmo comando
+  de suite completa ja executado pelo Gate 2 e duplicada. Mantenha no fechamento
+  somente verificacoes distintas que o projeto exige.
+
+So conclua quando o rascunho atualizado nao mantiver a contradicao original e
+continuar cobrindo o comportamento removido, inclusive por teste negativo
+quando aplicavel.
+
+### Revisao de planos existentes (antes do run)
+
+Quando o pedido for revisar um plano existente, leia o arquivo de fases ativo,
+seus documentos de entrada e o codigo pertinente. Aplique os mesmos quatro
+passos acima a todas as fases, incluindo as protecoes e os exemplos de task.
+Registre cada contradicao com o requisito, a evidencia no codigo, as fases
+afetadas e a mudanca proposta. Um pedido de revisao produz os achados sem
+reescrever o plano.
+
+Nunca altere automaticamente o plano durante um run. Se o pedido incluir
+corrigir o plano, aplique as mudancas fora do run, execute a auto-checagem da
+Parte 7 e informe o efeito sobre stamp e progresso descrito na Parte 1.8.
+<!-- consistency-review-end -->
+
 ## Saida
 
 `<dir>/project-phases.md`, **em ingles**, com o carimbo na linha 3:
@@ -207,7 +301,7 @@ de um lado ou do outro dependendo puramente de como voce escreveu:
 | Redacao | Veredito |
 |---|---|
 | ``Confirm with `grep -rn "old_key" app/` that no reference survives`` | NOT-CODE |
-| ``No file under `app/`, `routes/` or `tests/` contains the identifier `old_key``` | DONE / INCOMPLETE |
+| ``No runtime code under `app/` or `routes/` reads or emits `old_key`; negative assertions in `tests/` may name it`` | DONE / INCOMPLETE |
 | ``Run `git diff` and confirm `FooAction` was not modified`` | NOT-CODE |
 | ``` `FooAction` contains no export, CSV or `streamDownload` code ``` | DONE / INCOMPLETE |
 | `Confirm no migration was created` | NOT-CODE |
@@ -235,9 +329,10 @@ ela consegue rodar (formatador, build); o que exige pessoa ou aparelho fica.
 Sao `(manual)`:
 
 - rodar o formatador do projeto;
-- rodar a suite completa pelo subagent `test-runner` somente quando o plano
-  exigir explicitamente essa tarefa; o gate 2 ja roda a suite completa ao fim
-  da fase;
+- rodar pelo subagent `test-runner` uma verificacao completa adicional somente
+  quando o projeto a exigir explicitamente e ela cobrir algo que o comando do
+  gate 2 nao cobre; nunca repetir pelo subagent o mesmo comando que o gate 2 ja
+  executa;
 - o build de assets, quando o projeto tem um;
 - sanity check com `git diff --stat`;
 - verificar algo em dispositivo real, ou fazer uma pergunta ao usuario.
@@ -351,8 +446,10 @@ Ordene as fases de modo que cada uma produza um incremento funcional e testavel:
 3. **Backend core** — autorizacao, regras de negocio, validacao de entrada
 4. **Routes + handlers** — um contexto por vez
 5. **Views** — telas e componentes, mais o build de assets quando houver
-6. **Regression** — formatador, suite completa, e afirmacoes legiveis de que nada
-   mais se moveu. Marcada `**Check-only phase**` (1.6)
+6. **Regression** — formatador, verificacoes finais distintas exigidas pelo
+   projeto, e afirmacoes legiveis de que nada mais se moveu. A suite completa ja
+   e executada pelo Gate 2 ao fim de cada fase; nao a duplique como task do
+   `test-runner`. Marcada `**Check-only phase**` (1.6)
 
 O perfil de stack traz a mesma ordem nos termos do framework — use a dele quando
 houver.
@@ -377,6 +474,11 @@ Regras que importam mais que a ordem:
   fez um metodo recusar o periodo diario, o comando que o chamava so seria
   religado na fase 6 e estava proibido na fase 3: quatro testes do comando
   ficaram vermelhos e a fase so saiu com correcao humana.
+- **A revisao de consistencia cobre todas as fases antes de gravar o plano.**
+  Depois do rascunho, confira remocoes/renomeacoes e seus consumidores e testes,
+  o ciclo de vida das invariantes, o escopo de assertions de ausencia e a
+  duplicacao de suite completa (revisao acima). Corrija o plano nesta geracao;
+  nao crie uma sessao revisora por fase.
 - **So proteja codigo que um teste ja exercita.** Listar um arquivo no **Do not
   touch** afirma que ele esta certo, e so um teste de fase anterior garante isso.
   Codigo que uma fase anterior escreveu mas nenhum teste rodou ainda — o handler
@@ -623,6 +725,15 @@ Depois releia e confirme:
 - [ ] Nenhum desses testes mede o que a fase acrescenta (contagem de consultas,
       chamadas ou elementos, saida identica, snapshot); o que mede virou task
       (Parte 3).
+- [ ] Toda remocao ou renomeacao mapeia consumidores e testes, com adaptacao na
+      mesma fase ou compatibilidade preservada ate a fase de adaptacao.
+- [ ] Invariantes que mudam de valor indicam as fases em que valem e a transicao
+      que as substitui; fases posteriores nao protegem o estado antigo.
+- [ ] Criterios de ausencia delimitam codigo ativo e mantem assertions negativas
+      pertinentes em `tests/`.
+- [ ] Nenhuma fase de fechamento pede ao `test-runner` o mesmo comando completo
+      executado pelo Gate 2; uma verificacao adicional nomeia a exigencia distinta
+      do projeto.
 - [ ] Todo arquivo no **Do not touch** tem o caminho que a fase usa exercitado
       por um teste de fase anterior (Parte 3).
 - [ ] `[x]` aparece so em task confirmada lendo o codigo.

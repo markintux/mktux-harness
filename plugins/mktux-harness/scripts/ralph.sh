@@ -76,8 +76,9 @@
 #      arquivos alterados na fase como ponto de partida. Ferramentas: claude so
 #      tem Read/Glob/Grep; codex roda em sandbox read-only, instruido a nao
 #      rodar build nem teste. Reprovacao que o ciclo de correcao nao aceitou
-#      (nao mudou o codigo) vai uma vez por fase a um recurso: verificador novo
-#      com o modelo e o effort de implementacao.
+#      (nao mudou o codigo) vai uma vez por fase a um recurso com o modelo e o
+#      effort de implementacao. Evidencia ou contestacao nova segue no prompt
+#      desse recurso, sem reabrir antes uma sessao barata.
 #
 # Contestacao: a sessao que confirma um erro no plano (task que cita o que nao
 # existe, contradiz uma BR/US, ou exige quebrar teste que a fase proibe tocar)
@@ -2379,7 +2380,8 @@ gate3_verify_uncached() {
 # Memo do gate 3, por assinatura de arvore. Invalidado a cada fase em run_phase:
 # uma fase que fecha sem commitar deixa HEAD e arvore intactos, e sem o reset a
 # fase seguinte herdaria o veredito da anterior.
-GATE3_MEMO_SIG=""
+GATE3_MEMO_CODE_SIG=""
+GATE3_MEMO_EVIDENCE_SIG=""
 GATE3_MEMO_RC=0
 GATE3_MEMO_CAUSE=""
 GATE3_MEMO_RAN=0
@@ -2390,7 +2392,8 @@ GATE3_NO_VERDICT=0
 GATE3_APPEALED=0
 
 gate3_memo_reset() {
-  GATE3_MEMO_SIG=""
+  GATE3_MEMO_CODE_SIG=""
+  GATE3_MEMO_EVIDENCE_SIG=""
   GATE3_MEMO_RC=0
   GATE3_MEMO_CAUSE=""
   GATE3_MEMO_RAN=0
@@ -2439,34 +2442,40 @@ phase_committed() {
 }
 
 # O gate 3 e uma funcao do codigo: bytes identicos tem que dar o mesmo veredito.
+# Codigo e evidencia usam assinaturas separadas: evidencia nova invalida o memo,
+# sem apagar uma reprovacao para os mesmos bytes que exige recurso.
 # Sem memo, um ciclo de correcao que nao escreveu nada paga OUTRA sessao de
 # verificacao para julgar exatamente os mesmos bytes — e verificador fraco muda
 # de ideia. Na fase 12 de admin-area-users tres NOT-CODE viraram dois DONE e um
 # INCOMPLETE sem uma linha mudar, e esse INCOMPLETE reprovou a fase.
 gate3_independent_verify() {
   local phase_file="$1" cycle="$2" session_wrote="$3"
-  local tree_sig rc=0
+  local code_sig evidence_sig evidence_changed=0 rc=0
   GATE3_NO_VERDICT=0
 
-  # A contestacao entra na chave: sessao que nao escreveu nada mas trouxe
-  # evidencia nova merece outro julgamento; a mesma, nao.
-  tree_sig="$(tree_signature)|$PHASE_CONTESTS|$PHASE_UNLOCKS"
+  # Codigo e evidencia sao estados distintos: evidencia nova invalida o memo,
+  # mas nao apaga a reprovacao que pode exigir recurso para os mesmos bytes.
+  code_sig=$(tree_signature)
+  evidence_sig=$(printf '%s\n%s' "$PHASE_CONTESTS" "$PHASE_UNLOCKS" | sha256sum | cut -c1-16)
 
-  if [ -n "$GATE3_MEMO_SIG" ] && [ "$tree_sig" = "$GATE3_MEMO_SIG" ]; then
+  if [ -n "$GATE3_MEMO_CODE_SIG" ] && [ "$code_sig" = "$GATE3_MEMO_CODE_SIG" ]; then
+    [ "$evidence_sig" != "$GATE3_MEMO_EVIDENCE_SIG" ] && evidence_changed=1
     if [ "$GATE3_MEMO_RC" -ne 0 ] && [ "$GATE3_MEMO_RAN" -eq 1 ] && [ "$GATE3_APPEALED" -eq 0 ]; then
-      gate3_appeal "$phase_file" "$cycle" "$session_wrote" "$tree_sig" && return 0
+      gate3_appeal "$phase_file" "$cycle" "$session_wrote" "$code_sig" "$evidence_sig" "$evidence_changed" && return 0
       return 1
     fi
-    GATE_CAUSE="$GATE3_MEMO_CAUSE"
-    GATE3_RAN="$GATE3_MEMO_RAN"
-    if [ "$GATE3_MEMO_RC" -eq 0 ]; then
-      success "Gate 3 — codigo e contestacoes identicos ao ciclo anterior; veredito mantido (aprovado)"
-      state_gate 3 pass
-    else
-      warn "Gate 3 — codigo e contestacoes identicos ao ciclo anterior; veredito mantido (reprovado), sem re-julgar"
-      state_gate 3 fail
+    if [ "$evidence_changed" -eq 0 ]; then
+      GATE_CAUSE="$GATE3_MEMO_CAUSE"
+      GATE3_RAN="$GATE3_MEMO_RAN"
+      if [ "$GATE3_MEMO_RC" -eq 0 ]; then
+        success "Gate 3 — codigo e contestacoes identicos ao ciclo anterior; veredito mantido (aprovado)"
+        state_gate 3 pass
+      else
+        warn "Gate 3 — codigo e contestacoes identicos ao ciclo anterior; veredito mantido (reprovado), sem re-julgar"
+        state_gate 3 fail
+      fi
+      return "$GATE3_MEMO_RC"
     fi
-    return "$GATE3_MEMO_RC"
   fi
 
   gate3_verify_uncached "$phase_file" "$cycle" "$session_wrote" || rc=$?
@@ -2498,7 +2507,8 @@ gate3_independent_verify() {
     return 1
   fi
 
-  GATE3_MEMO_SIG="$tree_sig"
+  GATE3_MEMO_CODE_SIG="$code_sig"
+  GATE3_MEMO_EVIDENCE_SIG="$evidence_sig"
   GATE3_MEMO_RC="$rc"
   GATE3_MEMO_CAUSE="$GATE_CAUSE"
   GATE3_MEMO_RAN="$GATE3_RAN"
@@ -2506,16 +2516,23 @@ gate3_independent_verify() {
 }
 
 # Recurso: a correcao leu a reprovacao, conferiu o codigo e nao mudou nada. Sao
-# duas leituras discordando, e o memo ficava com a do verificador barato. Na
-# fase 2 de superadmin-email-digest ele leu as linhas 1-260 de um arquivo de 397,
+# duas leituras discordando, e o memo ficava com a do verificador barato. Se a
+# correcao trouxer nova contestacao, o recurso recebe essa evidencia atualizada.
+# Na fase 2 de superadmin-email-digest ele leu as linhas 1-260 de um arquivo de 397,
 # reprovou os metodos que nao chegou a ler, a correcao confirmou que estavam la,
 # e a fase travou com o codigo certo. O mesmo codigo vai uma vez por fase a uma
 # sessao verificadora nova, com o modelo e o effort de implementacao. Reprovar
 # de novo e trava de verdade: as duas leituras concordam.
 gate3_appeal() {
-  local phase_file="$1" cycle="$2" session_wrote="$3" tree_sig="$4" rc=0
+  local phase_file="$1" cycle="$2" session_wrote="$3"
+  local code_sig="$4" evidence_sig="$5" evidence_changed="$6" rc=0 reason
   GATE3_APPEALED=1
-  warn "Gate 3 — a correcao nao mudou o codigo reprovado; recurso com o modelo de implementacao"
+  if [ "$evidence_changed" -eq 1 ]; then
+    reason="contestacoes novas/evidencia atualizada"
+  else
+    reason="contestacoes identicas"
+  fi
+  warn "Gate 3 — a correcao nao mudou o codigo reprovado; recurso com o modelo de implementacao (motivo: $reason)"
   ENGINE_VERIFY_APPEAL=1
   gate3_verify_uncached "$phase_file" "$cycle" "$session_wrote" || rc=$?
   ENGINE_VERIFY_APPEAL=0
@@ -2537,7 +2554,8 @@ gate3_appeal() {
     GATE_CAUSE="O recurso com o modelo de implementacao julgou o mesmo codigo e tambem reprovou."$'\n'"$GATE_CAUSE"
   fi
 
-  GATE3_MEMO_SIG="$tree_sig"
+  GATE3_MEMO_CODE_SIG="$code_sig"
+  GATE3_MEMO_EVIDENCE_SIG="$evidence_sig"
   GATE3_MEMO_RC="$rc"
   GATE3_MEMO_CAUSE="$GATE_CAUSE"
   GATE3_MEMO_RAN="$GATE3_RAN"
@@ -2562,6 +2580,19 @@ UNLOCK_NOTES=()
 build_judge_prompt() {
   local phase_file="$1" cycle="$2" pending="$3" test_log="$4"
   local prompt_file="$PROMPT_DIR/${phase_file%.md}.judge-${cycle}.txt"
+  local doc_dir active_plan_path context_phase_file cited_context
+
+  doc_dir="$(dirname "$INPUT_FILE")"
+  active_plan_path="$(cd "$doc_dir" && pwd -P)/$(basename "$INPUT_FILE")"
+  context_phase_file="$PROMPT_DIR/${phase_file%.md}.judge-${cycle}.context.md"
+  {
+    cat "$PHASES_DIR/$phase_file"
+    printf '\n%s\n' "$pending"
+  } > "$context_phase_file"
+  # Reuse the phase-context extractor. Include the pending contestations when
+  # collecting BR/US IDs, since they can cite a rule absent from the phase.
+  cited_context="$(phase_context "$context_phase_file" "$doc_dir" "$INPUT_FILE")"
+  rm -f "$context_phase_file"
 
   {
     cat <<'JUDGE'
@@ -2579,6 +2610,20 @@ deixar a suite verde.
 ## Contestacoes a julgar
 JUDGE
     printf '%s\n' "$pending"
+    cat <<'JUDGE'
+
+## Plano ativo e trechos pertinentes
+JUDGE
+    printf 'Plano de fases ativo: `%s`\n' "$active_plan_path"
+    printf 'Documentos da feature ativa: `%s`\n' "$(dirname "$active_plan_path")"
+    printf 'Fatia da fase julgada: `%s/%s`\n' "$PHASES_DIR" "$phase_file"
+    if [ -n "$cited_context" ]; then
+      echo "Os trechos abaixo foram recortados dos documentos ao lado do plano ativo,"
+      echo "usando os titulos e IDs citados pela fase ou pelas contestacoes pendentes."
+      printf '%s\n' "$cited_context"
+    else
+      echo "Nenhum trecho citado foi encontrado nos documentos ao lado do plano ativo."
+    fi
     echo
     echo "## Fim da saida da suite"
     echo '```'
@@ -2607,6 +2652,18 @@ CONTEST TASK <n>: REJECTED — <o que voce viu e o que a sessao deve fazer>
   exige.
 - Comece pelos arquivos que a evidencia cita e pelos testes que falharam. Leia
   cada arquivo ate o fim, uma vez; arquivo grande em trechos seguidos.
+- Comece as consultas pelo caminho exato do plano ativo, pelos trechos citados
+  acima e pelos caminhos/simbolos da contestacao.
+- Nao execute buscas recursivas na raiz do repositorio (rg/grep em "." ou
+  Glob "**/*"). Busque simbolos somente nos arquivos citados ou nos diretorios
+  de codigo/testes pertinentes. Se faltar o caminho de um teste, procure seu
+  nome nos diretorios de testes, sem ampliar a busca aos documentos de features.
+- Para documentos, restrinja Read/Glob/Grep e comandos equivalentes ao diretorio da feature ativa
+  indicado acima. Nao consulte documentos de outras features, nem pesquise o
+  diretorio que reune todas as features, mesmo que contenham os mesmos simbolos ou IDs BR/US.
+- Siga imports e dependencias do projeto quando precisar confirmar a evidencia.
+- Nao use Glob para listar planos de fases ou documentos de outras features.
+  Consulte somente o plano ativo e os arquivos pertinentes a evidencia.
 - NAO rode build, testes, typecheck nem lint: a saida da suite esta acima.
 - NAO leia codigo de dependencias de terceiros (node_modules, vendor, .venv) nem
   lockfiles.
