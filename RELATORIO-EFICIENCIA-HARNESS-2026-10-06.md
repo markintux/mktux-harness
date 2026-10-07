@@ -211,7 +211,7 @@ Estado inicial deste plano: nenhuma etapa implementada por esta auditoria.
 | 3 | CONCLUÍDA | Pendências da revisão corrigidas: procedimento para planos existentes, exemplo de ausência e fechamento check-only; 139 asserts de layout verdes. Comportamento de modelo real não observado. Detalhes abaixo. |
 | 4 | CONCLUÍDA | Pendência da revisão corrigida; 61 assertions focadas, 572 de orquestração e 139 de layout verdes. Nova chamada real adversarial consultou somente caminhos pertinentes; avaliação da restrição técnica registrada abaixo. |
 | 5 | VALIDADA LOCALMENTE | Duas suítes, sintaxe e diff check verdes; comparação real pendente de autorização com limite de consumo. Detalhes abaixo. |
-| 6 | NÃO INICIADA | Condicionada ao resultado da avaliação |
+| 6 | ADIADA | A repetição por ciclo continua no código, mas não há comparação pós-etapas 1–4 nem projeto com ambiente de testes controlado e fingerprint declarado para validar a adesão. |
 
 Estados possíveis: EM ANDAMENTO, VALIDADA LOCALMENTE, CONCLUÍDA, PENDENTE ou ADIADA. Para as etapas 3 e 4, declarar separadamente se o comportamento do modelo foi observado em execução real. Para a etapa 5, “CONCLUÍDA” exige a comparação real descrita no aceite; validação local isolada não basta.
 
@@ -472,6 +472,36 @@ duração, tokens de entrada/cache/saída, sessões por modo ou correções sem
 escrita. Nenhuma economia ou ganho de qualidade é declarado. A etapa fica
 `VALIDADA LOCALMENTE`, com a comparação real pendente; para concluí-la, será
 necessário autorizar a comparação delimitada e definir o limite de consumo.
+
+### Registro detalhado — etapa 6 (06/10/2026)
+
+**Estado: ADIADA conforme a condição de entrada da etapa.** A etapa 5 segue
+`VALIDADA LOCALMENTE`, com a comparação baseline/candidato pendente. O achado
+original mediu 7min09s em três repetições elegíveis antes das etapas 1–4; a
+implementação atual ainda chama o gate 2 em cada ciclo. A etapa 3 removeu dos
+planos gerados a instrução duplicada para rodar a suíte completa, mas não há run
+posterior que demonstre quanto desse custo permanece depois das mudanças.
+Portanto, o benefício residual não foi reavaliado.
+
+Também não foi identificado projeto com adesão explícita e fingerprint de
+ambiente validado. O comando do gate 2 pode vir de override ou dos perfis
+Laravel, Node e Python; estes incluem serviços Sail, dependências/runtime locais
+e estado externo que não são descritos pela árvore Git. O harness não possui um
+contrato de opt-in nem uma declaração versionada que cubra esses fatores. Uma
+assinatura somente do Git seria insuficiente, e criar um cache genérico agora
+contrariaria a invalidação conservadora especificada no plano. Nenhum código do
+orquestrador foi alterado nesta etapa.
+
+Validação solicitada, executada em 06/10/2026:
+
+- `bash plugins/mktux-harness/scripts/test-ralph.sh` — exit 0; `TODOS VERDES: 572 asserts`.
+- `bash plugins/mktux-harness/scripts/test-layout.sh` — exit 0; `TODOS VERDES: 139 asserts`.
+
+As suítes confirmam o estado atual do harness; não demonstram estabilidade de um
+ambiente de projeto nem economia por reutilização. Próximo passo: concluir a
+comparação real da etapa 5, com limite de tentativas/consumo autorizado, e
+reavaliar a etapa 6 somente se ela mostrar custo residual relevante e houver um
+projeto controlado para validar o fingerprint.
 
 ## Sequência proposta
 
