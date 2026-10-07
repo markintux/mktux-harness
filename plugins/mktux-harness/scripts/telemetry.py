@@ -57,8 +57,8 @@ def structured_rows(content):
 
 def structured_session_ids(content, engine, mode=None):
     """Extract IDs only from the engine's own identity events."""
-    if engine == "claude" and mode in ("verify", "judge"):
-        return set()  # Claude runs these sessions with --output-format text.
+    if engine == "claude" and mode == "judge":
+        return set()  # Claude runs the judge with --output-format text.
     found = set()
     for row in structured_rows(content):
         if engine == "codex":

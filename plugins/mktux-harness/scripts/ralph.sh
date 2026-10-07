@@ -928,6 +928,9 @@ apply_from_override() {
 PH_TOTAL=0
 TSK_N=0
 CUR_SEQ=""
+# Arquivo da fase em execucao: tree_signature le dele os caminhos ignorados
+# que a fase cita.
+CUR_PHASE_FILE=""
 RUN_START=0
 RUN_START_ISO=""
 RUN_STATUS="starting"
@@ -1468,7 +1471,7 @@ phase_changed_files() {
 build_verify_prompt() {
   local phase_file="$1" cycle="$2"
   local prompt_file="$PROMPT_DIR/${phase_file%.md}.verify-${cycle}.txt"
-  local tasks n n_all judged changed n_changed
+  local tasks n n_all judged changed n_changed ignored
 
   # O ralph numera as tasks. Contando sozinho, lendo o markdown, o verificador
   # errava: num run real emitiu TASK 9 numa fase de 8, e o ralph reprovou uma
@@ -1578,6 +1581,12 @@ VERIFY
     else
       echo "Nenhum arquivo alterado nesta fase: o codigo pode ja estar em HEAD. Procure"
       echo "pelos caminhos e nomes que as tasks citam."
+    fi
+    # Entrega em caminho ignorado nao aparece no diff acima.
+    ignored=$(phase_cited_ignored_entries "$phase_file" | sed -nE 's/^(file|dir) //p') || true
+    if [ -n "$ignored" ]; then
+      echo "Caminhos que as tasks citam e o .gitignore exclui (fora do diff):"
+      printf '%s\n' "$ignored" | head -n 40 | sed 's/^/  /'
     fi
     # "Leia cada arquivo uma vez" sozinho virou "leia um trecho e pare": na fase 2
     # de superadmin-email-digest o verificador leu as linhas 1-260 de um arquivo
@@ -1983,6 +1992,10 @@ run_engine() {
         # --tools: so essas tres existem na sessao (nem Agent, que abriria um
         # subagent com escrita); o deny fica como segunda trava.
         # --disable-slash-commands: sem a listagem de skills no contexto.
+        # verify em JSON: o num_turns diz se o verificador usou alguma
+        # ferramenta (verify_session_reads), e o .result vira o veredito.
+        local ro_format=text
+        [ "$mode" = "verify" ] && ro_format=json
         run_logged "$log_file" /dev/null env -u CLAUDECODE claude --dangerously-skip-permissions \
           --strict-mcp-config --disable-slash-commands \
           --tools "Read,Glob,Grep" \
@@ -1990,7 +2003,7 @@ run_engine() {
           ${model_args[@]+"${model_args[@]}"} \
           -p "$(cat "$prompt_file")" \
           --disallowedTools "Write,Edit,NotebookEdit,Bash" \
-          --output-format text || rc=$?
+          --output-format "$ro_format" || rc=$?
       else
         # JSON: o exit code do CLI e sinal fraco; o gate 0 le is_error.
         run_logged "$log_file" /dev/null env -u CLAUDECODE claude --dangerously-skip-permissions \
@@ -2113,13 +2126,82 @@ gate0_engine_finished() {
   return 0
 }
 
-# Assinatura da arvore: rastreados (status + diff) e nao-rastreados (conteudo).
-# Sem mutar o index.
+# Caminhos que as tasks julgadas da fase citam entre crases e que o .gitignore
+# exclui. Na fase 13 de social-engine toda a entrega ficava em projects/bargi/,
+# privado por regra da feature: o ralph disse duas vezes "a sessao nao escreveu
+# nada" com os arquivos criados, e a trava de ciclo sem mudanca pararia a fase
+# se o gate 3 reprovasse. So o citado entra: o resto da arvore ignorada e cache
+# de teste, dependencia e build, que mudam a cada suite sem ser entrega. Task
+# sobre o proprio .gitignore cita padroes (`out/`, `node_modules/`), nao entrega.
+phase_cited_ignored_paths() {
+  local phase_file="$1"
+  [ -n "$phase_file" ] && [ -f "$PHASES_DIR/$phase_file" ] || return 0
+  awk '
+    /^[[:space:]]*- \[[ x]\]/ {
+      t = $0
+      sub(/^[[:space:]]*- \[[ x]\][[:space:]]*/, "", t)
+      gsub(/\*\*/, "", t)
+      keep = (t !~ /^\(manual\)/ && t !~ /\.gitignore/)
+      block = 1
+      if (keep) print
+      next
+    }
+    /^[^[:space:]]/ { block = 0; next }
+    block && keep { print }
+  ' "$PHASES_DIR/$phase_file" \
+    | grep -oE '`[^`]+`' | tr -d '`' \
+    | grep -E '^[A-Za-z0-9._@+/-]+$' \
+    | grep -vE '^[/-]|(^|/)\.\.(/|$)' \
+    | sed -e 's#^\./##' -e 's#/*$##' \
+    | grep -vE '^$|^(\.git|\.phases|\.harness)(/|$)' \
+    | sort -u \
+    | git check-ignore --stdin 2> /dev/null || true
+}
+
+# Um caminho de phase_cited_ignored_paths por linha, com o tipo na frente:
+# file, dir, absent ou big. big e diretorio com mais de IGNORED_SIG_MAX_FILES
+# arquivos — dependencia que a fase so cita no .gitignore, como node_modules/ —
+# e entra na assinatura so pelo nome.
+IGNORED_SIG_MAX_FILES=500
+
+phase_cited_ignored_entries() {
+  local p n
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if [ -f "$p" ]; then
+      echo "file $p"
+    elif [ -d "$p" ]; then
+      n=$(find "$p" -type f 2> /dev/null | head -n $((IGNORED_SIG_MAX_FILES + 1)) | wc -l | tr -d ' ') || true
+      if [ "${n:-0}" -gt "$IGNORED_SIG_MAX_FILES" ]; then
+        echo "big $p"
+      else
+        echo "dir $p"
+      fi
+    else
+      echo "absent $p"
+    fi
+  done < <(phase_cited_ignored_paths "$1")
+}
+
+cited_ignored_signature() {
+  local kind p
+  while read -r kind p; do
+    case "$kind" in
+      file) sha256sum "$p" 2> /dev/null || true ;;
+      dir) { find "$p" -type f -print0 2> /dev/null | sort -z | xargs -0 -r sha256sum 2> /dev/null; } || true ;;
+      *) echo "$kind $p" ;;
+    esac
+  done < <(phase_cited_ignored_entries "$CUR_PHASE_FILE")
+}
+
+# Assinatura da arvore: rastreados (status + diff), nao-rastreados (conteudo) e
+# os ignorados que a fase cita (conteudo). Sem mutar o index.
 tree_signature() {
   {
     git status --porcelain
     git diff HEAD
     git ls-files --others --exclude-standard -z | xargs -0 -r sha256sum 2> /dev/null
+    cited_ignored_signature
   } 2> /dev/null | sha256sum | cut -c1-16
 }
 
@@ -2210,6 +2292,45 @@ session_contests() {
   } | awk '!seen[$0]++' | head -n 20 || true
 }
 
+# O .result do JSON do claude, decodificado: a mensagem final do verificador,
+# que o codex grava com -o. Em awk para nao depender de jq no gate 3.
+claude_json_result() {
+  awk '
+    match($0, /"result"[ \t]*:[ \t]*"/) {
+      s = substr($0, RSTART + RLENGTH); out = ""
+      for (i = 1; i <= length(s); i++) {
+        c = substr(s, i, 1)
+        if (c == "\\") {
+          i++; c = substr(s, i, 1)
+          if (c == "n") c = "\n"; else if (c == "t") c = "\t"
+        } else if (c == "\"") {
+          break
+        }
+        out = out c
+      }
+      res = out
+    }
+    END { if (res != "") print res }
+  ' "$1" 2> /dev/null || true
+}
+
+# Leituras da sessao verificadora: blocos `exec` no transcript do codex (todo
+# acesso a arquivo passa pelo shell), turnos alem do primeiro no JSON do claude
+# (cada rodada de ferramenta abre um turno). Vazio quando o log nao traz o
+# sinal — formato que o ralph nao reconhece nao recusa veredito nenhum.
+verify_session_reads() {
+  local log_file="$1" turns
+  if [[ "$ENGINE" == "codex" ]]; then
+    grep -qx 'codex' "$log_file" 2> /dev/null || return 0
+    grep -cx 'exec' "$log_file" 2> /dev/null || true
+  else
+    turns=$(grep -oE '"num_turns"[[:space:]]*:[[:space:]]*[0-9]+' "$log_file" 2> /dev/null \
+      | tail -n 1 | grep -oE '[0-9]+$') || true
+    [ -n "$turns" ] && echo $((turns - 1))
+    return 0
+  fi
+}
+
 gate3_verify_uncached() {
   local phase_file="$1" cycle="$2" session_wrote="$3"
   local verify_log="$LOG_DIR/${phase_file%.md}.verify-${cycle}.log"
@@ -2266,8 +2387,12 @@ gate3_verify_uncached() {
   last_msg=$(last_message_file "$verify_log")
   rm -f "$last_msg"
   run_engine "$prompt_file" "$verify_log" verify || engine_rc=$?
+  if [[ "$ENGINE" == "claude" ]]; then
+    claude_json_result "$verify_log" > "$last_msg"
+  fi
 
-  # A mensagem final quando a engine a grava (codex -o); o log inteiro senao.
+  # A mensagem final quando existe (codex -o, .result do claude); o log inteiro
+  # senao.
   verdict_src="$verify_log"
   [ -s "$last_msg" ] && verdict_src="$last_msg"
 
@@ -2286,6 +2411,20 @@ gate3_verify_uncached() {
     else
       GATE_CAUSE="${GATE_CAUSE}O verificador independente nao emitiu nenhuma linha 'TASK <n>: DONE|INCOMPLETE|NOT-CODE' — o codigo nao foi julgado. Ultimas linhas do verificador:"$'\n'"$(engine_tail "$verify_log" 40)"
     fi
+    state_gate 3 fail
+    return 2
+  fi
+
+  # Veredito sem leitura nao julgou o codigo: o prompt so traz a fase, e todo
+  # DONE ou INCOMPLETE sai de algum arquivo. Na fase 1 de social-engine,
+  # revalidada contra HEAD, o verificador rodou zero comandos e devolveu 11/11
+  # DONE em 8s. NOT-CODE nao depende de leitura e passa.
+  local reads
+  reads=$(verify_session_reads "$verify_log")
+  if [ "$reads" = "0" ] && printf '%s\n' "$task_lines" | grep -qE '^TASK [0-9]+: (DONE|INCOMPLETE)'; then
+    GATE3_NO_VERDICT=1
+    GATE_CAUSE="O verificador emitiu veredito sem ler nenhum arquivo — o codigo nao foi julgado. Linhas emitidas:"$'\n'"$task_lines"
+    warn "Gate 3 — veredito emitido sem nenhuma leitura de arquivo; descartado"
     state_gate 3 fail
     return 2
   fi
@@ -2943,6 +3082,7 @@ run_phase() {
   GATE_CAUSE=""
   gate3_memo_reset
   CUR_SEQ="$seq"
+  CUR_PHASE_FILE="$phase_file"
   state_phase "$seq" running
 
   echo ""
@@ -2995,7 +3135,9 @@ run_phase() {
     fi
   fi
 
-  local cycle=1 cycles_run=0
+  # 1 quando alguma sessao da fase mudou a assinatura da arvore. Com a arvore
+  # limpa no fim, foi escrita so em caminho ignorado que a fase cita.
+  local cycle=1 cycles_run=0 phase_wrote=0
   while [ "$cycle" -le "$MAX_CYCLES" ]; do
     cycles_run="$cycle"
     JUDGE_NEW_UNLOCK=0
@@ -3034,6 +3176,7 @@ run_phase() {
       warn "Gate 1 — a sessao nao escreveu nada; validando o codigo existente"
       state_gate 1 skip
     else
+      phase_wrote=1
       state_gate 1 pass
     fi
 
@@ -3061,12 +3204,17 @@ run_phase() {
       local phase_duration=$(($(date +%s) - phase_start))
 
       # Gates verdes e nada a commitar => a fase ja estava implementada em HEAD
-      # (run anterior commitada, tasks [x], codigo escrito a mao).
+      # (run anterior commitada, tasks [x], codigo escrito a mao), ou escreveu
+      # so em caminho ignorado que ela cita.
       if [ -z "$(git status --porcelain)" ]; then
-        success "Phase $phase_num: $phase_title — JA IMPLEMENTADA (nada a commitar)"
-        if [ "$GATE3_RAN" -eq 1 ]; then
+        if [ "$phase_wrote" -eq 1 ]; then
+          success "Phase $phase_num: $phase_title — COMPLETA ($(format_duration "$phase_duration")), so em caminhos que o .gitignore exclui"
+          log "A fase escreveu so em arquivos ignorados pelo git; nenhum commit criado."
+        elif [ "$GATE3_RAN" -eq 1 ]; then
+          success "Phase $phase_num: $phase_title — JA IMPLEMENTADA (nada a commitar)"
           log "Gates 2 e 3 verdes contra o codigo em HEAD; nenhum commit criado."
         else
+          success "Phase $phase_num: $phase_title — JA IMPLEMENTADA (nada a commitar)"
           log "Gate 2 verde contra o codigo em HEAD; nenhum commit criado."
         fi
         mark_phase_done "$phase_file"

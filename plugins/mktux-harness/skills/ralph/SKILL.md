@@ -82,7 +82,7 @@ Por fase, em ordem. Todos verdes → commit. Qualquer vermelho → ciclo de corr
 | Gate | O que e | Reprova? |
 |---|---|---|
 | **0** | a engine terminou de verdade (claude: `is_error` no JSON; codex: exit code), dentro de `RALPH_SESSION_TIMEOUT` | sim |
-| **1** | a sessao escreveu codigo? **Sinal, nao veredito** — fase ja implementada faz a engine (corretamente) nao escrever nada | nao |
+| **1** | a sessao escreveu codigo? **Sinal, nao veredito** — fase ja implementada faz a engine (corretamente) nao escrever nada. Conta o rastreado e o caminho ignorado que as tasks citam | nao |
 | **2** | suite de testes do projeto, rodada **pelo ralph**, fora da sessao do agente | sim |
 | **3** | sessao verificadora independente, read-only, task a task | sim, em `INCOMPLETE` |
 
@@ -99,10 +99,13 @@ O ralph numera as tasks da fase no prompt do verificador e lista os arquivos
 alterados na fase como ponto de partida. As ferramentas dependem da engine:
 
 - **claude:** so `Read`, `Glob` e `Grep` (`--tools`), sem MCP e sem skills.
-  **Nao tem Bash, nem shell, nem git.**
+  **Nao tem Bash, nem shell, nem git.** Roda com `--output-format json`: o
+  `.result` vira o veredito e o `num_turns` conta as leituras.
 - **codex:** shell em sandbox read-only, instruido a nao rodar build, teste,
   typecheck ou lint e a nao ler dependencias de terceiros. O veredito sai da
-  mensagem final (`-o`, em `phase-NN.verify-M.last.txt`).
+  mensagem final (`-o`); as leituras sao os blocos `exec` do transcript.
+
+Nas duas engines o veredito limpo fica em `phase-NN.verify-M.last.txt`.
 
 Nas duas engines, lockfile so e aberto quando uma task ou contestacao o cita, e
 por busca do nome do pacote, nunca inteiro.
@@ -128,6 +131,15 @@ novo, encerra a fase como `gate 3 — verificador sem veredito`, **sem ciclo de
 correcao** — a sessao de correcao nao tem o que corrigir — e sem guardar nada no
 memo. O codigo fica na arvore: commitado como `feat(phase-N): <titulo>`, o
 proximo run o revalida sem sessao.
+
+**Veredito sem leitura tambem e sem veredito.** O prompt traz a fase, nao o
+codigo: `DONE` ou `INCOMPLETE` sem nenhuma leitura de arquivo nao julgou nada.
+Na revalidacao da fase 1 de social-engine o verificador rodou zero comandos e
+devolveu 11/11 DONE em 8s. Log com `TASK` mas sem leitura (zero `exec` no codex,
+`num_turns` 1 no claude) segue o caminho acima, com
+`Gate 3 — veredito emitido sem nenhuma leitura de arquivo; descartado`. Fase so
+de `NOT-CODE` passa, e log sem o sinal (formato que o ralph nao reconhece) nao
+recusa nada.
 
 **Erro passageiro do provedor** (`model at capacity`, `overloaded`, 5xx, stream
 cortado) em qualquer sessao — implementacao, gate 3, juiz — re-executa a mesma
@@ -168,6 +180,15 @@ ralph (`feat(phase-N): <titulo>`, nao `wip(...)`) nos ultimos 500 do branch: o
 ralph roda os gates contra HEAD antes de abrir sessao. E o caso de retomar
 depois de commitar a mao o trabalho de uma fase que travou, ou de o plano mudar
 e zerar o `.progress`. A mensagem escolhe o caminho; quem aprova sao os gates.
+
+**Entrega em caminho ignorado pelo git.** Config local, dado privado: o git nao
+ve. A assinatura da arvore (gate 1, memo do gate 3, trava de ciclo sem mudanca)
+inclui o conteudo dos caminhos que as tasks julgadas citam entre crases e que o
+`.gitignore` exclui, e o prompt do verificador os lista. Fica de fora task
+`(manual)`, `.phases/`, `.harness/` e diretorio com mais de 500 arquivos
+(`node_modules/` citado no `.gitignore`). Fase verde que so escreveu ali fecha
+como `COMPLETA ..., so em caminhos que o .gitignore exclui`, sem commit. Caminho
+nao citado continua invisivel: cache de teste e dependencia mudam a cada suite.
 
 ### Contestacao (`RALPH-CONTEST`)
 
@@ -330,7 +351,7 @@ anteriores para dentro da sessao fria.
     ├── phase-NN.cycle-M.last.txt   mensagem final da sessao (codex)
     ├── phase-NN.test-M.log     saida do gate 2
     ├── phase-NN.verify-M.log   sessao do gate 3
-    ├── phase-NN.verify-M.last.txt  veredito final do gate 3 (codex)
+    ├── phase-NN.verify-M.last.txt  veredito final do gate 3
     ├── phase-NN.*.transient-K.log  tentativa K que caiu por erro do provedor
     ├── phase-NN.verify-M.no-verdict.log  verificador que terminou sem veredito
     ├── phase-NN.memory.log     saida do `ai-memory write-page`
@@ -360,7 +381,9 @@ sessao.
 | Sintoma | Causa provavel |
 |---|---|
 | `Contrato de formato violado` no preflight | heading `## Phase` fora de `## Phase N: <titulo>`. Uma fase com heading torto **some silenciosamente** do run |
-| gate 3 reprova por `cobertura incompleta` ou indice fora da faixa | o verificador ignorou a lista numerada do prompt. Leia o veredito (`verify-M.last.txt` no codex, `verify-M.log` no claude); se repetir, troque `RALPH_VERIFY_MODEL` |
+| gate 3 reprova por `cobertura incompleta` ou indice fora da faixa | o verificador ignorou a lista numerada do prompt. Leia o veredito (`verify-M.last.txt`); se repetir, troque `RALPH_VERIFY_MODEL` |
+| `Gate 3 — veredito emitido sem nenhuma leitura de arquivo` | o verificador respondeu sem abrir arquivo; o ralph tenta de novo com o modelo de implementacao. Em toda fase: suba `RALPH_VERIFY_EFFORT` ou troque `RALPH_VERIFY_MODEL` |
+| fase com trabalho so em caminho ignorado sai `JA IMPLEMENTADA` | as tasks nao citam o caminho entre crases. Cite no plano |
 | o verificador julga sub-item como task propria | sub-bullet de detalhe escrito como `- [ ]`: o ralph conta todo checkbox como task. Troque por `-` simples |
 | preflight aborta com `.harness/ esta versionado` | a telemetria foi commitada. `git rm -r --cached .harness` e commit |
 | task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do codigo, ou marque `(manual)` se ela for mesmo procedimento |
@@ -379,8 +402,8 @@ sessao.
 | `Falha ao gravar no ai-memory` | leia `.phases/logs/phase-NN.memory.log`. Servidor caiu no meio do run: `ai-memory status`; no macOS, `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. A fase continua valida |
 
 Quando uma fase falhar, leia nesta ordem:
-`.phases/logs/phase-NN.verify-M.log` (o que o verificador reprovou; no codex, o
-veredito limpo esta em `phase-NN.verify-M.last.txt`) →
+`.phases/logs/phase-NN.verify-M.log` (o que o verificador reprovou; o veredito
+limpo esta em `phase-NN.verify-M.last.txt`) →
 `.phases/logs/phase-NN.test-M.log` (o que a suite reprovou) →
 `.phases/logs/phase-NN.cycle-M.log` (o que a sessao tentou fazer).
 

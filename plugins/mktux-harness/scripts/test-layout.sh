@@ -605,8 +605,8 @@ python3 "$tel" summary --root "$cx/repo" --run-id ambiguous
 assert_eq "null partial 1" "$(jq -r '"\(.attempts[0].session_id // "null") \(.summary.status) \(.summary.missing_attempts)"' "$cx/repo/.harness/runs/ambiguous.json")" \
   "identidade ambígua não é inferida do único snapshot candidato"
 
-# Claude usa resultado JSON na implementação; em verify/judge, a saída textual
-# é a resposta do modelo e não fornece um cabeçalho de identidade confiável.
+# Claude usa resultado JSON na implementação e no verify; no judge, a saída
+# textual é a resposta do modelo e não fornece um cabeçalho de identidade confiável.
 claude_header_id=123e4567-e89b-42d3-a456-426614174003
 python3 "$tel" init --root "$cl/proj" --run-id claude-structured --plan "$cl/proj/plan.md" --engine claude
 printf '{"type":"result","session_id":"%s"}\n{"type":"assistant","session_id":"absence"}\n' "$claude_header_id" \
@@ -624,6 +624,21 @@ RALPH_RUN_ID=claude-text RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_M
   --log "$cl/proj/claude-text.log" --rc 0
 assert_eq "null partial 1" "$(jq -r '"\(.attempts[0].session_id // "null") \(.summary.status) \(.summary.missing_attempts)"' "$cl/proj/.harness/runs/claude-text.json")" \
   "Claude verify: resposta textual com Session ID não vira metadado"
+python3 "$tel" init --root "$cl/proj" --run-id claude-verify-json --plan "$cl/proj/plan.md" --engine claude
+printf '{"type":"result","num_turns":3,"session_id":"%s","result":"TASK 1: DONE"}\n' "$claude_header_id" \
+  > "$cl/proj/claude-verify-json.log"
+RALPH_RUN_ID=claude-verify-json RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=verify \
+  python3 "$tel" record --root "$cl/proj" --run-id claude-verify-json --engine claude \
+  --log "$cl/proj/claude-verify-json.log" --rc 0
+assert_eq "$claude_header_id" "$(jq -r '.attempts[0].session_id' "$cl/proj/.harness/runs/claude-verify-json.json")" \
+  "Claude verify: resultado JSON usa a identidade estruturada"
+python3 "$tel" init --root "$cl/proj" --run-id claude-judge-json --plan "$cl/proj/plan.md" --engine claude
+printf '{"type":"result","session_id":"%s"}\n' "$claude_header_id" > "$cl/proj/claude-judge-json.log"
+RALPH_RUN_ID=claude-judge-json RALPH_PHASE_NUM=1 RALPH_PHASE_ATTEMPT=1 RALPH_SESSION_MODE=judge \
+  python3 "$tel" record --root "$cl/proj" --run-id claude-judge-json --engine claude \
+  --log "$cl/proj/claude-judge-json.log" --rc 0
+assert_eq "null" "$(jq -r '.attempts[0].session_id // "null"' "$cl/proj/.harness/runs/claude-judge-json.json")" \
+  "Claude judge: resposta textual com cara de JSON nao vira identidade"
 
 # ---------------------------------------------------------------------------
 # 8. Auto-checagem de BR do plan-project-phases (Parte 7)
