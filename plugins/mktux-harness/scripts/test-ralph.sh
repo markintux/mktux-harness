@@ -1712,6 +1712,10 @@ if case_enabled verify-prompt; then
   assert_not_contains "$vp" ".phases/" "estado do run fora da lista"
   assert_contains "$vp" "NAO rode build, testes, typecheck nem lint" "proibe rodar build e teste"
   assert_contains "$vp" "node_modules" "proibe ler dependencias de terceiros"
+  # Lockfile proibido sem excecao: task sobre o lockfile virava INCOMPLETE
+  # "nao foi lido" com o codigo certo (fase 1 de social-engine).
+  assert_contains "$vp" "Lockfile so quando uma task ou contestacao o citar" "lockfile: liberado quando a task o cita"
+  assert_contains "$vp" "e nunca inteiro: busque" "lockfile: busca pelo nome, sem ler inteiro"
   # Task de teste: lista de cenarios fechada. Sem isso o verificador inventa a
   # lista a cada ciclo e o alvo da correcao muda sem o plano mudar.
   assert_contains "$vp" "Nao exija cenario, classe ou camada" "task de teste: so os cenarios listados"
@@ -2110,6 +2114,7 @@ if case_enabled contest-judge; then
     jp="$d/repo/.phases/prompts/phase-01.judge-1.txt"
     assert_contains "$jp" "RALPH-CONTEST: TASK 1 — src/protected.txt:3" "$engine: juiz recebe a contestacao"
     assert_contains "$jp" "ProtectedTypeTest" "$engine: e o fim da saida da suite"
+    assert_contains "$jp" "Lockfile so quando a contestacao ou a saida da suite o citar" "$engine: juiz busca no lockfile citado"
     fp="$d/repo/.phases/prompts/phase-01.cycle-2.txt"
     assert_contains "$fp" "## Travas liberadas pelo juiz" "$engine: correcao recebe a trava liberada"
     assert_contains "$fp" "TASK 1: liberado pelo juiz — src/protected.txt: aceitar o tipo" "$engine: com a mudanca autorizada"
