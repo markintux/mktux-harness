@@ -1583,6 +1583,10 @@ VERIFY
     # de superadmin-email-digest o verificador leu as linhas 1-260 de um arquivo
     # de 397 e reprovou os metodos que ficavam depois, "o arquivo lido termina
     # antes desses metodos". A fase travou com o codigo certo.
+    # Lockfile proibido sem excecao travou a fase 1 de social-engine: a task
+    # "o lockfile lista typescript, vitest e @types/node" virou INCOMPLETE "nao
+    # foi possivel confirmar porque o lockfile nao foi lido", no verificador e no
+    # recurso, com a suite verde. Busca pelo nome confirma sem ler o arquivo.
     cat <<'VERIFY'
 
 - Comece pelos arquivos acima. Abra outro so quando a task ou uma contestacao o
@@ -1591,8 +1595,10 @@ VERIFY
   ate a ultima linha, sem reler trecho: o que fica depois de uma leitura cortada
   continua no arquivo.
 - NAO rode build, testes, typecheck nem lint: outro gate ja cuida disso.
-- NAO leia codigo de dependencias de terceiros (node_modules, vendor, .venv) nem
-  lockfiles.
+- NAO leia codigo de dependencias de terceiros (node_modules, vendor, .venv).
+- Lockfile so quando uma task ou contestacao o citar, e nunca inteiro: busque
+  nele o nome de cada pacote que ela cita. Lockfile e excecao ao "leia ate o
+  fim".
 
 ## Regras
 - Uma linha TASK para cada numero da lista acima, sem excecao, sem agrupar.
@@ -2665,8 +2671,9 @@ CONTEST TASK <n>: REJECTED — <o que voce viu e o que a sessao deve fazer>
 - Nao use Glob para listar planos de fases ou documentos de outras features.
   Consulte somente o plano ativo e os arquivos pertinentes a evidencia.
 - NAO rode build, testes, typecheck nem lint: a saida da suite esta acima.
-- NAO leia codigo de dependencias de terceiros (node_modules, vendor, .venv) nem
-  lockfiles.
+- NAO leia codigo de dependencias de terceiros (node_modules, vendor, .venv).
+- Lockfile so quando a contestacao ou a saida da suite o citar, e nunca
+  inteiro: busque nele o nome de cada pacote citado.
 - Nao emita nenhum outro texto alem das linhas CONTEST.
 
 ## Fase

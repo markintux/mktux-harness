@@ -104,6 +104,9 @@ alterados na fase como ponto de partida. As ferramentas dependem da engine:
   typecheck ou lint e a nao ler dependencias de terceiros. O veredito sai da
   mensagem final (`-o`, em `phase-NN.verify-M.last.txt`).
 
+Nas duas engines, lockfile so e aberto quando uma task ou contestacao o cita, e
+por busca do nome do pacote, nunca inteiro.
+
 Para cada task ele emite exatamente uma linha:
 
 - `TASK n: DONE`
