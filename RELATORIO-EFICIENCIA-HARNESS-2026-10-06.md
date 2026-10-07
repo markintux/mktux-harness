@@ -210,7 +210,7 @@ Estado inicial deste plano: nenhuma etapa implementada por esta auditoria.
 | 2 | CONCLUÍDA | Assinaturas de código e evidências separadas; recurso direto com contestação nova. Falha reproduzida antes da correção; 554 asserts de orquestração e 122 de layout verdes. Detalhes abaixo. |
 | 3 | CONCLUÍDA | Pendências da revisão corrigidas: procedimento para planos existentes, exemplo de ausência e fechamento check-only; 139 asserts de layout verdes. Comportamento de modelo real não observado. Detalhes abaixo. |
 | 4 | CONCLUÍDA | Pendência da revisão corrigida; 61 assertions focadas, 572 de orquestração e 139 de layout verdes. Nova chamada real adversarial consultou somente caminhos pertinentes; avaliação da restrição técnica registrada abaixo. |
-| 5 | NÃO INICIADA | Separar validação local de medição real |
+| 5 | VALIDADA LOCALMENTE | Duas suítes, sintaxe e diff check verdes; comparação real pendente de autorização com limite de consumo. Detalhes abaixo. |
 | 6 | NÃO INICIADA | Condicionada ao resultado da avaliação |
 
 Estados possíveis: EM ANDAMENTO, VALIDADA LOCALMENTE, CONCLUÍDA, PENDENTE ou ADIADA. Para as etapas 3 e 4, declarar separadamente se o comportamento do modelo foi observado em execução real. Para a etapa 5, “CONCLUÍDA” exige a comparação real descrita no aceite; validação local isolada não basta.
@@ -446,6 +446,32 @@ Validação final após a correção:
 Etapa 4 concluída conforme seus quatro itens de trabalho e critérios de aceite.
 A avaliação técnica documentada fecha a pendência da revisão sem declarar uma
 barreira de leitura que não existe. Próximo passo: etapa 5, ainda não iniciada.
+
+### Registro detalhado — etapa 5 (06/10/2026)
+
+Validação local executada sobre `16f6c39` (melhorias das etapas 1–4):
+
+- `bash plugins/mktux-harness/scripts/test-ralph.sh` — `TODOS VERDES: 572 asserts`.
+- `bash plugins/mktux-harness/scripts/test-layout.sh` — `TODOS VERDES: 139 asserts`.
+- `bash -n` em `ralph.sh`, `test-ralph.sh` e `test-layout.sh` — passou.
+- Compilação sintática em memória de `telemetry.py` — passou.
+- `git diff --check` — passou após este registro.
+
+As suítes incluem fixtures sintéticas para identidade de sessão, código igual
+com contestação nova, limite de um recurso por fase, recurso sem veredito,
+contexto do juiz e preservação de testes negativos. Elas confirmam a mecânica
+local do harness e que os defeitos simulados continuam cobertos. Não são uma
+execução do Ralph com modelo real, nem medem se um modelo real detecta todos os
+defeitos apresentados.
+
+A comparação entre baseline e candidato não foi executada. O procedimento desta
+auditoria exige autorização para consumo de modelos e um limite de tentativas
+antes dessa medição; o pedido desta etapa não especificou esse limite. Portanto,
+não houve chamadas reais, tarefas reais em checkouts temporários nem coleta de
+duração, tokens de entrada/cache/saída, sessões por modo ou correções sem
+escrita. Nenhuma economia ou ganho de qualidade é declarado. A etapa fica
+`VALIDADA LOCALMENTE`, com a comparação real pendente; para concluí-la, será
+necessário autorizar a comparação delimitada e definir o limite de consumo.
 
 ## Sequência proposta
 
