@@ -118,6 +118,14 @@ leaves the failed code untouched, ralph sends the same code once to an
 If it passes, the phase closes; if it fails, both readings agree and the phase
 stops.
 
+A verdict with no reads is no verdict. The prompt carries the phase, not the
+code, so every `DONE` or `INCOMPLETE` has to come from some file. In a real run,
+the verifier revalidating a committed phase ran zero commands and answered
+11/11 `DONE` in 8 seconds. ralph counts the reads — `exec` blocks in the Codex
+transcript, `num_turns` in Claude's JSON — and treats a verdict with none like a
+verifier that never answered: a fresh session on the implementation model, and
+if that one reads nothing too, the phase stops without a fix cycle.
+
 A task the plan types as `- [ ] (manual) …` — run the formatter, build assets,
 check on a real phone — never reaches the verifier. ralph leaves it out of the
 numbered list, drops any verdict on it, and lists it under *Pendencias manuais*
@@ -131,6 +139,13 @@ spent 2.4M input tokens to reach the same verdict. A phase already committed on
 the branch with ralph's message — `feat(phase-N): <title>`, say after you
 committed a stuck phase's work by hand — takes the same path on the next run:
 the gates judge HEAD, and only a red gate opens a session.
+
+A phase whose deliverable lives in a path `.gitignore` excludes — local config,
+private data — is invisible to git. ralph also hashes the ignored paths the
+judged tasks cite in backticks, so writing there counts as a write: a fix cycle
+that only touches them is not mistaken for a stuck one, and the phase closes
+without a commit, saying why. Only cited paths count: test caches and
+dependencies change on every suite run without being the phase's work.
 
 The verifier reads only the phase, so when the plan is wrong it enforces the
 error. In a real run a session checked the CSS config, found that the token the
@@ -735,7 +750,7 @@ To see what ralph will resolve in a project without running anything:
     ├── phase-NN.cycle-M.last.txt  the session's final message (Codex)
     ├── phase-NN.test-M.log        gate 2 output
     ├── phase-NN.verify-M.log      gate 3 session
-    ├── phase-NN.verify-M.last.txt gate 3 final verdict (Codex)
+    ├── phase-NN.verify-M.last.txt gate 3 final verdict
     ├── phase-NN.memory.log        `ai-memory write-page` output
     └── archive/<run start>/       a phase's logs from an earlier run, moved
                                    when the phase reopens (last 10 runs kept)
@@ -1104,12 +1119,14 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | Symptom | Likely cause |
 |---|---|
 | `Contrato de formato violado` in preflight | a `## Phase` heading outside `## Phase N: <title>`. A malformed heading makes the phase **vanish silently** from the run |
-| gate 3 fails on `cobertura incompleta` or an out-of-range index | the verifier ignored the numbered list in its prompt. Read the verdict (`verify-M.last.txt` on Codex, `verify-M.log` on Claude); if it repeats, change `RALPH_VERIFY_MODEL` |
+| gate 3 fails on `cobertura incompleta` or an out-of-range index | the verifier ignored the numbered list in its prompt. Read the verdict (`verify-M.last.txt`); if it repeats, change `RALPH_VERIFY_MODEL` |
 | preflight aborts with `.harness/ esta versionado` | the telemetry was committed. `git rm -r --cached .harness` and commit |
 | a task always comes back `NOT-CODE` | it is worded as a command (`run`, `confirm with git diff`). Reword it as a code state, or tag it `(manual)` if it really is a procedure |
 | a close-out phase fails with nothing wrong in the code | a procedure task without `(manual)`: the verifier tries to judge what it cannot read. Tag it `(manual)` |
 | phase fails every cycle until exhausted | a task with a conditional escape hatch (*"do X, but if it feels awkward, leave it"*). In doubt, the verifier picks INCOMPLETE |
 | `Gate 3 — recurso aprovou` | the cheap verifier failed the phase, the fix cycle changed nothing, and the implementation model passed the same code. Normal. If it happens on every phase, the cheap verifier is not reading the code: raise `RALPH_VERIFY_EFFORT` or change `RALPH_VERIFY_MODEL` |
+| `Gate 3 — veredito emitido sem nenhuma leitura de arquivo` | the verifier answered without opening a file, so the code was not judged. ralph retries once on the implementation model. If it happens on every phase, raise `RALPH_VERIFY_EFFORT` or change `RALPH_VERIFY_MODEL` |
+| phase with work only under ignored paths reports `JA IMPLEMENTADA` | the tasks do not cite those paths in backticks, so ralph cannot see them. Cite the paths in the tasks |
 | phase stuck after `recurso tambem reprovou` | the cheap verifier and the implementation model read the same code and both failed it: now the task is the likely cause |
 | gate 2 red on the very first run | Laravel: Sail is down, or `.env.testing` is missing. Other stacks: the dev environment was never set up (dependencies, virtualenv) |
 | ralph or `test-runner` picks the wrong test command | check with `mktux-profile.sh test-cmd` (see [Stack profiles](#stack-profiles)); override with `--test-cmd` or `RALPH_TEST_CMD` |

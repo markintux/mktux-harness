@@ -87,6 +87,7 @@ strict=0
 tools=""
 noskills=0
 last=""
+fmt=""
 
 # Os hooks do plugin gravam telemetria na raiz do projeto a cada tool call.
 if [ "${MOCK_HARNESS:-0}" = "1" ]; then
@@ -108,7 +109,7 @@ if [ "$name" = "claude" ]; then
       --strict-mcp-config) strict=1; shift ;;
       --model) model="$2"; shift 2 ;;
       --effort) effort="$2"; shift 2 ;;
-      --output-format) shift 2 ;;
+      --output-format) fmt="$2"; shift 2 ;;
       # Isolamento dos hooks do ai-memory: uma linha por sessao que o recebeu.
       --setting-sources) echo "$2" >> "$state/setting_sources"; shift 2 ;;
       --settings)
@@ -192,8 +193,9 @@ fi
 # --- verificador independente ------------------------------------------------
 # Verifica o CODIGO REAL, como o verificador de verdade: sem arquivo de
 # implementacao no repo, a fase esta incompleta.
-if [ "$verify" -eq 1 ]; then
+verify_body() {
   n=$(bump verify_calls)
+  rm -f "$state/verify_reads"
   tasks=$(grep -cE '^[[:space:]]*- \[[ x]\]' <<< "$prompt")
   echo "${model:-<default>}" >> "$state/verify_models"
   echo "${effort:-<default>}" >> "$state/verify_efforts"
@@ -222,8 +224,31 @@ if [ "$verify" -eq 1 ]; then
     verify-appeal-no-verdict) [ "$model" = "impl-model" ] && no_verdict ;;
   esac
 
+  # Leituras: o ralph conta os blocos exec do transcript do codex e o
+  # num_turns do JSON do claude. verify-no-reads-*: o verificador julga sem
+  # abrir nenhum arquivo. verify-unknown-format: log sem nenhum dos sinais.
+  reads=1
+  case "$scenario" in
+    verify-no-reads-always|verify-no-reads-notcode) reads=0 ;;
+    verify-no-reads-once) [ "$n" -eq 1 ] && reads=0 ;;
+  esac
+  echo "$reads" > "$state/verify_reads"
+  if [ "$name" = "codex" ] && [ "$scenario" != "verify-unknown-format" ]; then
+    if [ "$reads" -eq 1 ]; then
+      echo "exec"
+      echo "/bin/zsh -lc 'cat src/impl-1.txt' in $PWD"
+      echo " succeeded in 0ms:"
+    fi
+    echo "codex"
+  fi
+
   implemented=0
   compgen -G "src/impl-*.txt" > /dev/null 2>&1 && implemented=1
+  # ignored-output: a entrega da fase 1 fica em private/, fora do git.
+  if [ "$scenario" = "ignored-output" ] && grep -q '^## Phase 1:' <<< "$prompt"; then
+    implemented=0
+    [ -f private/config.txt ] && implemented=1
+  fi
 
   last_dest=/dev/null
   if [ "$name" = "codex" ] && [ -n "$last" ] && [ "${MOCK_CODEX_NO_LAST:-0}" != "1" ]; then
@@ -266,6 +291,11 @@ if [ "$verify" -eq 1 ]; then
     elif { [ "$scenario" = "verify-incomplete-once" ] || [ "$scenario" = "contest-other" ]; } && [ "$n" -eq 1 ]; then
       echo "TASK 1: INCOMPLETE — o arquivo nao foi criado"
       for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
+    elif [ "$scenario" = "ignored-output" ] && [ "$n" -le 2 ]; then
+      echo "TASK 1: INCOMPLETE — falta a chave de idioma em private/config.txt"
+      for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
+    elif [ "$scenario" = "verify-no-reads-notcode" ]; then
+      for i in $(seq 1 "$tasks"); do echo "TASK $i: NOT-CODE — procedimento de quem conduz o PR"; done
     else
       for i in $(seq 1 "$tasks"); do echo "TASK $i: DONE"; done
     fi
@@ -291,6 +321,25 @@ if [ "$verify" -eq 1 ]; then
     emit_tasks
   fi
   exit 0
+}
+
+if [ "$verify" -eq 1 ]; then
+  # claude --output-format json: uma linha, o veredito no .result e os turnos
+  # (1 = nenhuma ferramenta usada). Sessao que caiu sai como saiu.
+  if [ "$name" = "claude" ] && [ "$fmt" = "json" ] && [ "$scenario" != "verify-unknown-format" ]; then
+    rc=0
+    out=$(verify_body) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf '%s\n' "$out"
+      exit "$rc"
+    fi
+    turns=3
+    [ "$(cat "$state/verify_reads" 2> /dev/null)" = "0" ] && turns=1
+    printf '{"type":"result","subtype":"success","is_error":false,"num_turns":%s,"result":"%s"}\n' "$turns" \
+      "$(printf '%s' "$out" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' | awk 'NR > 1 { printf "\\n" } { printf "%s", $0 }')"
+    exit 0
+  fi
+  verify_body
 fi
 
 # --- sessao de implementacao -------------------------------------------------
@@ -352,6 +401,13 @@ case "$scenario" in
     grep -q '^## Phase 1:' <<< "$prompt" && protected_phase=1
     [ "$protected_phase" -eq 1 ] && [ "$n" -gt 1 ] && [ "$unlocked" -eq 0 ] && write=0 ;;
 esac
+
+# ignored-output: a fase 1 entrega so em private/, que o .gitignore exclui.
+if [ "$scenario" = "ignored-output" ] && grep -q '^## Phase 1:' <<< "$prompt"; then
+  mkdir -p private
+  echo "cfg $n" > private/config.txt
+  write=0
+fi
 
 if [ "$write" -eq 1 ]; then
   mkdir -p src
@@ -2455,6 +2511,111 @@ if case_enabled verify-appeal-no-verdict; then
   assert_contains "$d/out.log" "Gate 3 — recurso sem veredito; mantida a reprovacao anterior" "recurso nao aprova sem julgar"
   assert_contains "$d/out.log" "o arquivo lido termina antes do metodo" "causa original preservada"
   assert_not_contains "$d/out.log" "Gate 3 — recurso aprovou" "sem veredito nao vira aprovacao"
+fi
+
+# ---------------------------------------------------------------------------
+# 66. Veredito sem nenhuma leitura nao julgou o codigo. Na fase 1 de
+#     social-engine, revalidada contra HEAD, o verificador rodou zero comandos
+#     e devolveu 11/11 DONE em 8s. Vira "sem veredito": nova sessao com o
+#     modelo de implementacao; persistente, a fase encerra sem ciclo de
+#     correcao. NOT-CODE e log sem o sinal passam.
+# ---------------------------------------------------------------------------
+if case_enabled verify-no-reads; then
+  header "66. veredito sem leitura de arquivo nao conta"
+  for engine in codex claude; do
+    d=$(new_case verify-no-reads-$engine)
+    rc=$(CASE_VERIFY_MODEL=cheap-model run_ralph "$d" verify-no-reads-once --engine $engine \
+      --model impl-model --test-cmd "$d/test.sh")
+    assert_eq 0 "$rc" "$engine: exit 0 com a releitura"
+    assert_contains "$d/out.log" "Gate 3 — veredito emitido sem nenhuma leitura de arquivo; descartado" "$engine: veredito sem leitura descartado"
+    assert_eq 3 "$(cat "$d/state/verify_calls")" "$engine: fase 1 julgada duas vezes, fase 2 uma"
+    assert_eq "cheap-model impl-model cheap-model" "$(paste -sd' ' "$d/state/verify_models")" "$engine: releitura com o modelo de implementacao"
+    assert_eq 2 "$(cat "$d/state/impl_calls")" "$engine: sem ciclo de correcao"
+    assert_eq 3 "$(commits "$d")" "$engine: as 2 fases commitadas"
+    test -s "$d/repo/.phases/logs/phase-01.verify-1.last.txt" \
+      && ok "$engine: veredito gravado ao lado do log" || bad "$engine: veredito gravado ao lado do log"
+
+    d=$(new_case verify-no-reads-always-$engine)
+    rc=$(run_ralph "$d" verify-no-reads-always --engine $engine --test-cmd "$d/test.sh" --max-cycles 3)
+    assert_eq 1 "$rc" "$engine: sem leitura persistente encerra a fase"
+    assert_eq 2 "$(cat "$d/state/verify_calls")" "$engine: verificador e uma releitura, sem recurso"
+    assert_eq 1 "$(cat "$d/state/impl_calls")" "$engine: sem ciclo de correcao"
+    assert_contains "$d/out.log" "Gate 3 sem veredito" "$engine: causa e o verificador, nao as tasks"
+    assert_contains "$d/out.log" "O verificador emitiu veredito sem ler nenhum arquivo" "$engine: relatorio diz por que"
+
+    d=$(new_case verify-unknown-format-$engine)
+    rc=$(run_ralph "$d" verify-unknown-format --engine $engine --test-cmd "$d/test.sh")
+    assert_eq 0 "$rc" "$engine: log sem o sinal de leitura nao recusa veredito"
+    assert_eq 2 "$(cat "$d/state/verify_calls")" "$engine: uma verificacao por fase"
+  done
+
+  # O caso real: fase ja commitada, revalidada contra HEAD sem sessao.
+  d=$(new_case verify-no-reads-head)
+  mkdir -p "$d/repo/src"
+  echo "impl previo" > "$d/repo/src/impl-1.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat(phase-1): Foundation"
+  rc=$(run_ralph "$d" verify-no-reads-once --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "HEAD: exit 0"
+  assert_contains "$d/out.log" "veredito emitido sem nenhuma leitura de arquivo" "HEAD: veredito sem leitura descartado"
+  assert_contains "$d/out.log" "Phase 1: Foundation — VERIFICADA sem sessao" "HEAD: releitura fecha a fase sem sessao"
+  assert_eq 1 "$(cat "$d/state/impl_calls")" "HEAD: so a fase 2 abre sessao"
+
+  d=$(new_case verify-no-reads-notcode)
+  rc=$(run_ralph "$d" verify-no-reads-notcode --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "NOT-CODE sem leitura: exit 0"
+  assert_not_contains "$d/out.log" "sem nenhuma leitura" "NOT-CODE nao depende de leitura"
+  assert_eq 2 "$(cat "$d/state/verify_calls")" "NOT-CODE: uma verificacao por fase"
+fi
+
+# ---------------------------------------------------------------------------
+# 67. Entrega em caminho que o .gitignore exclui. Na fase 13 de social-engine
+#     tudo ficava em projects/<nome>/, privado por regra da feature: o ralph
+#     disse "a sessao nao escreveu nada" duas vezes, e a trava de ciclo sem
+#     mudanca pararia a fase se o gate 3 reprovasse. A assinatura conta o que
+#     as tasks julgadas citam; .harness/, task (manual) e diretorio grande
+#     ficam de fora.
+# ---------------------------------------------------------------------------
+IGNORED_FIXTURE='# Test Project — Project Phases
+
+## Phase 1: Private config
+
+- [ ] **Task:** `private/config.txt` guarda a configuracao local, sem tocar em `.harness/` nem em `deps/`
+- [ ] **Task:** `.gitignore` lista `private/` e `cache/`
+- [ ] (manual) confira `private/manual.txt` a mao
+
+## Phase 2: Feature
+
+- [ ] **Task:** cria o arquivo C
+'
+
+if case_enabled ignored-output; then
+  header "67. fase que entrega so em caminho ignorado pelo git"
+  d=$(new_case ignored-output)
+  printf '%s' "$IGNORED_FIXTURE" > "$d/repo/.spec/init/project-phases.md"
+  printf 'private/\ndeps/\ncache/\n.harness/\n' > "$d/repo/.gitignore"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "chore: fixture ignored"
+  mkdir -p "$d/repo/private" "$d/repo/deps" "$d/repo/cache"
+  echo "manual" > "$d/repo/private/manual.txt"
+  echo "build" > "$d/repo/cache/out.bin"
+  for i in $(seq 1 501); do : > "$d/repo/deps/f$i"; done
+  before=$(commits "$d")
+  rc=$(CASE_HARNESS=1 run_ralph "$d" ignored-output --engine codex --test-cmd "$d/test.sh" --max-cycles 3)
+  assert_eq 0 "$rc" "exit 0"
+  assert_not_contains "$d/out.log" "a sessao nao escreveu nada" "escrita em caminho ignorado conta como escrita"
+  assert_not_contains "$d/out.log" "nao alterou nenhum arquivo — parando" "correcao em caminho ignorado nao trava a fase"
+  assert_eq 4 "$(cat "$d/state/impl_calls")" "fase 1 com duas correcoes, fase 2 direta"
+  assert_eq 4 "$(cat "$d/state/verify_calls")" "cada correcao re-julgada: o memo ve o arquivo novo"
+  assert_not_contains "$d/out.log" "recurso" "codigo mudou: verificacao nova, nao recurso"
+  assert_contains "$d/out.log" "Phase 1: Private config — COMPLETA" "fase 1 relatada como completa"
+  assert_contains "$d/out.log" "so em caminhos que o .gitignore exclui" "relatorio diz por que nao ha commit"
+  assert_eq $((before + 1)) "$(commits "$d")" "so a fase 2 commita"
+  vp="$d/repo/.phases/prompts/phase-01.verify-1.txt"
+  assert_contains "$vp" "Caminhos que as tasks citam e o .gitignore exclui" "verificador sabe da entrega fora do diff"
+  assert_contains "$vp" "  private/config.txt" "com o caminho citado"
+  assert_not_contains "$vp" "  private/manual.txt" "task (manual) nao entra"
+  assert_not_contains "$vp" "  deps" "diretorio grande nao entra"
+  assert_not_contains "$vp" "  .harness" "telemetria do run nao entra"
+  assert_not_contains "$vp" "  cache" "task sobre o .gitignore cita padrao, nao entrega"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

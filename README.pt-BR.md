@@ -118,6 +118,14 @@ código uma vez a um **recurso**: uma sessão verificadora nova com o modelo e o
 esforço de implementação. Aprovou, a fase fecha; reprovou, as duas leituras
 concordam e a fase trava.
 
+Veredito sem leitura não é veredito. O prompt traz a fase, não o código, então
+todo `DONE` ou `INCOMPLETE` tem que sair de algum arquivo. Num run real, o
+verificador que revalidava uma fase já commitada rodou zero comandos e respondeu
+11/11 `DONE` em 8 segundos. O ralph conta as leituras — blocos `exec` no
+transcript do Codex, `num_turns` no JSON do Claude — e trata veredito sem
+nenhuma como verificador que não respondeu: uma sessão nova com o modelo de
+implementação e, se ela também não ler nada, a fase para sem ciclo de correção.
+
 Task que o plano tipa como `- [ ] (manual) …` — rodar o formatador, o build de
 assets, conferir num celular de verdade — nunca chega ao verificador. O ralph a
 tira da lista numerada, descarta qualquer veredito sobre ela e a lista em
@@ -131,6 +139,13 @@ veredito. Num run real, uma fase assim abriu sessão, não escreveu nada e gasto
 com a mensagem do ralph — `feat(phase-N): <título>`, por exemplo depois de você
 commitar à mão o trabalho de uma fase que travou — segue o mesmo caminho no
 próximo run: os gates julgam HEAD, e só gate vermelho abre sessão.
+
+Fase cuja entrega fica em caminho que o `.gitignore` exclui — config local, dado
+privado — é invisível para o git. O ralph também calcula o hash dos caminhos
+ignorados que as tasks julgadas citam entre crases, então escrever ali conta
+como escrita: ciclo de correção que só mexe neles não passa por travado, e a
+fase fecha sem commit, dizendo por quê. Só o citado conta: cache de teste e
+dependências mudam a cada suite sem ser trabalho da fase.
 
 O verificador lê só a fase, então quando o plano erra ele cobra o erro. Num run
 real, a sessão conferiu o config do CSS, viu que o token que a task pedia não
@@ -732,7 +747,7 @@ que o ralph vai resolver num projeto sem rodar nada:
     ├── phase-NN.cycle-M.last.txt  mensagem final da sessão (Codex)
     ├── phase-NN.test-M.log        saída do portão 2
     ├── phase-NN.verify-M.log      sessão do portão 3
-    ├── phase-NN.verify-M.last.txt veredito final do portão 3 (Codex)
+    ├── phase-NN.verify-M.last.txt veredito final do portão 3
     ├── phase-NN.memory.log        saída do `ai-memory write-page`
     └── archive/<início do run>/   logs de um run anterior da fase, movidos
                                    quando ela reabre (ficam os 10 últimos runs)
@@ -1101,12 +1116,14 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | Sintoma | Causa provável |
 |---|---|
 | `Contrato de formato violado` no preflight | heading `## Phase` fora de `## Phase N: <título>`. Uma fase com heading torto **some silenciosamente** do run |
-| portão 3 reprova por `cobertura incompleta` ou índice fora da faixa | o verificador ignorou a lista numerada do prompt. Leia o veredito (`verify-M.last.txt` no Codex, `verify-M.log` no Claude); se repetir, troque `RALPH_VERIFY_MODEL` |
+| portão 3 reprova por `cobertura incompleta` ou índice fora da faixa | o verificador ignorou a lista numerada do prompt. Leia o veredito (`verify-M.last.txt`); se repetir, troque `RALPH_VERIFY_MODEL` |
 | preflight aborta com `.harness/ esta versionado` | a telemetria foi commitada. `git rm -r --cached .harness` e commit |
 | task sempre `NOT-CODE` | escrita como comando (`rode`, `confirme com git diff`). Reescreva como estado do código, ou marque `(manual)` se for mesmo procedimento |
 | fase de fechamento reprova sem nada de errado no código | task de procedimento sem `(manual)`: o verificador tenta julgar o que não tem como ler. Marque `(manual)` |
 | fase reprova em todo ciclo até esgotar | task com escape condicional (*"faça X, mas se ficar estranho, deixe"*). Na dúvida, o verificador escolhe INCOMPLETE |
 | `Gate 3 — recurso aprovou` | o verificador barato reprovou, o ciclo de correção não mudou nada e o modelo de implementação aprovou o mesmo código. Normal. Se acontecer em toda fase, o verificador barato não está lendo o código: suba `RALPH_VERIFY_EFFORT` ou troque `RALPH_VERIFY_MODEL` |
+| `Gate 3 — veredito emitido sem nenhuma leitura de arquivo` | o verificador respondeu sem abrir arquivo, então o código não foi julgado. O ralph tenta de novo uma vez com o modelo de implementação. Se acontecer em toda fase, suba `RALPH_VERIFY_EFFORT` ou troque `RALPH_VERIFY_MODEL` |
+| fase com trabalho só em caminho ignorado sai como `JA IMPLEMENTADA` | as tasks não citam esses caminhos entre crases, e o ralph não os enxerga. Cite os caminhos nas tasks |
 | fase travada depois de `recurso tambem reprovou` | o verificador barato e o modelo de implementação leram o mesmo código e reprovaram: agora a causa provável é a task |
 | portão 2 sempre vermelho no primeiro run | Laravel: Sail parado, ou `.env.testing` ausente. Outras stacks: o ambiente de desenvolvimento nunca foi preparado (dependências, virtualenv) |
 | o ralph ou o `test-runner` escolhe o comando de teste errado | confira com `mktux-profile.sh test-cmd` (veja [Perfis de stack](#perfis-de-stack)); sobreponha com `--test-cmd` ou `RALPH_TEST_CMD` |

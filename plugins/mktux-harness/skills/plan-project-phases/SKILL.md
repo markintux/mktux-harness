@@ -258,7 +258,10 @@ Por fase, em ordem. Todos verdes → commit. Qualquer vermelho → ciclo de corr
 (default 3, depois a fase falha).
 
 - **Gate 0** — a engine terminou limpa.
-- **Gate 1** — a sessao escreveu codigo? Sinal, nao veredito.
+- **Gate 1** — a sessao escreveu codigo? Sinal, nao veredito. Arquivo que o
+  `.gitignore` exclui (config local, dado privado) so conta quando uma task
+  julgada cita o caminho entre crases: entrega em caminho ignorado tem que
+  aparecer assim na task, senao o ralph le a fase como "nao escreveu nada".
 - **Gate 2** — a suite de testes do projeto, rodada pelo ralph **fora** da sessao
   do agente. Fase cujos testes nao passam nunca chega no gate 3.
 - **Gate 3** — verificador independente, read-only, task a task, num modelo
