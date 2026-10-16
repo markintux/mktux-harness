@@ -74,12 +74,14 @@ tail -3 .harness/events.jsonl
 Se o arquivo nao existir depois de um turno completo, o plugin nao esta carregado
 naquela engine. Confira com `/plugin` (Claude) ou `codex plugin list` (Codex).
 
-## 4. Memoria de longo prazo — ai-memory (opcional, uma vez por maquina)
+## 4. Memoria de longo prazo (opcional, uma vez por maquina)
 
-A memoria do harness e o [ai-memory](https://github.com/akitaonrails/ai-memory):
-servidor local em `127.0.0.1:49374`, wiki markdown versionada em git, hooks no
-Claude Code e no Codex. Sem ele o ralph roda igual. O passo a passo completo
-(binario, launchd, hooks, MCP) esta na secao "Memoria de longo prazo" do README.
+Sem memoria o ralph roda igual. O default e o
+[ai-memory](https://github.com/akitaonrails/ai-memory): servidor local em
+`127.0.0.1:49374`, wiki markdown versionada em git, hooks no Claude Code e no
+Codex. O passo a passo completo (binario, launchd, hooks, MCP) esta na secao
+"Memoria de longo prazo" do README. Outro plugin de memoria: veja o fim desta
+secao.
 
 Depois de instalar, confira:
 
@@ -107,6 +109,17 @@ O que o ralph faz com o ai-memory: grava uma pagina `ralph/<feature>/phase-NN.md
 por fase, depois do commit, sem LLM. Todas as sessoes rodam isoladas dos hooks
 do ai-memory, porque o SessionStart deles consome handoffs. Detalhes na skill
 `ralph`.
+
+**Outro plugin de memoria.** O ralph so toca a memoria em dois pontos, os dois
+configuraveis no ambiente de quem roda o `ralph` (ex: `~/.zshrc`):
+
+- `RALPH_ISOLATE`: nomes de hooks e plugins tirados das sessoes do ralph,
+  separados por espaco ou virgula (default `ai-memory`). Ponha ali o plugin
+  novo, e qualquer outro que injete contexto no SessionStart. A lista
+  substitui o default.
+- `RALPH_MEMORY_CMD`: comando que grava a pagina por fase no lugar do
+  `ai-memory write-page`. Recebe o caminho da pagina em `$1` e o corpo na
+  stdin. Sem ele, e sem o ai-memory, a pagina por fase so nao e gravada.
 
 ## O que cada hook faz
 

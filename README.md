@@ -25,7 +25,7 @@ and Python; Go and Rust projects run on the generic path. See
 - [ralph in detail](#ralph-in-detail)
 - [Hooks and telemetry](#hooks-and-telemetry)
 - [Stack profiles](#stack-profiles)
-- [Long-term memory (ai-memory)](#long-term-memory-ai-memory)
+- [Long-term memory](#long-term-memory)
 - [What your project needs](#what-your-project-needs)
 - [Command reference](#command-reference)
 - [Troubleshooting](#troubleshooting)
@@ -727,9 +727,11 @@ To see what ralph will resolve in a project without running anything:
 | `RALPH_MAX_TRANSIENT_RETRIES` | re-runs of a session that died on a transient provider error (default `6`). A verifier or judge session switches to the implementation model from the 2nd re-run on |
 | `RALPH_TRANSIENT_BACKOFF` | wait before the 1st re-run, in seconds; doubles each time, up to 600 (default `30`) |
 | `RALPH_SMOKE` | `0` disables the smoke test |
-| `RALPH_MEMORY` | `0` disables the per-phase page in [ai-memory](#long-term-memory-ai-memory). Turns itself off when the binary is missing or the server is down |
+| `RALPH_MEMORY` | `0` disables the per-phase page in [memory](#long-term-memory). With ai-memory, turns itself off when the binary is missing or the server is down |
+| `RALPH_MEMORY_CMD` | command that writes the per-phase page instead of ai-memory: page path in `$1`, body on stdin (see [Another memory plugin](#another-memory-plugin)) |
 | `RALPH_MEMORY_BIN` | ai-memory binary (default `ai-memory` on PATH) |
-| `RALPH_HOOK_ISOLATION` | `0` lets ai-memory's hooks or plugin run inside ralph's sessions (default `1`: isolate). Independently, every Codex session ralph starts runs with `-c features.memories=false`, so Codex's native memory never brings earlier sessions into a cold one |
+| `RALPH_ISOLATE` | names of hooks and plugins stripped from ralph's sessions, separated by spaces or commas (default `ai-memory`) |
+| `RALPH_HOOK_ISOLATION` | `0` lets the hooks and plugins in `RALPH_ISOLATE` run inside ralph's sessions (default `1`: isolate). Independently, every Codex session ralph starts runs with `-c features.memories=false`, so Codex's native memory never brings earlier sessions into a cold one |
 | `RALPH_VERBOSE` | `1` mirrors engine output |
 | `RALPH_DASHBOARD` | `1` enables the built-in panel |
 | `MKTUX_SPEC_DIR` | spec root (default `docs/features`) |
@@ -984,12 +986,13 @@ Nothing to change in your projects. What behaves differently:
 
 ---
 
-## Long-term memory (ai-memory)
+## Long-term memory
 
-The harness uses [ai-memory](https://github.com/akitaonrails/ai-memory) for
-memory: a local server (`127.0.0.1:49374`) that keeps memory in a
-git-versioned markdown wiki, with hooks in Claude Code and Codex. It is
-**optional**: without it, ralph runs the same.
+Memory is **optional**: without any, ralph runs the same. The default is
+[ai-memory](https://github.com/akitaonrails/ai-memory): a local server
+(`127.0.0.1:49374`) that keeps memory in a git-versioned markdown wiki, with
+hooks in Claude Code and Codex. Another memory plugin works too; see
+[Another memory plugin](#another-memory-plugin).
 
 ### Install (macOS, once per machine)
 
@@ -1071,6 +1074,33 @@ ai-memory install-mcp   --client codex       --apply
 To look things up later, ask the agent "search memory for phase 3 of feature
 X" (MCP `memory_query`), or run `ai-memory search "..."`.
 
+### Another memory plugin
+
+Ralph touches memory in two places, and both accept another plugin:
+
+- **Isolation: `RALPH_ISOLATE`.** Lists the names to strip from ralph's
+  sessions, separated by spaces or commas (default `ai-memory`). For each
+  name, ralph turns off the hook handlers whose command contains the name and
+  the `<name>@<marketplace>` plugin, the same way as described above. List any
+  plugin that injects context at `SessionStart` there, memory or not. The list
+  replaces the default: to keep isolating ai-memory, include it.
+
+  ```bash
+  export RALPH_ISOLATE="ai-memory my-plugin"
+  ```
+
+- **Per-phase page: `RALPH_MEMORY_CMD`.** Replaces `ai-memory write-page` with
+  a command of your own. Ralph runs it with `bash -c`, from the project root,
+  with the page path (`ralph/<feature>/phase-NN.md`) in `$1` and the markdown
+  body on stdin. Its output goes to `.phases/logs/phase-NN.memory.log`; a
+  non-zero exit becomes a warning and the phase stays valid. When it is set,
+  ralph neither calls ai-memory nor checks its server.
+
+  ```bash
+  # writes each phase into a notes folder
+  export RALPH_MEMORY_CMD='mkdir -p ~/notes/"$(dirname "$1")" && cat > ~/notes/"$1"'
+  ```
+
 ### `/mktux:ai-context` and the ai-memory block
 
 `ai-memory install-instructions` writes a
@@ -1151,8 +1181,8 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | the run restarts from phase 1 after you edit the plan | editing `project-phases.md` invalidates the stamp and clears `.progress`. A phase already committed as `feat(phase-N): <title>` is revalidated against HEAD with no session; `--from N` skips the earlier ones outright |
 | `ralph: command not found` | run installation step 3, and check `~/.local/bin` is on your PATH |
 | `mktux-harness: não encontrei ralph.sh` | the plugin is not installed on that machine, or point `MKTUX_HARNESS_ROOT` at a clone |
-| preflight aborts with `Hooks do ai-memory em ... sem jq` | ai-memory's hooks are in your user config and isolating them needs `jq`. Install `jq`. Use `RALPH_HOOK_ISOLATION=0` only if you accept sessions claiming your handoffs |
-| `Falha ao gravar no ai-memory` | read `.phases/logs/phase-NN.memory.log`. If the server died: `ai-memory status` and `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. The phase stays valid |
+| preflight aborts with `Hooks a isolar (...) em ... sem jq` | hooks listed in `RALPH_ISOLATE` are in your user config and isolating them needs `jq`. Install `jq`. Use `RALPH_HOOK_ISOLATION=0` only if you accept sessions getting their context (with ai-memory, claiming your handoffs) |
+| `Falha ao gravar a memoria da fase` | read `.phases/logs/phase-NN.memory.log`. With ai-memory, if the server died: `ai-memory status` and `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. With `RALPH_MEMORY_CMD`, the log holds your command's output. The phase stays valid |
 
 When a phase fails, read in this order:
 
