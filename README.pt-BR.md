@@ -726,7 +726,7 @@ que o ralph vai resolver num projeto sem rodar nada:
 | `RALPH_SMOKE` | `0` desliga o smoke test |
 | `RALPH_MEMORY` | `0` desliga a página por fase no [ai-memory](#memória-de-longo-prazo-ai-memory). Sem o binário ou com o servidor fora do ar, desliga sozinha |
 | `RALPH_MEMORY_BIN` | binário do ai-memory (default `ai-memory` no PATH) |
-| `RALPH_HOOK_ISOLATION` | `0` deixa os hooks do ai-memory rodarem nas sessões do ralph (default `1`: isola). Independente disso, toda sessão Codex que o ralph abre roda com `-c features.memories=false`, para a memória nativa do Codex nunca trazer sessões anteriores para dentro de uma sessão fria |
+| `RALPH_HOOK_ISOLATION` | `0` deixa os hooks ou o plugin do ai-memory rodarem nas sessões do ralph (default `1`: isola). Independente disso, toda sessão Codex que o ralph abre roda com `-c features.memories=false`, para a memória nativa do Codex nunca trazer sessões anteriores para dentro de uma sessão fria |
 | `RALPH_VERBOSE` | `1` espelha a saída da engine |
 | `RALPH_DASHBOARD` | `1` liga o painel embutido |
 | `MKTUX_SPEC_DIR` | raiz dos specs (default `docs/features`) |
@@ -1014,6 +1014,20 @@ ai-memory install-mcp   --client codex       --apply
 
 - **Codex:** hook novo só roda depois de confiado. Abra o `codex` uma vez e
   escolha *Trust all* em `/hooks`.
+- **Atualizar:** `ai-memory upgrade` (2.5+) baixa a release, confere o
+  `.sha256`, troca o binário e reinstala os hooks. Antes de versão major, faça
+  backup, porque as migrations só andam para frente:
+  `ai-memory backup --to ~/ai-memory-backup.tar.gz`. Depois reinicie o
+  servidor (`launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`)
+  e confira o `ai-memory doctor`. A reinstalação pode reordenar os grupos do
+  `~/.codex/hooks.json`; o Codex guarda a confiança dos hooks pela posição,
+  então pede de novo em `/hooks`.
+- **Nome do projeto (3.0+):** checkout com remote git ganha o nome do caminho
+  do remote (`dono-repo`), não o da pasta. A primeira captura depois do
+  upgrade renomeia o projeto existente no lugar: mesmo id, mesmas páginas.
+- **Plugin (3.0+):** o ai-memory também vem como plugin do Claude Code e do
+  Codex (`ai-memory@ai-memory`). O ralph isola as duas formas. Use uma, não as
+  duas.
 - **`install-mcp --client codex` falhando com `invalid inline table`:** o
   parser TOML do ai-memory não aceita tabela inline multilinha (TOML 1.1) no
   seu `~/.codex/config.toml`. Adicione à mão:
@@ -1036,15 +1050,18 @@ ai-memory install-mcp   --client codex       --apply
   consome o handoff pendente (o GET é destrutivo) e o injeta como contexto.
   Sem isolamento, a fase 1 comeria o handoff que *você* deixou, cada sessão
   receberia o "onde parou" da anterior e o juiz do portão 3 deixaria de ser
-  independente. Quando o preflight acha os hooks na config de usuário, toda
-  sessão do ralph (smoke, implementação, portão 3) roda sem eles:
+  independente. Quando o preflight acha os hooks ou o plugin do ai-memory na
+  config de usuário, toda sessão do ralph (smoke, implementação, portão 3)
+  roda sem eles:
   - **Claude:** `--setting-sources project,local` mais `--settings` com o seu
-    `settings.json` *menos* os hooks do ai-memory. Modelo, effort, plugins e
-    os seus outros hooks continuam.
+    `settings.json` *menos* os hooks do ai-memory, com `ai-memory@…` em
+    `false` no `enabledPlugins`. Modelo, effort, os outros plugins e os seus
+    outros hooks continuam.
   - **Codex:** `-c hooks.state={...={enabled=false}}` só nos handlers do
-    ai-memory. A confiança dos outros hooks continua.
-  - Precisa de `jq`. Hooks do ai-memory instalados na config de **projeto**
-    não são detectados.
+    ai-memory, e `-c plugins={"ai-memory@…"={enabled=false}}` quando o plugin
+    está instalado. A confiança dos outros hooks continua.
+  - Precisa de `jq` para os hooks. Hooks ou plugin do ai-memory ligados na
+    config de **projeto** não são detectados.
 - **Falha aberta.** Sem o binário, a memória desliga em silêncio. Com o
   servidor fora do ar, o preflight avisa. Se a escrita falhar, a fase avisa e
   segue válida. Memória é registro, não portão.

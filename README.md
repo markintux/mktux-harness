@@ -729,7 +729,7 @@ To see what ralph will resolve in a project without running anything:
 | `RALPH_SMOKE` | `0` disables the smoke test |
 | `RALPH_MEMORY` | `0` disables the per-phase page in [ai-memory](#long-term-memory-ai-memory). Turns itself off when the binary is missing or the server is down |
 | `RALPH_MEMORY_BIN` | ai-memory binary (default `ai-memory` on PATH) |
-| `RALPH_HOOK_ISOLATION` | `0` lets ai-memory's hooks run inside ralph's sessions (default `1`: isolate). Independently, every Codex session ralph starts runs with `-c features.memories=false`, so Codex's native memory never brings earlier sessions into a cold one |
+| `RALPH_HOOK_ISOLATION` | `0` lets ai-memory's hooks or plugin run inside ralph's sessions (default `1`: isolate). Independently, every Codex session ralph starts runs with `-c features.memories=false`, so Codex's native memory never brings earlier sessions into a cold one |
 | `RALPH_VERBOSE` | `1` mirrors engine output |
 | `RALPH_DASHBOARD` | `1` enables the built-in panel |
 | `MKTUX_SPEC_DIR` | spec root (default `docs/features`) |
@@ -1017,6 +1017,19 @@ ai-memory install-mcp   --client codex       --apply
 
 - **Codex:** new hooks only run once trusted. Open `codex` once and pick
   *Trust all* under `/hooks`.
+- **Updating:** `ai-memory upgrade` (2.5+) downloads the release, checks its
+  `.sha256`, swaps the binary and re-stages the hooks. Before a major version,
+  back up first, since migrations are forward-only:
+  `ai-memory backup --to ~/ai-memory-backup.tar.gz`. Then restart the server
+  (`launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`)
+  and check `ai-memory doctor`. Re-staging can reorder the groups in
+  `~/.codex/hooks.json`; Codex keys hook trust by position, so it asks again
+  under `/hooks`.
+- **Project names (3.0+):** a checkout with a git remote is named after the
+  remote path (`owner-repo`), not the folder. The first capture after the
+  upgrade renames the existing project in place: same id, same pages.
+- **Plugin (3.0+):** ai-memory also ships as a Claude Code and Codex plugin
+  (`ai-memory@ai-memory`). Ralph isolates either form. Use one, not both.
 - **`install-mcp --client codex` failing with `invalid inline table`:**
   ai-memory's TOML parser rejects multi-line inline tables (TOML 1.1) in your
   `~/.codex/config.toml`. Add it by hand:
@@ -1039,16 +1052,18 @@ ai-memory install-mcp   --client codex       --apply
   claims the pending handoff (the GET is destructive) and injects it as
   context. Without isolation, phase 1 would eat the handoff *you* left, every
   session would get the previous one's "where you left off", and the gate 3
-  judge would stop being independent. When preflight finds the hooks in the
-  user config, every ralph session (smoke, implementation, gate 3) runs
-  without them:
+  judge would stop being independent. When preflight finds the hooks or the
+  ai-memory plugin in the user config, every ralph session (smoke,
+  implementation, gate 3) runs without them:
   - **Claude:** `--setting-sources project,local` plus `--settings` holding
-    your `settings.json` *minus* ai-memory's hooks. Model, effort, plugins
-    and your other hooks stay.
+    your `settings.json` *minus* ai-memory's hooks, with `ai-memory@…` set to
+    `false` in `enabledPlugins`. Model, effort, other plugins and your other
+    hooks stay.
   - **Codex:** `-c hooks.state={...={enabled=false}}` on ai-memory's handlers
-    only. Trust for every other hook stays.
-  - Needs `jq`. ai-memory hooks installed in a **project** config are not
-    detected.
+    only, and `-c plugins={"ai-memory@…"={enabled=false}}` when the plugin is
+    installed. Trust for every other hook stays.
+  - Needs `jq` for the hooks. ai-memory hooks or plugin enabled in a
+    **project** config are not detected.
 - **Fails open.** With no binary, memory switches off silently. With the
   server down, preflight warns. If a write fails, the phase warns and stays
   valid. Memory is a record, not a gate.

@@ -134,6 +134,7 @@ else
         case "$2" in
           model_reasoning_effort=*) effort="${2#*=}" ;;
           hooks.state=*) echo "$2" >> "$state/hook_overrides" ;;
+          plugins=*) echo "$2" >> "$state/plugin_overrides" ;;
           features.memories=*) echo "$2" >> "$state/codex_memories" ;;
         esac
         shift 2 ;;
@@ -1611,6 +1612,28 @@ JSON
   rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "sem hooks do ai-memory: exit 0"
   assert_eq 0 "$(count_lines "$d/state/setting_sources")" "nome fora dos hooks nao isola nada"
+
+  # ai-memory 3.0+ como plugin de marketplace: mesmos hooks, vindos do plugin.
+  d=$(new_case hook-isolation-claude-plugin)
+  cat > "$d/claude-home/settings.json" <<'JSON'
+{
+  "model": "opus",
+  "enabledPlugins": { "ai-memory@ai-memory": true, "mktux@mktux-harness": true }
+}
+JSON
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "plugin do ai-memory: exit 0"
+  assert_contains "$d/out.log" "Hooks do ai-memory isolados" "plugin sem hooks no settings tambem isola"
+  sessions=$(( $(cat "$d/state/impl_calls") + $(cat "$d/state/verify_calls" 2>/dev/null || echo 0) ))
+  assert_eq "$sessions" "$(count_lines "$d/state/setting_sources")" "toda sessao roda sem o plugin"
+  assert_contains "$d/state/settings_json" '"ai-memory@ai-memory":false' "plugin do ai-memory desligado na sessao"
+  assert_contains "$d/state/settings_json" '"mktux@mktux-harness":true' "demais plugins continuam ligados"
+
+  d=$(new_case hook-isolation-claude-plugin-off)
+  echo '{ "enabledPlugins": { "ai-memory@ai-memory": false } }' > "$d/claude-home/settings.json"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "plugin desligado: exit 0"
+  assert_eq 0 "$(count_lines "$d/state/setting_sources")" "plugin ja desligado nao isola nada"
 fi
 
 # ---------------------------------------------------------------------------
@@ -1648,11 +1671,33 @@ JSON
   expected="hooks.state={\"$hooks_json:session_start:0:0\"={enabled=false},\"$hooks_json:pre_tool_use:0:1\"={enabled=false},\"$hooks_json:user_prompt_submit:0:0\"={enabled=false}}"
   assert_eq "$expected" "$(sort -u "$d/state/hook_overrides" 2>/dev/null)" "desliga so os handlers do ai-memory, chave no formato do codex"
 
+  assert_eq 0 "$(count_lines "$d/state/plugin_overrides")" "sem plugin no config.toml: plugins intocado"
+
   d=$(new_case hook-isolation-codex-off)
   cp "$TMP/hook-isolation-codex/codex-home/hooks.json" "$d/codex-home/"
   rc=$(CASE_HOOK_ISOLATION=0 run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "RALPH_HOOK_ISOLATION=0: exit 0"
   assert_eq 0 "$(count_lines "$d/state/hook_overrides")" "RALPH_HOOK_ISOLATION=0 desliga"
+
+  # ai-memory 3.0+ como plugin de marketplace: o codex grava a tabela do plugin
+  # no config.toml. Desliga o plugin inteiro, por merge em plugins.
+  d=$(new_case hook-isolation-codex-plugin)
+  cat > "$d/codex-home/config.toml" <<'TOML'
+model = "gpt-5"
+
+[plugins."ai-memory@ai-memory"]
+enabled = true
+
+[plugins."mktux@mktux-harness"]
+enabled = true
+TOML
+  rc=$(run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "plugin do ai-memory: exit 0"
+  assert_contains "$d/out.log" "Hooks do ai-memory isolados" "plugin sem hooks.json tambem isola"
+  sessions=$(( $(cat "$d/state/impl_calls") + $(cat "$d/state/verify_calls" 2>/dev/null || echo 0) ))
+  assert_eq "$sessions" "$(count_lines "$d/state/plugin_overrides")" "toda sessao (impl, gate 3) roda sem o plugin"
+  assert_eq 'plugins={"ai-memory@ai-memory"={enabled=false}}' "$(sort -u "$d/state/plugin_overrides" 2>/dev/null)" "desliga so o plugin do ai-memory"
+  assert_eq 0 "$(count_lines "$d/state/hook_overrides")" "sem hooks.json: hooks.state intocado"
 fi
 
 # ---------------------------------------------------------------------------
