@@ -329,7 +329,7 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd   # Codex: $PLUGIN_
 | `RALPH_SMOKE` | `0` desliga o smoke test da engine |
 | `RALPH_MEMORY` | pagina por fase no ai-memory (`ralph/<feature>/phase-NN.md`, pos-commit, sem LLM); `0` desliga. Sem o binario ou com o servidor fora do ar, desliga sozinha |
 | `RALPH_MEMORY_BIN` | binario do ai-memory (default `ai-memory` no PATH) |
-| `RALPH_HOOK_ISOLATION` | `0` deixa os hooks do ai-memory rodarem nas sessoes do ralph. Default `1`: isola, porque o SessionStart deles consome handoffs e contamina a sessao fria e o gate 3 |
+| `RALPH_HOOK_ISOLATION` | `0` deixa os hooks ou o plugin do ai-memory rodarem nas sessoes do ralph. Default `1`: isola, porque o SessionStart deles consome handoffs e contamina a sessao fria e o gate 3 |
 
 No codex, toda sessao do ralph (smoke, implementacao, gate 3) roda com
 `-c features.memories=false`: a memoria nativa traria o historico de sessoes

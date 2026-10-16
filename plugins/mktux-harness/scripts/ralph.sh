@@ -145,9 +145,9 @@
 #                            sem o binario ou com o servidor fora do ar, desliga
 #                            sozinha com aviso no preflight)
 #   RALPH_MEMORY_BIN         binario do ai-memory (default: ai-memory no PATH)
-#   RALPH_HOOK_ISOLATION     0 deixa os hooks do ai-memory rodarem nas sessoes do
-#                            ralph (default: 1 — isola quando os detecta na config
-#                            de usuario do claude ou do codex)
+#   RALPH_HOOK_ISOLATION     0 deixa os hooks/plugin do ai-memory rodarem nas
+#                            sessoes do ralph (default: 1 — isola quando os
+#                            detecta na config de usuario do claude ou do codex)
 #   RALPH_VERBOSE            1 espelha a saida da engine na tela (default: 0)
 #   RALPH_DASHBOARD          1 liga o painel embutido (igual a --dashboard)
 #
@@ -495,47 +495,85 @@ resolve_test_cmd() {
 # handoff a sessao do verificador. O registro do run vai por save_memory.
 #
 # Os hooks ficam na config de USUARIO e o ai-memory nao tem variavel de ambiente
-# que os desligue, entao a engine recebe a config sem eles:
+# que os desligue (AI_MEMORY_CAPTURE_OWNER corta a captura, mas o handoff
+# continua sendo entregue), entao a engine recebe a config sem eles:
 #   claude: --setting-sources project,local + --settings com o settings.json do
 #           usuario MENOS os hooks do ai-memory. Sem o --settings a sessao perde
 #           model, effortLevel, plugins e os demais hooks do usuario.
 #   codex:  -c hooks.state={"<hooks.json>:<evento>:<grupo>:<handler>"={enabled=false}}
 #           so para os handlers do ai-memory. O -c faz merge em hooks.state: a
 #           confianca gravada dos outros hooks (inclusive os do mktux) continua.
+#
+# Desde o 3.0 o ai-memory tambem vem como plugin de marketplace
+# (ai-memory@ai-memory), com os mesmos hooks. Plugin ligado na config de
+# usuario e desligado na sessao: enabledPlugins false no --settings (claude) ou
+# -c plugins={"ai-memory@<marketplace>"={enabled=false}} (codex, merge como o
+# hooks.state).
 resolve_hook_isolation() {
   ENGINE_ISOLATION_ARGS=()
   [ "$HOOK_ISOLATION" = "0" ] && return 0
 
-  local hooks_file
   if [[ "$ENGINE" == "claude" ]]; then
-    hooks_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+    isolate_claude_hooks
   else
-    hooks_file="${CODEX_HOME:-$HOME/.codex}/hooks.json"
+    isolate_codex_hooks
   fi
-  grep -qs 'ai-memory' "$hooks_file" || return 0
+}
 
-  if ! command -v jq &> /dev/null; then
-    fail "Hooks do ai-memory em $hooks_file, mas sem jq nao da para isola-los das sessoes."
-    fail "Instale o jq, ou rode com RALPH_HOOK_ISOLATION=0 (a fase 1 consome seus handoffs)."
-    exit 1
-  fi
+require_jq_for_isolation() {
+  command -v jq &> /dev/null && return 0
+  fail "Hooks do ai-memory em $1, mas sem jq nao da para isola-los das sessoes."
+  fail "Instale o jq, ou rode com RALPH_HOOK_ISOLATION=0 (a fase 1 consome seus handoffs)."
+  exit 1
+}
 
+isolation_read_failed() {
+  fail "Nao consegui ler $1 para isolar os hooks do ai-memory."
+  fail "Corrija o arquivo, ou rode com RALPH_HOOK_ISOLATION=0."
+  exit 1
+}
+
+isolate_claude_hooks() {
+  local settings_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+  grep -qs 'ai-memory' "$settings_file" || return 0
+  require_jq_for_isolation "$settings_file"
+
+  # O nome pode estar fora dos hooks e do plugin (statusLine, env...): so isola
+  # se algum handler de hook e do ai-memory ou se o plugin dele esta ligado.
   local out rc=0
-  if [[ "$ENGINE" == "claude" ]]; then
-    # O nome pode estar fora dos hooks (statusLine, env...): so isola se algum
-    # handler de hook e do ai-memory.
-    out=$(jq -r '[(.hooks // {})[][] | .hooks[]? | .command // "" | select(contains("ai-memory"))]
-      | length' "$hooks_file") || rc=$?
-    if [ "$rc" -eq 0 ] && [ "$out" != "0" ]; then
-      out=$(jq -c '.hooks |= (with_entries(.value |= (
-          map(.hooks |= map(select((.command // "") | contains("ai-memory") | not)))
-          | map(select(.hooks | length > 0))))
-        | with_entries(select(.value | length > 0)))' "$hooks_file") || rc=$?
+  out=$(jq -c '
+    def aim_hook: (.command // "") | contains("ai-memory");
+    def aim_plugin: .key | startswith("ai-memory@");
+    if ([(.hooks // {})[][] | .hooks[]? | select(aim_hook)] | length) == 0
+       and ([(.enabledPlugins // {}) | to_entries[] | select(aim_plugin and .value == true)]
+            | length) == 0
+    then empty
     else
-      out=""
-    fi
-  else
-    out=$(jq -r --arg src "$hooks_file" '
+      (if .hooks then .hooks |= (with_entries(.value |= (
+          map(.hooks |= map(select(aim_hook | not)))
+          | map(select(.hooks | length > 0))))
+        | with_entries(select(.value | length > 0))) else . end)
+      | (if .enabledPlugins then .enabledPlugins |= with_entries(
+          if aim_plugin then .value = false else . end) else . end)
+    end' "$settings_file") || rc=$?
+  [ "$rc" -eq 0 ] || isolation_read_failed "$settings_file"
+  [ -n "$out" ] || return 0
+
+  ISOLATION_SETTINGS_FILE=$(mktemp "${TMPDIR:-/tmp}/ralph-settings.XXXXXX")
+  trap 'cleanup_run' EXIT
+  printf '%s\n' "$out" > "$ISOLATION_SETTINGS_FILE"
+  ENGINE_ISOLATION_ARGS=(--setting-sources project,local --settings "$ISOLATION_SETTINGS_FILE")
+  log "Hooks do ai-memory isolados das sessoes do ralph ($settings_file)"
+}
+
+isolate_codex_hooks() {
+  local codex_home="${CODEX_HOME:-$HOME/.codex}"
+  local hooks_file="$codex_home/hooks.json" config_file="$codex_home/config.toml"
+  local hooks="" plugins="" rc=0 sources=""
+
+  if grep -qs 'ai-memory' "$hooks_file"; then
+    require_jq_for_isolation "$hooks_file"
+    hooks=$(jq -r --arg src "$hooks_file" '
       [ (.hooks // {}) | to_entries[] | .key as $ev
         | ($ev | gsub("(?<a>[a-z0-9])(?<b>[A-Z])"; "\(.a)_\(.b)") | ascii_downcase) as $event
         | .value | to_entries[] | .key as $group
@@ -543,25 +581,27 @@ resolve_hook_isolation() {
         | select((.value.command // "") | contains("ai-memory"))
         | "\"\($src):\($event):\($group):\(.key)\"={enabled=false}" ]
       | if length == 0 then "" else "hooks.state={" + join(",") + "}" end' "$hooks_file") || rc=$?
+    [ "$rc" -eq 0 ] || isolation_read_failed "$hooks_file"
   fi
 
-  if [ "$rc" -ne 0 ]; then
-    fail "Nao consegui ler $hooks_file para isolar os hooks do ai-memory."
-    fail "Corrija o arquivo, ou rode com RALPH_HOOK_ISOLATION=0."
-    exit 1
+  # O codex grava cada plugin instalado como [plugins."<nome>@<marketplace>"].
+  # Desliga o plugin inteiro, nao handler a handler: a chave dos hooks dele
+  # depende do layout do hooks.json do plugin, que muda de versao em versao.
+  if grep -qs '^\[plugins\."ai-memory@' "$config_file"; then
+    plugins=$(sed -nE 's/^\[plugins\."(ai-memory@[^"]+)"\][[:space:]]*$/"\1"={enabled=false}/p' \
+      "$config_file" | paste -sd, -)
   fi
-  # O nome aparece no arquivo, mas em nenhum handler de hook: nada a isolar.
-  [ -n "$out" ] || return 0
 
-  if [[ "$ENGINE" == "claude" ]]; then
-    ISOLATION_SETTINGS_FILE=$(mktemp "${TMPDIR:-/tmp}/ralph-settings.XXXXXX")
-    trap 'cleanup_run' EXIT
-    printf '%s\n' "$out" > "$ISOLATION_SETTINGS_FILE"
-    ENGINE_ISOLATION_ARGS=(--setting-sources project,local --settings "$ISOLATION_SETTINGS_FILE")
-  else
-    ENGINE_ISOLATION_ARGS=(-c "$out")
+  if [ -n "$hooks" ]; then
+    ENGINE_ISOLATION_ARGS+=(-c "$hooks")
+    sources="$hooks_file"
   fi
-  log "Hooks do ai-memory isolados das sessoes do ralph ($hooks_file)"
+  if [ -n "$plugins" ]; then
+    ENGINE_ISOLATION_ARGS+=(-c "plugins={$plugins}")
+    sources="${sources:+$sources, }plugin em $config_file"
+  fi
+  [ -n "$sources" ] || return 0
+  log "Hooks do ai-memory isolados das sessoes do ralph ($sources)"
 }
 
 cleanup_run() {

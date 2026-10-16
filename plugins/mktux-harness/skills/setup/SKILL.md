@@ -93,7 +93,13 @@ grep -c ai-memory ~/.claude/settings.json ~/.codex/hooks.json
   escolha *Trust all* em `/hooks`.
 - **Instale os hooks na config de usuario**, nao na de projeto. O ralph so
   detecta os hooks na config de usuario, e so os que detecta ele isola das
-  sessoes frias.
+  sessoes frias. Vale igual para o plugin `ai-memory@ai-memory` (3.0+): o
+  ralph isola hooks ou plugin, desde que ligados na config de usuario. Use
+  uma forma so.
+- **Atualizar:** `ai-memory backup --to ~/ai-memory-backup.tar.gz` antes de
+  versao major (migrations nao voltam), depois `ai-memory upgrade` e
+  `ai-memory doctor`. No 3.0+ o projeto passa a se chamar pelo remote git
+  (`dono-repo`): o projeto antigo e renomeado no lugar, sem perder paginas.
 - `ai-memory install-instructions` grava um bloco `<!-- ai-memory:start -->`
   no `CLAUDE.md`/`AGENTS.md`. O `/mktux:ai-context` preserva esse bloco.
 
