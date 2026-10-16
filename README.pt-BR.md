@@ -25,7 +25,7 @@ projetos Go e Rust rodam pelo caminho genérico. Veja
 - [O ralph em detalhe](#o-ralph-em-detalhe)
 - [Hooks e telemetria](#hooks-e-telemetria)
 - [Perfis de stack](#perfis-de-stack)
-- [Memória de longo prazo (ai-memory)](#memória-de-longo-prazo-ai-memory)
+- [Memória de longo prazo](#memória-de-longo-prazo)
 - [O que seu projeto precisa ter](#o-que-seu-projeto-precisa-ter)
 - [Referência de comandos](#referência-de-comandos)
 - [Diagnóstico](#diagnóstico)
@@ -724,9 +724,11 @@ que o ralph vai resolver num projeto sem rodar nada:
 | `RALPH_MAX_TRANSIENT_RETRIES` | re-execuções de uma sessão que caiu por erro passageiro do provedor (default `6`). Sessão do verificador ou do juiz passa para o modelo de implementação a partir da 2ª |
 | `RALPH_TRANSIENT_BACKOFF` | espera antes da 1ª re-execução, em segundos; dobra a cada uma, até 600 (default `30`) |
 | `RALPH_SMOKE` | `0` desliga o smoke test |
-| `RALPH_MEMORY` | `0` desliga a página por fase no [ai-memory](#memória-de-longo-prazo-ai-memory). Sem o binário ou com o servidor fora do ar, desliga sozinha |
+| `RALPH_MEMORY` | `0` desliga a página por fase na [memória](#memória-de-longo-prazo). No ai-memory, sem o binário ou com o servidor fora do ar, desliga sozinha |
+| `RALPH_MEMORY_CMD` | comando que grava a página por fase no lugar do ai-memory: caminho da página em `$1`, corpo na entrada padrão (veja [Outro plugin de memória](#outro-plugin-de-memória)) |
 | `RALPH_MEMORY_BIN` | binário do ai-memory (default `ai-memory` no PATH) |
-| `RALPH_HOOK_ISOLATION` | `0` deixa os hooks ou o plugin do ai-memory rodarem nas sessões do ralph (default `1`: isola). Independente disso, toda sessão Codex que o ralph abre roda com `-c features.memories=false`, para a memória nativa do Codex nunca trazer sessões anteriores para dentro de uma sessão fria |
+| `RALPH_ISOLATE` | nomes de hooks e plugins tirados das sessões do ralph, separados por espaço ou vírgula (default `ai-memory`) |
+| `RALPH_HOOK_ISOLATION` | `0` deixa os hooks e plugins de `RALPH_ISOLATE` rodarem nas sessões do ralph (default `1`: isola). Independente disso, toda sessão Codex que o ralph abre roda com `-c features.memories=false`, para a memória nativa do Codex nunca trazer sessões anteriores para dentro de uma sessão fria |
 | `RALPH_VERBOSE` | `1` espelha a saída da engine |
 | `RALPH_DASHBOARD` | `1` liga o painel embutido |
 | `MKTUX_SPEC_DIR` | raiz dos specs (default `docs/features`) |
@@ -981,12 +983,13 @@ Nada muda nos seus projetos. O que passa a se comportar diferente:
 
 ---
 
-## Memória de longo prazo (ai-memory)
+## Memória de longo prazo
 
-A memória do harness é o [ai-memory](https://github.com/akitaonrails/ai-memory):
-um servidor local (`127.0.0.1:49374`), com a memória numa wiki markdown
-versionada em git e hooks no Claude Code e no Codex. Ele é **opcional**: sem
-ele, o ralph roda igual.
+Memória é **opcional**: sem nenhuma, o ralph roda igual. O default é o
+[ai-memory](https://github.com/akitaonrails/ai-memory): um servidor local
+(`127.0.0.1:49374`), com a memória numa wiki markdown versionada em git e hooks
+no Claude Code e no Codex. Outro plugin de memória também serve; veja
+[Outro plugin de memória](#outro-plugin-de-memória).
 
 ### Instalar (macOS, uma vez por máquina)
 
@@ -1069,6 +1072,34 @@ ai-memory install-mcp   --client codex       --apply
 Para consultar depois, peça ao agente "busque na memória a fase 3 da feature
 X" (MCP `memory_query`), ou rode `ai-memory search "..."`.
 
+### Outro plugin de memória
+
+O ralph toca a memória em dois pontos, e os dois aceitam outro plugin:
+
+- **Isolamento: `RALPH_ISOLATE`.** Lista os nomes a tirar das sessões do
+  ralph, separados por espaço ou vírgula (default `ai-memory`). Para cada
+  nome, o ralph desliga os handlers de hook cujo comando contém o nome e o
+  plugin `<nome>@<marketplace>`, do mesmo jeito descrito acima. Liste ali
+  qualquer plugin que injete contexto no `SessionStart`, de memória ou não. A
+  lista substitui o default: para isolar o ai-memory junto, inclua-o.
+
+  ```bash
+  export RALPH_ISOLATE="ai-memory meu-plugin"
+  ```
+
+- **Página por fase: `RALPH_MEMORY_CMD`.** Troca o `ai-memory write-page` por
+  um comando seu. O ralph roda o comando com `bash -c`, na raiz do projeto,
+  com o caminho da página (`ralph/<feature>/phase-NN.md`) em `$1` e o corpo
+  markdown na entrada padrão. A saída vai para
+  `.phases/logs/phase-NN.memory.log`; exit diferente de 0 vira aviso e a fase
+  continua válida. Com ele definido, o ralph não chama o ai-memory nem confere
+  o servidor.
+
+  ```bash
+  # grava cada fase numa pasta de notas
+  export RALPH_MEMORY_CMD='mkdir -p ~/notas/"$(dirname "$1")" && cat > ~/notas/"$1"'
+  ```
+
 ### `/mktux:ai-context` e o bloco do ai-memory
 
 O `ai-memory install-instructions` grava um bloco
@@ -1150,8 +1181,8 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | o run reinicia da fase 1 depois de você editar o plano | editar o `project-phases.md` invalida o stamp e zera o `.progress`. Fase já commitada como `feat(phase-N): <título>` é revalidada contra HEAD sem sessão; `--from N` pula de vez as anteriores |
 | `ralph: command not found` | rode o passo 3 da instalação, e confira que `~/.local/bin` está no PATH |
 | `mktux-harness: não encontrei ralph.sh` | o plugin não está instalado nessa máquina, ou aponte `MKTUX_HARNESS_ROOT` para um clone |
-| preflight aborta com `Hooks do ai-memory em ... sem jq` | os hooks do ai-memory estão na config de usuário e o isolamento precisa do `jq`. Instale o `jq`. Use `RALPH_HOOK_ISOLATION=0` só se aceitar que as sessões consumam seus handoffs |
-| `Falha ao gravar no ai-memory` | leia `.phases/logs/phase-NN.memory.log`. Se o servidor caiu: `ai-memory status` e `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. A fase continua válida |
+| preflight aborta com `Hooks a isolar (...) em ... sem jq` | hooks listados em `RALPH_ISOLATE` estão na config de usuário e o isolamento precisa do `jq`. Instale o `jq`. Use `RALPH_HOOK_ISOLATION=0` só se aceitar que as sessões recebam o contexto deles (no ai-memory, seus handoffs) |
+| `Falha ao gravar a memoria da fase` | leia `.phases/logs/phase-NN.memory.log`. No ai-memory, se o servidor caiu: `ai-memory status` e `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. Com `RALPH_MEMORY_CMD`, o log tem a saída do seu comando. A fase continua válida |
 
 Quando uma fase falhar, leia nesta ordem:
 

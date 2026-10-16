@@ -649,6 +649,8 @@ run_ralph() {
     RALPH_SESSION_TIMEOUT="${CASE_SESSION_TIMEOUT:-}" \
     RALPH_MEMORY="${CASE_MEMORY:-0}" \
     RALPH_MEMORY_BIN="${CASE_MEMORY_BIN:-ai-memory}" \
+    RALPH_MEMORY_CMD="${CASE_MEMORY_CMD:-}" \
+    RALPH_ISOLATE="${CASE_ISOLATE:-}" \
     RALPH_HOOK_ISOLATION="${CASE_HOOK_ISOLATION:-1}" \
     RALPH_MEM0="" \
     RALPH_MEM0_USER="${CASE_MEM0_USER:-}" \
@@ -1053,7 +1055,7 @@ if case_enabled local-patches; then
   rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "exit 0 com smoke e memoria ligados"
   assert_contains "$d/out.log" "Smoke test OK" "smoke test rodou no preflight"
-  assert_contains "$d/out.log" "Memoria gravada no ai-memory" "ai-memory gravou a fase"
+  assert_contains "$d/out.log" "Memoria da fase gravada (ai-memory)" "ai-memory gravou a fase"
   assert_eq 3 "$(commits "$d")" "fases commitadas normalmente (1 fixture + 2 fases)"
 
   d=$(new_case local-patches-nosmoke)
@@ -1544,7 +1546,7 @@ if case_enabled memory-fail-open; then
   d=$(new_case memory-write-fails)
   rc=$(CASE_MEMORY=1 CASE_MEMORY_WRITE=1 run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "escrita recusada: exit 0"
-  assert_contains "$d/out.log" "Falha ao gravar no ai-memory" "escrita recusada: aviso por fase"
+  assert_contains "$d/out.log" "Falha ao gravar a memoria da fase (ai-memory" "escrita recusada: aviso por fase"
   assert_eq 3 "$(commits "$d")" "escrita recusada: fases commitadas"
 
   d=$(new_case memory-legacy-env)
@@ -1580,7 +1582,7 @@ if case_enabled hook-isolation-claude; then
 JSON
   rc=$(CASE_SMOKE=1 run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "exit 0"
-  assert_contains "$d/out.log" "Hooks do ai-memory isolados" "preflight anuncia o isolamento"
+  assert_contains "$d/out.log" "Hooks isolados das sessoes do ralph [ai-memory]" "preflight anuncia o isolamento"
   sessions=$(( $(cat "$d/state/impl_calls") + $(cat "$d/state/verify_calls" 2>/dev/null || echo 0) ))
   assert_eq "$sessions" "$(count_lines "$d/state/setting_sources")" "toda sessao (smoke, impl, gate 3) isolada"
   assert_eq "project,local" "$(sort -u "$d/state/setting_sources" 2>/dev/null)" "sem a camada user de settings"
@@ -1623,7 +1625,7 @@ JSON
 JSON
   rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "plugin do ai-memory: exit 0"
-  assert_contains "$d/out.log" "Hooks do ai-memory isolados" "plugin sem hooks no settings tambem isola"
+  assert_contains "$d/out.log" "Hooks isolados das sessoes do ralph [ai-memory]" "plugin sem hooks no settings tambem isola"
   sessions=$(( $(cat "$d/state/impl_calls") + $(cat "$d/state/verify_calls" 2>/dev/null || echo 0) ))
   assert_eq "$sessions" "$(count_lines "$d/state/setting_sources")" "toda sessao roda sem o plugin"
   assert_contains "$d/state/settings_json" '"ai-memory@ai-memory":false' "plugin do ai-memory desligado na sessao"
@@ -1693,7 +1695,7 @@ enabled = true
 TOML
   rc=$(run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "plugin do ai-memory: exit 0"
-  assert_contains "$d/out.log" "Hooks do ai-memory isolados" "plugin sem hooks.json tambem isola"
+  assert_contains "$d/out.log" "Hooks isolados das sessoes do ralph [ai-memory]" "plugin sem hooks.json tambem isola"
   sessions=$(( $(cat "$d/state/impl_calls") + $(cat "$d/state/verify_calls" 2>/dev/null || echo 0) ))
   assert_eq "$sessions" "$(count_lines "$d/state/plugin_overrides")" "toda sessao (impl, gate 3) roda sem o plugin"
   assert_eq 'plugins={"ai-memory@ai-memory"={enabled=false}}' "$(sort -u "$d/state/plugin_overrides" 2>/dev/null)" "desliga so o plugin do ai-memory"
@@ -2661,6 +2663,142 @@ if case_enabled ignored-output; then
   assert_not_contains "$vp" "  deps" "diretorio grande nao entra"
   assert_not_contains "$vp" "  .harness" "telemetria do run nao entra"
   assert_not_contains "$vp" "  cache" "task sobre o .gitignore cita padrao, nao entrega"
+fi
+
+# ---------------------------------------------------------------------------
+# 68. RALPH_ISOLATE: o isolamento vale para qualquer plugin, nao so o ai-memory.
+#     Outro plugin de memoria (ou qualquer um que injete contexto no
+#     SessionStart) sai das sessoes pela mesma lista. A lista substitui o
+#     default, e o nome casa por prefixo literal "<nome>@" no plugin.
+# ---------------------------------------------------------------------------
+if case_enabled hook-isolation-list; then
+  header "68. RALPH_ISOLATE isola outros plugins nas duas engines"
+  d=$(new_case isolate-list-claude)
+  cat > "$d/claude-home/settings.json" <<'JSON'
+{
+  "model": "opus",
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "Bash", "hooks": [ { "type": "command", "command": "rtk hook claude" } ] }
+    ],
+    "SessionStart": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "/bin/ai-memory hook --event session-start --agent claude-code" },
+        { "type": "command", "command": "/opt/outra-memoria/bin/hook session-start" }
+      ] }
+    ]
+  },
+  "enabledPlugins": {
+    "outra-memoria@mkt": true,
+    "outra-memoria-extra@mkt": true,
+    "mktux@mktux-harness": true
+  }
+}
+JSON
+  rc=$(CASE_ISOLATE="ai-memory, outra-memoria" run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "claude, lista com virgula: exit 0"
+  assert_contains "$d/out.log" "Hooks isolados das sessoes do ralph [ai-memory outra-memoria]" "preflight anuncia os nomes normalizados"
+  sessions=$(( $(cat "$d/state/impl_calls") + $(cat "$d/state/verify_calls" 2>/dev/null || echo 0) ))
+  assert_eq "$sessions" "$(count_lines "$d/state/setting_sources")" "toda sessao isolada"
+  assert_not_contains "$d/state/settings_json" "/bin/ai-memory" "hook do ai-memory fora"
+  assert_not_contains "$d/state/settings_json" "/opt/outra-memoria" "hook do outro plugin fora"
+  assert_not_contains "$d/state/settings_json" "SessionStart" "evento que so tinha hooks isolados some"
+  assert_contains "$d/state/settings_json" "rtk hook claude" "hooks fora da lista continuam"
+  assert_contains "$d/state/settings_json" '"outra-memoria@mkt":false' "plugin da lista desligado"
+  assert_contains "$d/state/settings_json" '"outra-memoria-extra@mkt":true' "nome casa com <nome>@, nao com prefixo solto"
+  assert_contains "$d/state/settings_json" '"mktux@mktux-harness":true' "demais plugins continuam ligados"
+
+  # A lista substitui o default: sem ai-memory nela, o ai-memory fica.
+  d=$(new_case isolate-list-replaces)
+  cp "$TMP/isolate-list-claude/claude-home/settings.json" "$d/claude-home/"
+  rc=$(CASE_ISOLATE="nao-instalado" run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "lista sem ai-memory: exit 0"
+  assert_eq 0 "$(count_lines "$d/state/setting_sources")" "lista substitui o default: nada a isolar"
+
+  d=$(new_case isolate-list-codex)
+  cat > "$d/codex-home/hooks.json" <<'JSON'
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "", "hooks": [
+        { "type": "command", "command": "echo meu-hook" },
+        { "type": "command", "command": "/opt/outra-memoria/bin/hook session-start" }
+      ] }
+    ]
+  }
+}
+JSON
+  cat > "$d/codex-home/config.toml" <<'TOML'
+[plugins."ai-memory@ai-memory"]
+enabled = true
+
+[plugins."outra-memoria@mkt"]
+enabled = true
+
+[plugins."outra-memoria-extra@mkt"]
+enabled = true
+
+[plugins."mktux@mktux-harness"]
+enabled = true
+TOML
+  rc=$(CASE_ISOLATE="ai-memory outra-memoria" run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  hooks_json="$d/codex-home/hooks.json"
+  assert_eq 0 "$rc" "codex: exit 0"
+  assert_eq "hooks.state={\"$hooks_json:session_start:0:1\"={enabled=false}}" \
+    "$(sort -u "$d/state/hook_overrides" 2>/dev/null)" "codex: so o handler do outro plugin"
+  assert_eq 'plugins={"ai-memory@ai-memory"={enabled=false},"outra-memoria@mkt"={enabled=false}}' \
+    "$(sort -u "$d/state/plugin_overrides" 2>/dev/null)" "codex: os dois plugins da lista, nao o -extra"
+
+  d=$(new_case isolate-list-empty)
+  cp "$TMP/isolate-list-codex/codex-home/hooks.json" "$TMP/isolate-list-codex/codex-home/config.toml" "$d/codex-home/"
+  rc=$(CASE_ISOLATE=" , " run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "lista so com separadores: exit 0"
+  assert_eq 0 "$(count_lines "$d/state/hook_overrides")" "lista vazia: hooks intocados"
+  assert_eq 0 "$(count_lines "$d/state/plugin_overrides")" "lista vazia: plugins intocados"
+fi
+
+# ---------------------------------------------------------------------------
+# 69. RALPH_MEMORY_CMD: pagina por fase para outro destino que nao o ai-memory.
+#     O comando recebe o caminho da pagina em $1 e o corpo na stdin, depois do
+#     commit. Com ele definido, o ai-memory nao e chamado nem conferido. Falha
+#     do comando e aviso, nao gate.
+# ---------------------------------------------------------------------------
+if case_enabled memory-cmd; then
+  header "69. RALPH_MEMORY_CMD grava a pagina por fase no lugar do ai-memory"
+  d=$(new_case memory-cmd)
+  # shellcheck disable=SC2016 # $1 e $MOCK_STATE expandem no bash -c do ralph
+  sink='mkdir -p "$MOCK_STATE/sink/$(dirname "$1")" && cat > "$MOCK_STATE/sink/$1" && git rev-parse --short HEAD > "$MOCK_STATE/sink/$1.head"'
+  rc=$(CASE_MEMORY=1 CASE_MEMORY_STATUS=1 CASE_MEMORY_CMD="$sink" \
+       run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  assert_contains "$d/out.log" "Memoria por fase: RALPH_MEMORY_CMD" "preflight anuncia o comando"
+  assert_not_contains "$d/out.log" "fora do ar" "servidor do ai-memory nao e conferido"
+  assert_eq 0 "$(cat "$d/state/memory_calls" 2>/dev/null || echo 0)" "ai-memory nao e chamado"
+  assert_contains "$d/out.log" "Memoria da fase gravada (RALPH_MEMORY_CMD): ralph/init/phase-01.md" "fase 1 gravada"
+  assert_contains "$d/state/sink/ralph/init/phase-01.md" "# init — Phase 1: Foundation" "caminho em \$1, corpo na stdin"
+  assert_contains "$d/state/sink/ralph/init/phase-02.md" "cria o arquivo C" "uma pagina por fase"
+  phase1=$(git -C "$d/repo" log --format=%h --grep='feat(phase-1)')
+  assert_eq "$phase1" "$(cat "$d/state/sink/ralph/init/phase-01.md.head" 2>/dev/null)" "roda com a fase ja commitada"
+
+  d=$(new_case memory-cmd-fails)
+  rc=$(CASE_MEMORY=1 CASE_MEMORY_CMD='echo sink-quebrou >&2; exit 3' \
+       run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "comando falhando: exit 0"
+  assert_contains "$d/out.log" "Falha ao gravar a memoria da fase (RALPH_MEMORY_CMD" "falha vira aviso por fase"
+  assert_contains "$d/repo/.phases/logs/phase-01.memory.log" "sink-quebrou" "saida do comando no log da fase"
+  assert_eq 3 "$(commits "$d")" "fases commitadas mesmo com a falha"
+
+  # Comando que ignora a stdin nao vira falha. Corpo maior que o buffer do
+  # pipe: por pipe, o escritor tomaria SIGPIPE e o pipefail reprovaria a
+  # gravacao que deu certo.
+  d=$(new_case memory-cmd-no-stdin)
+  big=$(head -c 200000 < /dev/zero | tr '\0' 'x')
+  printf '%s' "$PHASES_FIXTURE" | awk -v big="$big" '{ print } /^## Phase 1:/ { print ""; print big }' \
+    > "$d/repo/.spec/init/project-phases.md"
+  git -C "$d/repo" commit -qam "chore: fase 1 com plano grande"
+  rc=$(CASE_MEMORY=1 CASE_MEMORY_CMD='true' run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "comando sem ler stdin: exit 0"
+  assert_contains "$d/out.log" "Memoria da fase gravada (RALPH_MEMORY_CMD): ralph/init/phase-01.md" "corpo grande ignorado nao e falha"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -327,15 +327,17 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd   # Codex: $PLUGIN_
 | `RALPH_MAX_TRANSIENT_RETRIES` | re-execucoes de uma sessao que caiu por erro passageiro do provedor (default: 6). Verificador e juiz passam para o modelo de implementacao a partir da 2a |
 | `RALPH_TRANSIENT_BACKOFF` | espera antes da 1a re-execucao, em segundos; dobra a cada uma, ate 600 (default: 30) |
 | `RALPH_SMOKE` | `0` desliga o smoke test da engine |
-| `RALPH_MEMORY` | pagina por fase no ai-memory (`ralph/<feature>/phase-NN.md`, pos-commit, sem LLM); `0` desliga. Sem o binario ou com o servidor fora do ar, desliga sozinha |
+| `RALPH_MEMORY` | pagina por fase (`ralph/<feature>/phase-NN.md`, pos-commit, sem LLM); `0` desliga. No ai-memory, sem o binario ou com o servidor fora do ar, desliga sozinha |
+| `RALPH_MEMORY_CMD` | grava a pagina por fase com um comando seu no lugar do `ai-memory write-page`: roda com `bash -c` na raiz do projeto, caminho da pagina em `$1`, corpo na stdin. Exit != 0 vira aviso. Definido, o ralph nao chama o ai-memory |
 | `RALPH_MEMORY_BIN` | binario do ai-memory (default `ai-memory` no PATH) |
-| `RALPH_HOOK_ISOLATION` | `0` deixa os hooks ou o plugin do ai-memory rodarem nas sessoes do ralph. Default `1`: isola, porque o SessionStart deles consome handoffs e contamina a sessao fria e o gate 3 |
+| `RALPH_ISOLATE` | nomes tirados das sessoes do ralph, separados por espaco ou virgula (default `ai-memory`). Cada nome desliga os handlers de hook cujo comando o contem e o plugin `<nome>@<marketplace>`. A lista substitui o default |
+| `RALPH_HOOK_ISOLATION` | `0` deixa os hooks e plugins de `RALPH_ISOLATE` rodarem nas sessoes do ralph. Default `1`: isola, porque um SessionStart que injeta contexto (o do ai-memory consome handoffs) contamina a sessao fria e o gate 3 |
+| `RALPH_VERBOSE` | `1` espelha a saida da engine na tela |
+| `RALPH_DASHBOARD` | `1` liga o painel embutido |
 
 No codex, toda sessao do ralph (smoke, implementacao, gate 3) roda com
 `-c features.memories=false`: a memoria nativa traria o historico de sessoes
 anteriores para dentro da sessao fria.
-| `RALPH_VERBOSE` | `1` espelha a saida da engine na tela |
-| `RALPH_DASHBOARD` | `1` liga o painel embutido |
 
 ## Onde o run deixa rastro
 
@@ -354,7 +356,7 @@ anteriores para dentro da sessao fria.
     ├── phase-NN.verify-M.last.txt  veredito final do gate 3
     ├── phase-NN.*.transient-K.log  tentativa K que caiu por erro do provedor
     ├── phase-NN.verify-M.no-verdict.log  verificador que terminou sem veredito
-    ├── phase-NN.memory.log     saida do `ai-memory write-page`
+    ├── phase-NN.memory.log     saida da gravacao da pagina (ai-memory ou RALPH_MEMORY_CMD)
     └── archive/<inicio do run>/    logs de um run anterior da fase, movidos
                                     quando ela reabre (ficam os 10 ultimos)
 ```
@@ -398,8 +400,8 @@ sessao.
 | fase reprova em todo ciclo ate esgotar | task com escape condicional (*"faca X, mas se ficar estranho, deixe"*). O verificador escolhe INCOMPLETE na duvida |
 | gate 2 sempre vermelho no primeiro run | ambiente do perfil incompleto. A causa de cada perfil esta em *Perfis de stack* |
 | o run reinicia da fase 1 depois de voce editar o plano | editar o `project-phases.md` invalida o stamp e zera `.progress`. Fase ja commitada como `feat(phase-N): <titulo>` e revalidada contra HEAD sem sessao; `--from N` pula de vez as anteriores |
-| preflight aborta com `Hooks do ai-memory em ... sem jq` | os hooks do ai-memory estao na config de usuario e o isolamento precisa do `jq`. Instale o `jq`; `RALPH_HOOK_ISOLATION=0` so se aceitar que as sessoes consumam handoffs |
-| `Falha ao gravar no ai-memory` | leia `.phases/logs/phase-NN.memory.log`. Servidor caiu no meio do run: `ai-memory status`; no macOS, `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. A fase continua valida |
+| preflight aborta com `Hooks a isolar (...) em ... sem jq` | hooks listados em `RALPH_ISOLATE` estao na config de usuario e o isolamento precisa do `jq`. Instale o `jq`; `RALPH_HOOK_ISOLATION=0` so se aceitar que as sessoes recebam o contexto deles (no ai-memory, consomem handoffs) |
+| `Falha ao gravar a memoria da fase` | leia `.phases/logs/phase-NN.memory.log`. No ai-memory, servidor caiu no meio do run: `ai-memory status`; no macOS, `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. Com `RALPH_MEMORY_CMD`, o log tem a saida do seu comando. A fase continua valida |
 
 Quando uma fase falhar, leia nesta ordem:
 `.phases/logs/phase-NN.verify-M.log` (o que o verificador reprovou; o veredito

@@ -94,8 +94,8 @@
 # protege, e a trava liberada sai no relatorio final. Nao procede: o ciclo de
 # correcao recebe a recusa.
 #
-# Sessoes frias de verdade: os hooks do ai-memory ficam de fora
-# (RALPH_HOOK_ISOLATION) e, no codex, a memoria nativa (features.memories).
+# Sessoes frias de verdade: os hooks e plugins de RALPH_ISOLATE (default:
+# ai-memory) ficam de fora e, no codex, a memoria nativa (features.memories).
 # .phases/ e .harness/ entram no .git/info/exclude.
 #
 # Gates verdes com a arvore limpa => a fase ja estava implementada em HEAD:
@@ -141,12 +141,17 @@
 #   RALPH_TRANSIENT_BACKOFF  espera antes da 1a re-execucao, em segundos; dobra a
 #                            cada tentativa, ate 600 (default: 30)
 #   RALPH_SMOKE              0 desliga o smoke test da engine (default: 1)
-#   RALPH_MEMORY             0 desliga a pagina por fase no ai-memory (default: 1;
-#                            sem o binario ou com o servidor fora do ar, desliga
-#                            sozinha com aviso no preflight)
+#   RALPH_MEMORY             0 desliga a pagina por fase (default: 1; no
+#                            ai-memory, sem o binario ou com o servidor fora do
+#                            ar, desliga sozinha com aviso no preflight)
+#   RALPH_MEMORY_CMD         comando que grava a pagina por fase no lugar do
+#                            ai-memory: roda com bash -c na raiz do projeto,
+#                            caminho da pagina em $1, corpo na stdin
 #   RALPH_MEMORY_BIN         binario do ai-memory (default: ai-memory no PATH)
-#   RALPH_HOOK_ISOLATION     0 deixa os hooks/plugin do ai-memory rodarem nas
-#                            sessoes do ralph (default: 1 — isola quando os
+#   RALPH_ISOLATE            nomes de hooks/plugins tirados das sessoes do ralph,
+#                            separados por espaco ou virgula (default: ai-memory)
+#   RALPH_HOOK_ISOLATION     0 deixa os hooks/plugins de RALPH_ISOLATE rodarem
+#                            nas sessoes do ralph (default: 1 — isola quando os
 #                            detecta na config de usuario do claude ou do codex)
 #   RALPH_VERBOSE            1 espelha a saida da engine na tela (default: 0)
 #   RALPH_DASHBOARD          1 liga o painel embutido (igual a --dashboard)
@@ -184,7 +189,8 @@
 #   - Codex: npm install -g @openai/codex + OPENAI_API_KEY
 #   - Claude: npm install -g @anthropic-ai/claude-code + ANTHROPIC_API_KEY
 #   - Raiz de um repo git, com a arvore de trabalho limpa
-#   - Opcional: ai-memory (pagina por fase) — github.com/akitaonrails/ai-memory
+#   - Opcional: ai-memory (pagina por fase) — github.com/akitaonrails/ai-memory,
+#     ou outro destino via RALPH_MEMORY_CMD
 
 set -euo pipefail
 
@@ -203,7 +209,11 @@ SKIP_SMOKE=0
 if [ "${RALPH_SMOKE:-1}" = "0" ]; then SKIP_SMOKE=1; fi
 MEMORY_ENABLED="${RALPH_MEMORY:-1}"
 MEMORY_BIN="${RALPH_MEMORY_BIN:-ai-memory}"
+MEMORY_CMD="${RALPH_MEMORY_CMD:-}"
 HOOK_ISOLATION="${RALPH_HOOK_ISOLATION:-1}"
+# Nomes isolados, normalizados para "a b c". So separadores = lista vazia.
+ISOLATE_LIST=$(printf '%s' "${RALPH_ISOLATE:-ai-memory}" | tr ',[:space:]' ' ' \
+  | tr -s ' ' | sed 's/^ //; s/ $//')
 VERBOSE=0
 if [ "${RALPH_VERBOSE:-0}" = "1" ]; then VERBOSE=1; fi
 DASHBOARD=0
@@ -487,31 +497,38 @@ resolve_test_cmd() {
   fi
 }
 
-# Tira os hooks do ai-memory das sessoes do ralph. O SessionStart deles faz um
-# GET destrutivo em /handoff e injeta o resultado como contexto: sem isto a fase
-# 1 consome o handoff que o humano deixou, cada sessao recebe o "onde parou" da
+# Tira das sessoes do ralph os hooks e plugins de RALPH_ISOLATE (default:
+# ai-memory). O caso que motivou: o SessionStart do ai-memory faz um GET
+# destrutivo em /handoff e injeta o resultado como contexto. Sem isto a fase 1
+# consome o handoff que o humano deixou, cada sessao recebe o "onde parou" da
 # anterior (quebra a sessao fria e contamina o juiz do gate 3 — o
 # --strict-mcp-config nao ajuda, hook nao e MCP) e o fim do run deixa como
 # handoff a sessao do verificador. O registro do run vai por save_memory.
+#
+# Qualquer plugin que injete contexto no SessionStart quebra a sessao fria do
+# mesmo jeito, de memoria ou nao: por isso o alvo e uma lista de nomes, nao o
+# ai-memory fixo. Cada nome casa com o handler de hook cujo comando o contem e
+# com o plugin <nome>@<marketplace>.
 #
 # Os hooks ficam na config de USUARIO e o ai-memory nao tem variavel de ambiente
 # que os desligue (AI_MEMORY_CAPTURE_OWNER corta a captura, mas o handoff
 # continua sendo entregue), entao a engine recebe a config sem eles:
 #   claude: --setting-sources project,local + --settings com o settings.json do
-#           usuario MENOS os hooks do ai-memory. Sem o --settings a sessao perde
+#           usuario MENOS os hooks isolados. Sem o --settings a sessao perde
 #           model, effortLevel, plugins e os demais hooks do usuario.
 #   codex:  -c hooks.state={"<hooks.json>:<evento>:<grupo>:<handler>"={enabled=false}}
-#           so para os handlers do ai-memory. O -c faz merge em hooks.state: a
+#           so para os handlers isolados. O -c faz merge em hooks.state: a
 #           confianca gravada dos outros hooks (inclusive os do mktux) continua.
 #
-# Desde o 3.0 o ai-memory tambem vem como plugin de marketplace
-# (ai-memory@ai-memory), com os mesmos hooks. Plugin ligado na config de
-# usuario e desligado na sessao: enabledPlugins false no --settings (claude) ou
-# -c plugins={"ai-memory@<marketplace>"={enabled=false}} (codex, merge como o
+# Plugin de marketplace (ex: ai-memory@ai-memory, desde o 3.0) traz os mesmos
+# hooks por outro caminho. Plugin ligado na config de usuario e desligado na
+# sessao: enabledPlugins false no --settings (claude) ou
+# -c plugins={"<nome>@<marketplace>"={enabled=false}} (codex, merge como o
 # hooks.state).
 resolve_hook_isolation() {
   ENGINE_ISOLATION_ARGS=()
   [ "$HOOK_ISOLATION" = "0" ] && return 0
+  [ -n "$ISOLATE_LIST" ] || return 0
 
   if [[ "$ENGINE" == "claude" ]]; then
     isolate_claude_hooks
@@ -520,41 +537,57 @@ resolve_hook_isolation() {
   fi
 }
 
+# Defs jq compartilhadas pelas duas engines; o chamador passa --arg names.
+ISOLATE_JQ_DEFS='
+  def isolated_names: $names | split(" ") | map(select(. != ""));
+  def isolated_hook: (.command // "") as $c
+    | any(isolated_names[]; . as $n | $c | contains($n));
+  def isolated_plugin: .key as $k
+    | any(isolated_names[]; . as $n | $k | startswith($n + "@"));'
+
+# isolate_mentioned <arquivo>: 0 se algum nome de RALPH_ISOLATE aparece nele.
+isolate_mentioned() {
+  local name names
+  read -ra names <<< "$ISOLATE_LIST"
+  for name in "${names[@]}"; do
+    grep -qsF -- "$name" "$1" && return 0
+  done
+  return 1
+}
+
 require_jq_for_isolation() {
   command -v jq &> /dev/null && return 0
-  fail "Hooks do ai-memory em $1, mas sem jq nao da para isola-los das sessoes."
-  fail "Instale o jq, ou rode com RALPH_HOOK_ISOLATION=0 (a fase 1 consome seus handoffs)."
+  fail "Hooks a isolar ($ISOLATE_LIST) em $1, mas sem jq nao da para isola-los das sessoes."
+  fail "Instale o jq, ou rode com RALPH_HOOK_ISOLATION=0 (as sessoes recebem o contexto deles; no ai-memory, seus handoffs)."
   exit 1
 }
 
 isolation_read_failed() {
-  fail "Nao consegui ler $1 para isolar os hooks do ai-memory."
+  fail "Nao consegui ler $1 para isolar os hooks ($ISOLATE_LIST)."
   fail "Corrija o arquivo, ou rode com RALPH_HOOK_ISOLATION=0."
   exit 1
 }
 
 isolate_claude_hooks() {
   local settings_file="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
-  grep -qs 'ai-memory' "$settings_file" || return 0
+  isolate_mentioned "$settings_file" || return 0
   require_jq_for_isolation "$settings_file"
 
   # O nome pode estar fora dos hooks e do plugin (statusLine, env...): so isola
-  # se algum handler de hook e do ai-memory ou se o plugin dele esta ligado.
+  # se algum handler de hook casa com um nome ou se o plugin dele esta ligado.
   local out rc=0
-  out=$(jq -c '
-    def aim_hook: (.command // "") | contains("ai-memory");
-    def aim_plugin: .key | startswith("ai-memory@");
-    if ([(.hooks // {})[][] | .hooks[]? | select(aim_hook)] | length) == 0
-       and ([(.enabledPlugins // {}) | to_entries[] | select(aim_plugin and .value == true)]
+  out=$(jq -c --arg names "$ISOLATE_LIST" "$ISOLATE_JQ_DEFS"'
+    if ([(.hooks // {})[][] | .hooks[]? | select(isolated_hook)] | length) == 0
+       and ([(.enabledPlugins // {}) | to_entries[] | select(isolated_plugin and .value == true)]
             | length) == 0
     then empty
     else
       (if .hooks then .hooks |= (with_entries(.value |= (
-          map(.hooks |= map(select(aim_hook | not)))
+          map(.hooks |= map(select(isolated_hook | not)))
           | map(select(.hooks | length > 0))))
         | with_entries(select(.value | length > 0))) else . end)
       | (if .enabledPlugins then .enabledPlugins |= with_entries(
-          if aim_plugin then .value = false else . end) else . end)
+          if isolated_plugin then .value = false else . end) else . end)
     end' "$settings_file") || rc=$?
   [ "$rc" -eq 0 ] || isolation_read_failed "$settings_file"
   [ -n "$out" ] || return 0
@@ -563,22 +596,22 @@ isolate_claude_hooks() {
   trap 'cleanup_run' EXIT
   printf '%s\n' "$out" > "$ISOLATION_SETTINGS_FILE"
   ENGINE_ISOLATION_ARGS=(--setting-sources project,local --settings "$ISOLATION_SETTINGS_FILE")
-  log "Hooks do ai-memory isolados das sessoes do ralph ($settings_file)"
+  log "Hooks isolados das sessoes do ralph [$ISOLATE_LIST] ($settings_file)"
 }
 
 isolate_codex_hooks() {
   local codex_home="${CODEX_HOME:-$HOME/.codex}"
   local hooks_file="$codex_home/hooks.json" config_file="$codex_home/config.toml"
-  local hooks="" plugins="" rc=0 sources=""
+  local hooks="" plugins="" rc=0 sources="" key name names
 
-  if grep -qs 'ai-memory' "$hooks_file"; then
+  if isolate_mentioned "$hooks_file"; then
     require_jq_for_isolation "$hooks_file"
-    hooks=$(jq -r --arg src "$hooks_file" '
+    hooks=$(jq -r --arg src "$hooks_file" --arg names "$ISOLATE_LIST" "$ISOLATE_JQ_DEFS"'
       [ (.hooks // {}) | to_entries[] | .key as $ev
         | ($ev | gsub("(?<a>[a-z0-9])(?<b>[A-Z])"; "\(.a)_\(.b)") | ascii_downcase) as $event
         | .value | to_entries[] | .key as $group
         | .value.hooks // [] | to_entries[]
-        | select((.value.command // "") | contains("ai-memory"))
+        | select(.value | isolated_hook)
         | "\"\($src):\($event):\($group):\(.key)\"={enabled=false}" ]
       | if length == 0 then "" else "hooks.state={" + join(",") + "}" end' "$hooks_file") || rc=$?
     [ "$rc" -eq 0 ] || isolation_read_failed "$hooks_file"
@@ -587,9 +620,17 @@ isolate_codex_hooks() {
   # O codex grava cada plugin instalado como [plugins."<nome>@<marketplace>"].
   # Desliga o plugin inteiro, nao handler a handler: a chave dos hooks dele
   # depende do layout do hooks.json do plugin, que muda de versao em versao.
-  if grep -qs '^\[plugins\."ai-memory@' "$config_file"; then
-    plugins=$(sed -nE 's/^\[plugins\."(ai-memory@[^"]+)"\][[:space:]]*$/"\1"={enabled=false}/p' \
-      "$config_file" | paste -sd, -)
+  # Comparacao literal de prefixo: nome nenhum vira regex.
+  if [ -f "$config_file" ]; then
+    read -ra names <<< "$ISOLATE_LIST"
+    while IFS= read -r key; do
+      for name in "${names[@]}"; do
+        if [[ "$key" == "$name@"* ]]; then
+          plugins="${plugins:+$plugins,}\"$key\"={enabled=false}"
+          break
+        fi
+      done
+    done < <(sed -nE 's/^\[plugins\."([^"]+)"\][[:space:]]*$/\1/p' "$config_file")
   fi
 
   if [ -n "$hooks" ]; then
@@ -601,7 +642,7 @@ isolate_codex_hooks() {
     sources="${sources:+$sources, }plugin em $config_file"
   fi
   [ -n "$sources" ] || return 0
-  log "Hooks do ai-memory isolados das sessoes do ralph ($sources)"
+  log "Hooks isolados das sessoes do ralph [$ISOLATE_LIST] ($sources)"
 }
 
 cleanup_run() {
@@ -628,15 +669,22 @@ memory_feature_slug() {
   printf '%s\n' "${slug:-projeto}"
 }
 
-# Decide UMA vez se o run grava memoria. Sem o binario e silencioso (quem nao usa
-# ai-memory nao precisa de aviso a cada run); binario presente com o servidor
-# fora do ar e aviso alto — cada fase falharia a gravacao em silencio.
+# Decide UMA vez se o run grava memoria, e onde. RALPH_MEMORY_CMD ganha do
+# ai-memory e nao tem como ser conferido antes: a falha dele aparece por fase.
+# No ai-memory, sem o binario e silencioso (quem nao usa ai-memory nao precisa
+# de aviso a cada run); binario presente com o servidor fora do ar e aviso
+# alto — cada fase falharia a gravacao em silencio.
 resolve_memory() {
   if [ -n "${RALPH_MEM0:-}${RALPH_MEM0_USER:-}" ]; then
     warn "RALPH_MEM0/RALPH_MEM0_USER foram removidas: a memoria agora e o ai-memory (RALPH_MEMORY)."
   fi
 
   [ "$MEMORY_ENABLED" = "1" ] || return 0
+
+  if [ -n "$MEMORY_CMD" ]; then
+    log "Memoria por fase: RALPH_MEMORY_CMD, paginas ralph/$(memory_feature_slug)/phase-NN.md"
+    return 0
+  fi
 
   if ! command -v "$MEMORY_BIN" &> /dev/null; then
     log "ai-memory nao encontrado — pagina por fase desligada (fora do PATH? defina RALPH_MEMORY_BIN)"
@@ -2943,12 +2991,22 @@ record_unlocks() {
 # Execucao de fase
 # ---------------------------------------------------------------------------
 
-# Grava a fase como pagina da wiki do projeto no ai-memory, FORA do run agentico
-# e sem LLM: `ai-memory write-page` e um POST deterministico, sem sessao extra
+# Grava uma pagina de memoria, corpo na stdin: write_memory_page <pagina> <feature>.
+# RALPH_MEMORY_CMD recebe a pagina em $1; sem ele, `ai-memory write-page`.
+write_memory_page() {
+  if [ -n "$MEMORY_CMD" ]; then
+    bash -c "$MEMORY_CMD" ralph-memory "$1"
+  else
+    "$MEMORY_BIN" write-page --path "$1" --tier episodic --tag ralph --tag "$2" --body -
+  fi
+}
+
+# Grava a fase como pagina de memoria, FORA do run agentico e sem LLM: no
+# default, `ai-memory write-page` e um POST deterministico, sem sessao extra
 # nem tool call que o agente pode esquecer de fazer. A pagina e upsert por
 # caminho (ralph/<feature>/phase-NN.md): re-rodar com --from atualiza, nao
-# duplica. Vale para as duas engines — as sessoes rodam isoladas dos hooks do
-# ai-memory (resolve_hook_isolation), entao esta pagina e o registro do run.
+# duplica. Vale para as duas engines — as sessoes rodam isoladas dos hooks de
+# memoria (resolve_hook_isolation), entao esta pagina e o registro do run.
 #
 # Chamada DEPOIS do commit: o SHA e o `git show --stat` sao da fase fechada.
 save_memory() {
@@ -2980,11 +3038,14 @@ $(git show --stat --format= HEAD | tail -n 41)
 
 $(cat "$PHASES_DIR/$phase_file")"
 
-  if printf '%s\n' "$body" | "$MEMORY_BIN" write-page --path "$page" --tier episodic \
-       --tag ralph --tag "$feature" --body - > "$mem_log" 2>&1; then
-    success "Memoria gravada no ai-memory: $page"
+  local sink="ai-memory"
+  [ -z "$MEMORY_CMD" ] || sink="RALPH_MEMORY_CMD"
+  # Here-string, nao pipe: um comando que nao le a stdin nao derruba o printf
+  # com SIGPIPE (com pipefail, a gravacao ok viraria falha).
+  if write_memory_page "$page" "$feature" <<< "$body" > "$mem_log" 2>&1; then
+    success "Memoria da fase gravada ($sink): $page"
   else
-    warn "Falha ao gravar no ai-memory (log: $mem_log) — fase segue valida"
+    warn "Falha ao gravar a memoria da fase ($sink; log: $mem_log) — fase segue valida"
   fi
 }
 
