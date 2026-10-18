@@ -1058,7 +1058,7 @@ state_init() {
       TSK_STATUS[$TSK_N]="pending"
       # (manual) nasce pendente de quem conduz: nenhum gate vai julga-la.
       case "$line" in "(manual)"*) TSK_STATUS[$TSK_N]="manual" ;; esac
-      TSK_TEXT[$TSK_N]="$(printf '%s' "${line:0:200}" | tr '\t' ' ')"
+      TSK_TEXT[$TSK_N]="$(printf '%s' "${line:0:200}" | tr '\t' ' ' | utf8_safe)"
     done < <(phase_task_lines "$file" | sed 's/\*\*//g')
   done < <(manifest_entries)
 
@@ -1409,7 +1409,7 @@ task dificil ou trabalhosa: sem evidencia no codigo, cumpra a task.
 CONTEST
   echo
   echo "Numeracao das tasks desta fase (a mesma do verificador):"
-  phase_task_lines "$phase_file" | awk '{ t = $0; gsub(/\*\*/, "", t); if (length(t) > 120) t = substr(t, 1, 120) "..."; print NR ". " t }'
+  phase_task_lines "$phase_file" | awk '{ t = $0; gsub(/\*\*/, "", t); if (length(t) > 120) t = substr(t, 1, 120) "..."; print NR ". " t }' | utf8_safe
 }
 
 build_impl_prompt() {
@@ -1534,6 +1534,18 @@ phase_task_lines() {
   sed -n 's/^[[:space:]]*- \[[ x]\][[:space:]]*//p' "$PHASES_DIR/$1"
 }
 
+# Descarta sequencias UTF-8 incompletas. O awk do macOS conta bytes: o corte da
+# task no meio de um acento deixava o prompt invalido, o codex recusava o stdin
+# inteiro e a fase parava "sem veredito" com a suite verde. O iconv GNU sai com
+# 1 quando descarta algo; a saida continua certa.
+utf8_safe() {
+  if command -v iconv > /dev/null 2>&1; then
+    iconv -f UTF-8 -t UTF-8 -c 2> /dev/null || true
+  else
+    cat
+  fi
+}
+
 # Task `- [ ] (manual) ...`: procedimento de quem conduz o PR (formatador, build,
 # aparelho real). Tipada no plano, fica fora do gate 3 por construcao: nenhum
 # veredito pedido, nenhum aceito. Deixar o verificador classificar NOT-CODE
@@ -1590,7 +1602,7 @@ VERIFY
       echo "Um veredito por numero, nem mais nem menos."
     fi
     echo
-    printf '%s\n' "$tasks" | awk '{ l = $0; gsub(/\*\*/, "", l) } l ~ /^\(manual\)/ { next } { t = $0; if (length(t) > 300) t = substr(t, 1, 300) "..."; print NR ". " t }'
+    printf '%s\n' "$tasks" | awk '{ l = $0; gsub(/\*\*/, "", l) } l ~ /^\(manual\)/ { next } { t = $0; if (length(t) > 300) t = substr(t, 1, 300) "..."; print NR ". " t }' | utf8_safe
     cat <<'VERIFY'
 
 Para cada uma, confira os acceptance criteria (na fase completa, abaixo) contra

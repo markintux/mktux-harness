@@ -1832,6 +1832,26 @@ if case_enabled verify-prompt; then
   rc=$(run_ralph "$d" already-done --engine claude --test-cmd "$d/test.sh" --max-cycles 1)
   assert_eq 0 "$rc" "ja implementada: exit 0"
   assert_contains "$d/repo/.phases/prompts/phase-01.verify-1.txt" "Nenhum arquivo alterado nesta fase" "sem diff: aponta para HEAD"
+
+  # O awk do macOS conta bytes: a task cortada no meio de um acento deixava o
+  # prompt com UTF-8 invalido, o codex recusava o stdin inteiro e a fase 5 de
+  # product-import parou "sem veredito" com a suite verde.
+  d=$(new_case verify-prompt-utf8)
+  prefix='**Task:** cria o arquivo A '
+  # A implementacao corta em 120 depois de tirar os "**"; o verificador, em 300 sem tirar.
+  mid="$prefix$(printf '%*s' $((123 - ${#prefix})) '' | tr ' ' 'a')é"
+  long="$mid$(printf '%*s' $((299 - $(printf '%s' "$mid" | wc -c))) '' | tr ' ' 'b')é fim"
+  awk -v long="$long" '{ if ($0 == "- [ ] **Task:** cria o arquivo A") print "- [ ] " long; else print }' \
+    <<< "$PHASES_FIXTURE" > "$d/repo/.spec/init/project-phases.md"
+  git -C "$d/repo" commit -qam "chore: task com acento no limite do corte"
+  rc=$(run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "acento no limite do corte: exit 0"
+  for p in phase-01.verify-1.txt phase-01.cycle-1.txt; do
+    utf8=0
+    iconv -f UTF-8 -t UTF-8 "$d/repo/.phases/prompts/$p" > /dev/null 2>&1 || utf8=1
+    assert_eq 0 "$utf8" "$p: UTF-8 valido com a task cortada"
+  done
+  assert_contains "$d/repo/.phases/prompts/phase-01.verify-1.txt" "1. **Task:** cria o arquivo A" "task longa continua numerada"
 fi
 
 # ---------------------------------------------------------------------------
