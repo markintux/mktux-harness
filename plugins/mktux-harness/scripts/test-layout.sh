@@ -319,24 +319,34 @@ preflight() { # preflight <perfil> <projeto> <comando> -> exit code; stderr em $
   echo "$rc"
 }
 
-assert_eq 1 "$(preflight node "$fx/node-check" "npm run check")" "preflight Node: dependencias ausentes -> aborta"
-assert_contains "$TMP/preflight.err" "npm ci" "preflight Node: lockfile -> sugere npm ci"
-mkdir -p "$fx/node-check/node_modules"
-assert_eq 0 "$(preflight node "$fx/node-check" "npm run check")" "preflight Node: dependencias presentes -> passa"
-
-mkdir -p "$TMP/node-bin"
+# node e npm falsos, e um PATH so com o que o preflight chama: o resultado nao
+# depende de a maquina ter Node (o Linux desta suite nao tem; o apt poe npm em
+# /usr/bin, e ai "npm ausente" nunca reprovava).
+mkdir -p "$TMP/node-bin" "$TMP/npm-bin" "$TMP/core-bin"
 cat > "$TMP/node-bin/node" <<'EOF'
 #!/bin/sh
 echo "${NODE_FAKE_MAJOR:-22}"
 EOF
-chmod +x "$TMP/node-bin/node"
-assert_eq 1 "$(PATH="$TMP/node-bin:/usr/bin:/bin" preflight node "$fx/node" "npm test")" \
+printf '#!/bin/sh\nexit 0\n' > "$TMP/npm-bin/npm"
+chmod +x "$TMP/node-bin/node" "$TMP/npm-bin/npm"
+for t in basename sed grep; do ln -s "$(command -v "$t")" "$TMP/core-bin/$t"; done
+NODE_PATH_OK="$TMP/node-bin:$TMP/npm-bin:$TMP/core-bin"
+
+assert_eq 1 "$(PATH="$NODE_PATH_OK" preflight node "$fx/node-check" "npm run check")" "preflight Node: dependencias ausentes -> aborta"
+assert_contains "$TMP/preflight.err" "npm ci" "preflight Node: lockfile -> sugere npm ci"
+mkdir -p "$fx/node-check/node_modules"
+assert_eq 0 "$(PATH="$NODE_PATH_OK" preflight node "$fx/node-check" "npm run check")" "preflight Node: dependencias presentes -> passa"
+
+assert_eq 1 "$(PATH="$TMP/core-bin" preflight node "$fx/node" "npm test")" \
+  "preflight Node: node ausente -> aborta"
+assert_contains "$TMP/preflight.err" "node nao esta no PATH" "preflight Node: explica node ausente"
+assert_eq 1 "$(PATH="$TMP/node-bin:$TMP/core-bin" preflight node "$fx/node" "npm test")" \
   "preflight Node: npm ausente -> aborta"
 assert_contains "$TMP/preflight.err" "npm nao esta no PATH" "preflight Node: explica npm ausente"
-assert_eq 1 "$(PATH="$TMP/node-bin:$PATH" NODE_FAKE_MAJOR=22 preflight node "$fx/node-version" "npm run check")" \
+assert_eq 1 "$(PATH="$NODE_PATH_OK" NODE_FAKE_MAJOR=22 preflight node "$fx/node-version" "npm run check")" \
   "preflight Node: major diferente do .node-version -> aborta"
 assert_contains "$TMP/preflight.err" "pede Node 24" "preflight Node: informa o major exigido"
-assert_eq 0 "$(PATH="$TMP/node-bin:$PATH" NODE_FAKE_MAJOR=24 preflight node "$fx/node-version" "npm run check")" \
+assert_eq 0 "$(PATH="$NODE_PATH_OK" NODE_FAKE_MAJOR=24 preflight node "$fx/node-version" "npm run check")" \
   "preflight Node: major do projeto -> passa"
 
 mkdir -p "$TMP/bin"
@@ -752,15 +762,17 @@ fi
 header "10. log-event enxuto e com rotacao"
 ev="$TMP/events" && mkdir -p "$ev"
 git -C "$ev" init -q
-big=$(head -c 300000 /dev/zero | tr '\0' 'x')
+# A saida grande vai por arquivo (--rawfile), nunca por --arg: no Linux um
+# argumento acima de 128 KiB derruba o exec do jq antes do hook rodar.
+head -c 300000 /dev/zero | tr '\0' 'x' > "$TMP/big-out.txt"
 cmd=$(head -c 5000 /dev/zero | tr '\0' 'y')
-jq -nc --arg out "$big" --arg cmd "$cmd" \
+jq -nc --rawfile out "$TMP/big-out.txt" --arg cmd "$cmd" \
   '{hook_event_name: "PostToolUse", tool_name: "Bash", tool_input: {command: $cmd}, tool_response: {stdout: $out, exit_code: 0}}' \
   | CLAUDE_PROJECT_DIR="$ev" bash "$PLUGIN/hooks/shared/log-event.sh"
 line="$ev/.harness/events.jsonl"
 assert_eq 1 "$(wc -l < "$line" | tr -d ' ')" "um evento, uma linha"
 [ "$(wc -c < "$line")" -lt 3000 ] && ok "linha enxuta ($(wc -c < "$line" | tr -d ' ') bytes)" || bad "linha enxuta ($(wc -c < "$line" | tr -d ' ') bytes)"
-assert_eq "false $(jq -nc --arg out "$big" '{stdout: $out, exit_code: 0} | tojson | length') PostToolUse" "$(jq -r '"\(has("tool_response")) \(.tool_response_chars) \(.hook_event_name)"' "$line")" \
+assert_eq "false $(jq -nc --rawfile out "$TMP/big-out.txt" '{stdout: $out, exit_code: 0} | tojson | length') PostToolUse" "$(jq -r '"\(has("tool_response")) \(.tool_response_chars) \(.hook_event_name)"' "$line")" \
   "saida da ferramenta vira so o tamanho"
 assert_eq "2000 …(+3000 chars)" "$(jq -r '.tool_input.command | "\(.[0:2000] | length) \(.[2000:])"' "$line")" \
   "string longa cortada com a conta do que saiu"
