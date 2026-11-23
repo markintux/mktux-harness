@@ -24,7 +24,14 @@ node_has_script() {
   fi
 
   # Sem Node, ainda resolva um comando para que o preflight possa explicar que
-  # o runtime falta. Limite o fallback ao objeto scripts, em vez do JSON todo.
+  # o runtime falta. O jq le o JSON de verdade; o awk abaixo le linha a linha e,
+  # num package.json de uma linha so, achava a chave em devDependencies.
+  if command -v jq > /dev/null 2>&1; then
+    jq -e --arg s "$script" '(.scripts // {}) | has($s)' package.json > /dev/null 2>&1
+    return
+  fi
+
+  # Ultimo recurso: limite o fallback ao objeto scripts, em vez do JSON todo.
   awk -v wanted="$script" '
     /"scripts"[[:space:]]*:/ { scripts=1 }
     scripts && $0 ~ "\\\"" wanted "\\\"[[:space:]]*:" { found=1 }

@@ -236,13 +236,14 @@ Expected output:
 
 ```
 mktux-harness — instalando comandos:
-  instalado: /Users/you/.local/bin/ralph
-  instalado: /Users/you/.local/bin/ralph-watch
+  instalado: /home/you/.local/bin/ralph
+  instalado: /home/you/.local/bin/ralph-watch
 
 PATH ok. Teste com: ralph --help
 ```
 
-If it warns that `~/.local/bin` is not on your PATH, add to `~/.zshrc`:
+If it warns that `~/.local/bin` is not on your PATH, add to `~/.bashrc`
+(Linux) or `~/.zshrc` (macOS):
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
@@ -253,6 +254,20 @@ Open a new terminal and confirm:
 ```bash
 ralph --help
 ```
+
+### Operating system
+
+Linux is the primary environment (tested on Ubuntu 26.04, with GNU coreutils
+and `mawk`); macOS is still supported. The harness is bash + Python and needs
+`git`, `jq` and `python3` on the PATH:
+
+```bash
+sudo apt install -y git jq python3   # Debian/Ubuntu
+brew install jq                      # macOS (git and python3 ship with the Xcode CLT)
+```
+
+Laravel projects on Sail need Docker with your user in the `docker` group
+(`sudo usermod -aG docker "$USER"`, then log in again).
 
 ### Engine prerequisites
 
@@ -271,7 +286,7 @@ export ANTHROPIC_API_KEY=...
 To point `ralph` at your own clone instead of the installed plugin:
 
 ```bash
-export MKTUX_HARNESS_ROOT=~/Documents/Code/ai/mktux-harness/plugins/mktux-harness
+export MKTUX_HARNESS_ROOT=~/projetos/mktux-harness/plugins/mktux-harness
 ```
 
 The harness's own suites run offline, with mock engines and no tokens spent:
@@ -994,6 +1009,26 @@ Memory is **optional**: without any, ralph runs the same. The default is
 hooks in Claude Code and Codex. Another memory plugin works too; see
 [Another memory plugin](#another-memory-plugin).
 
+### Install (Linux, once per machine)
+
+```bash
+# binary in ~/.local/bin (install.sh checks the release SHA-256) and the
+# server as a systemd --user service on 127.0.0.1:49374, no root
+curl -fsSL https://github.com/akitaonrails/ai-memory/releases/latest/download/install.sh | sh
+ai-memory setup --agent claude-code --agent codex
+
+# hooks resolving the project from the repo root, as on macOS
+ai-memory install-hooks --agent claude-code --project-strategy repo-root --apply
+ai-memory install-hooks --agent codex       --project-strategy repo-root --apply
+```
+
+- **Service:** `systemctl --user status ai-memory.service`; log at
+  `journalctl --user -u ai-memory.service -f`. To keep the server up after you
+  log out (a loop running over ssh, say): `loginctl enable-linger "$USER"`.
+- **Coming from another machine:** memory lives in ai-memory's data dir, not in
+  the repo. `ai-memory backup` on the old machine and `ai-memory restore` here;
+  see [lifecycle-ops](https://github.com/akitaonrails/ai-memory/blob/main/docs/lifecycle-ops.md).
+
 ### Install (macOS, once per machine)
 
 ```bash
@@ -1024,7 +1059,8 @@ ai-memory install-mcp   --client codex       --apply
   `.sha256`, swaps the binary and re-stages the hooks. Before a major version,
   back up first, since migrations are forward-only:
   `ai-memory backup --to ~/ai-memory-backup.tar.gz`. Then restart the server
-  (`launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`)
+  (Linux: `systemctl --user restart ai-memory.service`; macOS:
+  `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`)
   and check `ai-memory doctor`. Re-staging can reorder the groups in
   `~/.codex/hooks.json`; Codex keys hook trust by position, so it asks again
   under `/hooks`.
@@ -1182,7 +1218,7 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | `ralph: command not found` | run installation step 3, and check `~/.local/bin` is on your PATH |
 | `mktux-harness: não encontrei ralph.sh` | the plugin is not installed on that machine, or point `MKTUX_HARNESS_ROOT` at a clone |
 | preflight aborts with `Hooks a isolar (...) em ... sem jq` | hooks listed in `RALPH_ISOLATE` are in your user config and isolating them needs `jq`. Install `jq`. Use `RALPH_HOOK_ISOLATION=0` only if you accept sessions getting their context (with ai-memory, claiming your handoffs) |
-| `Falha ao gravar a memoria da fase` | read `.phases/logs/phase-NN.memory.log`. With ai-memory, if the server died: `ai-memory status` and `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. With `RALPH_MEMORY_CMD`, the log holds your command's output. The phase stays valid |
+| `Falha ao gravar a memoria da fase` | read `.phases/logs/phase-NN.memory.log`. With ai-memory, if the server died: `ai-memory status` and `systemctl --user restart ai-memory.service` (Linux) or `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory` (macOS). With `RALPH_MEMORY_CMD`, the log holds your command's output. The phase stays valid |
 
 When a phase fails, read in this order:
 

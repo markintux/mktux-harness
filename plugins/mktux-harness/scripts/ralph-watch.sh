@@ -38,10 +38,21 @@
 set -uo pipefail
 
 # ${#s} e ${s:0:n} so contam CARACTERES em locale UTF-8; em C eles contam bytes
-# e toda a tabela desalinha (os glifos ocupam 3 bytes).
+# e toda a tabela desalinha (os glifos ocupam 3 bytes). Fora de um terminal
+# (cron, systemd, ssh sem locale) o en_US.UTF-8 pode nao existir: o Ubuntu so
+# gera os locales da instalacao, e o setlocale falho deixa o bash em C. Vale o
+# primeiro candidato que o sistema conhece; C.UTF-8 vem no glibc.
 case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
   *UTF-8*|*utf-8*|*utf8*) : ;;
-  *) export LC_ALL=en_US.UTF-8 ;;
+  *)
+    for _loc in C.UTF-8 en_US.UTF-8; do
+      if [ "$(LC_ALL=$_loc locale charmap 2> /dev/null)" = "UTF-8" ]; then
+        export LC_ALL=$_loc
+        break
+      fi
+    done
+    unset _loc
+    ;;
 esac
 
 REPO="."
@@ -360,7 +371,12 @@ tokens_summary() {
 file_age() {
   local f="$1" mt
   [ -f "$f" ] || { printf '%d' -1; return; }
-  mt=$(stat -f %m "$f" 2> /dev/null || stat -c %Y "$f" 2> /dev/null || echo 0)
+  # GNU primeiro. No Linux, `stat -f %m` le -f como --file-system e imprime o
+  # bloco do filesystem no stdout ANTES de falhar no '%m': o fallback somava a
+  # isso o epoch e a conta abaixo quebrava a cada refresh. No macOS o `stat -c`
+  # falha sem escrever nada no stdout e o BSD assume.
+  mt=$(stat -c %Y "$f" 2> /dev/null || stat -f %m "$f" 2> /dev/null || echo 0)
+  [[ "$mt" =~ ^[0-9]+$ ]] || mt=0
   printf '%d' $(($(date +%s) - mt))
 }
 
