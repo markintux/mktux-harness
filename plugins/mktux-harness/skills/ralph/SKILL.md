@@ -401,7 +401,7 @@ sessao.
 | gate 2 sempre vermelho no primeiro run | ambiente do perfil incompleto. A causa de cada perfil esta em *Perfis de stack* |
 | o run reinicia da fase 1 depois de voce editar o plano | editar o `project-phases.md` invalida o stamp e zera `.progress`. Fase ja commitada como `feat(phase-N): <titulo>` e revalidada contra HEAD sem sessao; `--from N` pula de vez as anteriores |
 | preflight aborta com `Hooks a isolar (...) em ... sem jq` | hooks listados em `RALPH_ISOLATE` estao na config de usuario e o isolamento precisa do `jq`. Instale o `jq`; `RALPH_HOOK_ISOLATION=0` so se aceitar que as sessoes recebam o contexto deles (no ai-memory, consomem handoffs) |
-| `Falha ao gravar a memoria da fase` | leia `.phases/logs/phase-NN.memory.log`. No ai-memory, servidor caiu no meio do run: `ai-memory status`; no macOS, `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. Com `RALPH_MEMORY_CMD`, o log tem a saida do seu comando. A fase continua valida |
+| `Falha ao gravar a memoria da fase` | leia `.phases/logs/phase-NN.memory.log`. No ai-memory, servidor caiu no meio do run: `ai-memory status`; no Linux, `systemctl --user restart ai-memory.service`; no macOS, `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. Com `RALPH_MEMORY_CMD`, o log tem a saida do seu comando. A fase continua valida |
 
 Quando uma fase falhar, leia nesta ordem:
 `.phases/logs/phase-NN.verify-M.log` (o que o verificador reprovou; o veredito

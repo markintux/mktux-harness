@@ -26,7 +26,7 @@ ls -d ~/.codex/plugins/cache/*/mktux*/*/scripts 2>/dev/null
 ```
 
 Confirme com `ralph --help`. Se `~/.local/bin` nao estiver no PATH, o script
-avisa e mostra a linha exata para o `~/.zshrc`.
+avisa e mostra a linha exata para o `~/.bashrc` (Linux) ou `~/.zshrc` (macOS).
 
 Variaveis:
 
