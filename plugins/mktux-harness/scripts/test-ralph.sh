@@ -96,12 +96,20 @@ if [ "${MOCK_HARNESS:-0}" = "1" ]; then
 fi
 
 if [ "$name" = "claude" ]; then
-  # claude -p real le stdin quando nao e TTY: se o ralph nao redirecionar
-  # < /dev/null, o mock engole o stream de quem chamou (ex: manifest do loop).
-  [ -t 0 ] || cat > /dev/null
+  # claude -p real le o prompt da stdin quando nao e TTY. Se o ralph deixasse a
+  # stdin herdada, o mock engoliria o stream de quem chamou (ex: manifest do
+  # loop). Prompt no argv fica registrado: no Linux, acima de 128 KiB, o exec
+  # nem chega a acontecer.
+  [ -t 0 ] || prompt=$(cat)
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      -p) prompt="$2"; shift 2 ;;
+      -p|--print)
+        shift
+        if [[ $# -gt 0 && "$1" != -* ]]; then
+          echo "${#1}" >> "$state/claude_argv_prompt"
+          shift
+        fi
+        ;;
       --allowedTools) verify=1; shift 2 ;;
       --disallowedTools) disallowed="$2"; shift 2 ;;
       --tools) tools="$2"; shift 2 ;;
@@ -667,6 +675,19 @@ run_ralph() {
 
 commits() { git -C "$1/repo" rev-list --count HEAD; }
 
+# plan_with_big_phase <case-dir> <bytes>: commita o plano com um bloco de
+# <bytes> na fase 1. O bloco vai por arquivo, nunca por argv (`awk -v`, `--arg`):
+# no Linux um argumento acima de 128 KiB derruba o exec antes do ralph rodar.
+plan_with_big_phase() {
+  local d="$1" bytes="$2" line
+  head -c "$bytes" < /dev/zero | tr '\0' 'x' > "$d/big-block"
+  while IFS= read -r line; do
+    printf '%s\n' "$line"
+    case "$line" in "## Phase 1:"*) echo; cat "$d/big-block"; echo ;; esac
+  done <<< "$PHASES_FIXTURE" > "$d/repo/.spec/init/project-phases.md"
+  git -C "$d/repo" commit -qam "chore: fase 1 com plano grande"
+}
+
 case_enabled() { [ -z "$ONLY" ] || [ "$ONLY" = "$1" ]; }
 
 # count_lines <arquivo> -> numero de linhas; 0 quando o arquivo nao existe
@@ -1199,6 +1220,22 @@ if case_enabled watch-once; then
   assert_contains "$d/watch.log" "PROGRESSO" "box de progresso"
   assert_contains "$d/watch.log" "TRABALHO ATUAL" "box do trabalho atual"
   assert_contains "$d/watch.log" "Fase / Task" "cabecalho da tabela"
+
+  # Idade do log ativo. No Linux o `stat -f %m` do BSD imprimia o bloco do
+  # filesystem antes de falhar: a conta da idade quebrava, o erro saia no
+  # stderr (por cima do painel) e a idade vazia virava "0s". mtime de 2h atras
+  # por python: `touch -d` do GNU e do BSD nao aceitam a mesma sintaxe.
+  st="$d/repo/.phases/state/run.tsv"
+  printf 'linha do log da engine\n' > "$d/repo/.phases/logs/probe.log"
+  python3 -c 'import os, sys, time; t = time.time() - 7200; os.utime(sys.argv[1], (t, t))' \
+    "$d/repo/.phases/logs/probe.log"
+  { grep -v '^LOG' "$st"; printf 'LOG\timpl\t.phases/logs/probe.log\n'; } > "$st.new" && mv "$st.new" "$st"
+  wrc=0
+  RALPH_WATCH_COLS=120 bash "$WATCH" --once --no-color "$d/repo" > "$d/watch-age.log" 2> "$d/watch-age.err" || wrc=$?
+  assert_eq 0 "$wrc" "painel com log ativo sai 0"
+  assert_contains "$d/watch-age.log" "(há 2h0" "idade do log ativo no box de trabalho"
+  assert_contains "$d/watch-age.log" "probe.log · há 2h0" "idade do log ativo no titulo do box LOG"
+  assert_eq "" "$(cat "$d/watch-age.err")" "painel com log ativo nao escreve no stderr"
 
   # Sem estado nenhum o painel avisa em vez de estourar.
   rm -rf "$d/repo/.phases/state"
@@ -2812,13 +2849,38 @@ if case_enabled memory-cmd; then
   # pipe: por pipe, o escritor tomaria SIGPIPE e o pipefail reprovaria a
   # gravacao que deu certo.
   d=$(new_case memory-cmd-no-stdin)
-  big=$(head -c 200000 < /dev/zero | tr '\0' 'x')
-  printf '%s' "$PHASES_FIXTURE" | awk -v big="$big" '{ print } /^## Phase 1:/ { print ""; print big }' \
-    > "$d/repo/.spec/init/project-phases.md"
-  git -C "$d/repo" commit -qam "chore: fase 1 com plano grande"
+  plan_with_big_phase "$d" 200000
   rc=$(CASE_MEMORY=1 CASE_MEMORY_CMD='true' run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
   assert_eq 0 "$rc" "comando sem ler stdin: exit 0"
   assert_contains "$d/out.log" "Memoria da fase gravada (RALPH_MEMORY_CMD): ralph/init/phase-01.md" "corpo grande ignorado nao e falha"
+fi
+
+# ---------------------------------------------------------------------------
+# 70. Prompt acima de 128 KiB nas duas engines
+# ---------------------------------------------------------------------------
+# O Linux limita CADA argumento do exec a 128 KiB (MAX_ARG_STRLEN). Com o prompt
+# do claude no argv (-p "$(cat ...)"), uma fase grande ou uma causa de gate 2
+# longa saia com "Argument list too long" (exit 126) e a fase caia no gate 0
+# como falha de infra. O macOS aceita ate ~1 MiB e nao reproduz o erro; o
+# registro do mock (claude_argv_prompt) pega a regressao nos dois sistemas.
+if case_enabled big-prompt; then
+  header "70. prompt acima de 128 KiB vai pela stdin"
+  for eng in claude codex; do
+    d=$(new_case "big-prompt-$eng")
+    plan_with_big_phase "$d" 200000
+    rc=$(run_ralph "$d" ok --engine "$eng" --test-cmd "$d/test.sh")
+    assert_eq 0 "$rc" "$eng: fase com plano de 200 KB: exit 0"
+    assert_eq 4 "$(commits "$d")" "$eng: as duas fases commitadas (fixture + plano + 2 fases)"
+    p1=$(ls "$d/repo/.phases/prompts/"phase-01.cycle-1.txt 2> /dev/null || true)
+    [ -n "$p1" ] && [ "$(wc -c < "$p1")" -gt 131072 ] \
+      && ok "$eng: prompt de implementacao passou de 128 KiB" \
+      || bad "$eng: prompt de implementacao passou de 128 KiB"
+    assert_not_contains "$d/out.log" "Argument list too long" "$eng: nenhum exec recusado (en)"
+    assert_not_contains "$d/out.log" "Lista de argumentos muito longa" "$eng: nenhum exec recusado (pt_BR)"
+  done
+  test -f "$TMP/big-prompt-claude/state/claude_argv_prompt" \
+    && bad "claude: prompt pelo argv ($(tr '\n' ' ' < "$TMP/big-prompt-claude/state/claude_argv_prompt")bytes)" \
+    || ok "claude: prompt pela stdin, nunca pelo argv"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

@@ -713,9 +713,10 @@ engine_smoke_test() {
       ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
       --color never --sandbox read-only - 2>&1) || rc=$?
   else
-    out=$(env -u CLAUDECODE claude ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} \
+    # Pela stdin, o mesmo caminho das sessoes do loop (run_engine).
+    out=$(echo 'Responda apenas: OK' | env -u CLAUDECODE claude ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} \
       ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
-      -p 'Responda apenas: OK' --output-format text < /dev/null 2>&1) || rc=$?
+      -p --output-format text 2>&1) || rc=$?
   fi
 
   if [ $rc -ne 0 ]; then
@@ -2079,8 +2080,12 @@ run_engine() {
           -o "$(last_message_file "$log_file")" - || rc=$?
       fi
     else
-      # stdin /dev/null: claude -p le stdin quando nao e TTY. Sem o redirect ele
-      # consome o stream de quem chamou (ex: o manifest do loop de fases).
+      # Prompt pela stdin, como no codex: claude -p le a stdin quando nao e TTY.
+      # Pelo argv (-p "$(cat ...)") o Linux recusa o exec de qualquer argumento
+      # acima de 128 KiB (MAX_ARG_STRLEN, "Argument list too long", exit 126) e
+      # a fase caia no gate 0 como se fosse falha de infra; o macOS aceitava
+      # ate ~1 MiB e escondia isso. O arquivo na stdin tambem impede o claude de
+      # consumir o stream de quem chamou (ex: o manifest do loop de fases).
       if [ "$read_only" -eq 1 ]; then
         # --disallowedTools, nao --allowedTools: sob --dangerously-skip-permissions
         # a allowlist nao restringe nada (tudo ja esta auto-aprovado), e o
@@ -2096,20 +2101,20 @@ run_engine() {
         # ferramenta (verify_session_reads), e o .result vira o veredito.
         local ro_format=text
         [ "$mode" = "verify" ] && ro_format=json
-        run_logged "$log_file" /dev/null env -u CLAUDECODE claude --dangerously-skip-permissions \
+        run_logged "$log_file" "$prompt_file" env -u CLAUDECODE claude --dangerously-skip-permissions \
           --strict-mcp-config --disable-slash-commands \
           --tools "Read,Glob,Grep" \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${model_args[@]+"${model_args[@]}"} \
-          -p "$(cat "$prompt_file")" \
+          -p \
           --disallowedTools "Write,Edit,NotebookEdit,Bash" \
           --output-format "$ro_format" || rc=$?
       else
         # JSON: o exit code do CLI e sinal fraco; o gate 0 le is_error.
-        run_logged "$log_file" /dev/null env -u CLAUDECODE claude --dangerously-skip-permissions \
+        run_logged "$log_file" "$prompt_file" env -u CLAUDECODE claude --dangerously-skip-permissions \
           ${ENGINE_ISOLATION_ARGS[@]+"${ENGINE_ISOLATION_ARGS[@]}"} \
           ${ENGINE_IMPL_ARGS[@]+"${ENGINE_IMPL_ARGS[@]}"} \
-          -p "$(cat "$prompt_file")" \
+          -p \
           --output-format json || rc=$?
       fi
     fi
