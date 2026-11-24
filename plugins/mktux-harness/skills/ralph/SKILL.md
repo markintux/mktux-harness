@@ -382,6 +382,7 @@ sessao.
 
 | Sintoma | Causa provavel |
 |---|---|
+| smoke do codex com `model is not supported when using Codex with a ChatGPT account` | o `--model` nao e um ID que esta versao do codex recebe: nome de exibicao (`GPT-6.2-Sol` no lugar de `gpt-6.2-sol`) ou modelo mais novo que o codex instalado. A `Dica:` logo abaixo, tirada do `models_cache.json` do codex, diz qual dos dois e o ID certo |
 | `Contrato de formato violado` no preflight | heading `## Phase` fora de `## Phase N: <titulo>`. Uma fase com heading torto **some silenciosamente** do run |
 | gate 3 reprova por `cobertura incompleta` ou indice fora da faixa | o verificador ignorou a lista numerada do prompt. Leia o veredito (`verify-M.last.txt`); se repetir, troque `RALPH_VERIFY_MODEL` |
 | `Gate 3 — veredito emitido sem nenhuma leitura de arquivo` | o verificador respondeu sem abrir arquivo; o ralph tenta de novo com o modelo de implementacao. Em toda fase: suba `RALPH_VERIFY_EFFORT` ou troque `RALPH_VERIFY_MODEL` |

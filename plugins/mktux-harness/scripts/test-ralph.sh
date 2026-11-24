@@ -66,6 +66,13 @@ scenario="${MOCK_SCENARIO:-ok}"
 prompt=""
 verify=0
 
+# `codex --version` da dica de modelo: responde antes de contar sessao e sem ler
+# a stdin (o mock leria o terminal de quem roda a suite).
+if [ "$name" = "codex" ] && [ "${1:-}" = "--version" ]; then
+  echo "codex-cli ${MOCK_CODEX_VERSION:-0.172.0}"
+  exit 0
+fi
+
 # O ralph exporta o comando do gate 2 para as sessoes (o test-runner le dali).
 printf '%s\n' "${RALPH_TEST_CMD-<unset>}" >> "$state/session_test_cmd"
 # Fase, ciclo e modo: o log-tokens grava os tres em cada linha do tokens.jsonl.
@@ -150,6 +157,13 @@ else
     esac
   done
   prompt=$(cat)
+fi
+
+# Modelo que o codex nao conhece: o texto real do codex 0.172 com conta ChatGPT.
+if [ "$scenario" = "codex-model-unknown" ] && [ "$name" = "codex" ]; then
+  echo "warning: Model metadata for \`$model\` not found. Defaulting to fallback metadata; this can degrade performance and cause issues."
+  echo "ERROR: The '$model' model is not supported when using Codex with a ChatGPT account."
+  exit 1
 fi
 
 grep -q '^RALPH_VERIFY' <<< "$prompt" && verify=1
@@ -2881,6 +2895,70 @@ if case_enabled big-prompt; then
   test -f "$TMP/big-prompt-claude/state/claude_argv_prompt" \
     && bad "claude: prompt pelo argv ($(tr '\n' ' ' < "$TMP/big-prompt-claude/state/claude_argv_prompt")bytes)" \
     || ok "claude: prompt pela stdin, nunca pelo argv"
+fi
+
+# ---------------------------------------------------------------------------
+# 71. Smoke test do codex sugere o ID do modelo. No Bargi o --model GPT-6.2-Sol
+#     (nome de exibicao) caiu em "not supported when using Codex with a ChatGPT
+#     account", a mesma mensagem de um modelo que a versao do codex nao recebe.
+#     O models_cache.json do CODEX_HOME separa os dois casos.
+# ---------------------------------------------------------------------------
+if case_enabled smoke-model-hint; then
+  header "71. smoke do codex sugere o ID do modelo"
+  CASE_SMOKE=1
+
+  write_models_cache() {
+    cat > "$1/codex-home/models_cache.json" <<'JSON'
+{"client_version":"0.172.0","models":[
+  {"slug":"gpt-6.2-sol","display_name":"GPT-6.2-Sol","visibility":"list"},
+  {"slug":"gpt-6-sol","display_name":"GPT-6-Sol","visibility":"list"},
+  {"slug":"gpt-6-luna","display_name":"GPT-6-Luna","visibility":"list"},
+  {"slug":"gpt-reserve","display_name":"GPT-Reserve","visibility":"hide"}]}
+JSON
+  }
+
+  i=0
+  for asked in GPT-6.2-Sol gpt-sol-6.2 "GPT 6.2 Sol"; do
+    i=$((i + 1))
+    d=$(new_case "smoke-hint-name-$i")
+    write_models_cache "$d"
+    rc=$(run_ralph "$d" codex-model-unknown --engine codex --model "$asked" --test-cmd "$d/test.sh")
+    assert_eq 1 "$rc" "'$asked': smoke reprova"
+    assert_contains "$d/out.log" "o ID do modelo e 'gpt-6.2-sol'" "'$asked': sugere gpt-6.2-sol"
+    assert_contains "$d/out.log" "--model gpt-6.2-sol" "'$asked': mostra a flag certa"
+    assert_not_contains "$d/out.log" "'gpt-6-sol'" "'$asked': nao confunde com gpt-6-sol"
+  done
+
+  d=$(new_case smoke-hint-absent)
+  write_models_cache "$d"
+  rc=$(run_ralph "$d" codex-model-unknown --engine codex --model gpt-7-nova --test-cmd "$d/test.sh")
+  assert_eq 1 "$rc" "modelo fora da lista: smoke reprova"
+  assert_contains "$d/out.log" "'gpt-7-nova' nao esta entre os modelos que esta conta recebe no codex 0.172.0: gpt-6.2-sol, gpt-6-sol, gpt-6-luna." "lista os IDs visiveis"
+  assert_not_contains "$d/out.log" "gpt-reserve" "modelo oculto fica fora da lista"
+  assert_contains "$d/out.log" "atualizando o codex (instalado: 0.172.0)" "aponta a atualizacao do codex"
+
+  # ID exato na lista e mesmo assim recusado: lista buscada por outro codex.
+  d=$(new_case smoke-hint-listed)
+  write_models_cache "$d"
+  sed -i.bak 's/"client_version":"0.172.0"/"client_version":"0.165.0"/' "$d/codex-home/models_cache.json"
+  rc=$(MOCK_CODEX_VERSION=0.172.0 run_ralph "$d" codex-model-unknown --engine codex --model gpt-6.2-sol --test-cmd "$d/test.sh")
+  assert_eq 1 "$rc" "ID listado e recusado: smoke reprova"
+  assert_contains "$d/out.log" "'gpt-6.2-sol' esta na lista de modelos do codex, mas foi recusado" "ID listado: aponta o acesso da conta"
+  assert_contains "$d/out.log" "buscada pelo codex 0.165.0; o instalado e o 0.172.0" "ID listado: mostra as versoes divergentes"
+
+  d=$(new_case smoke-hint-nocache)
+  rc=$(run_ralph "$d" codex-model-unknown --engine codex --model GPT-6.2-Sol --test-cmd "$d/test.sh")
+  assert_eq 1 "$rc" "sem cache: smoke reprova"
+  assert_contains "$d/out.log" "nao o nome de exibicao" "sem cache: dica generica"
+
+  d=$(new_case smoke-hint-ok)
+  write_models_cache "$d"
+  rc=$(run_ralph "$d" ok --engine codex --model gpt-6.2-sol --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "modelo certo: run segue"
+  assert_contains "$d/out.log" "Smoke test OK" "modelo certo: smoke passa"
+  assert_not_contains "$d/out.log" "Dica:" "modelo certo: nenhuma dica"
+
+  CASE_SMOKE=0
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
