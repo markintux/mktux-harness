@@ -88,7 +88,7 @@ Then a `## Sections` table of contents, then 6 sections, exact literal titles, t
 | # | Literal title | Content source |
 |---|---|---|
 | 1 | `## 1. Build, Lint, Test and Coverage` | `digest.commands` as a Command \| Purpose table. Verbatim commands only, prefixed when `digest.execution.wrapper` is present. |
-| 2 | `## 2. Code Style & Project Conventions` | `digest.lint_tools` configs + observed conventions. Each rule cites its enforcement (config path, CI step) when one exists; no enforcement → no citation, never invent one. When `digest.team_rules.present`, open the section with a `Rule file \| Applies to` table built from `digest.team_rules.files` and the line `Regras do time moram em .ai/rules — leia as que casam com o caminho antes de editar.`; do not restate their content. Link `docs/agents/coding_guidelines.md`. |
+| 2 | `## 2. Code Style & Project Conventions` | `digest.lint_tools` configs + observed conventions. Each rule cites its enforcement (config path, CI step) when one exists; no enforcement → no citation, never invent one. When `digest.team_rules.present`, open the section with a `Rule file \| Applies to` table built from `digest.team_rules.files`, then one line per case (the directory is the real one from the digest, never a default): rule files whose `mirrored_in` contains `AGENTS.md` get `As regras de <arquivos> ja estao copiadas neste arquivo — nao abra a origem: ela repete o que esta aqui.`; the others get `Regras do time moram em <diretorio> — leia as que casam com o caminho antes de editar.` Never tell the reader to open a rule file that is mirrored here: agent engines load AGENTS.md whole into every session, so reading the source again only repeats it in context on every later turn. Do not restate their content. Link `docs/agents/coding_guidelines.md`. |
 | 3 | `## 3. Agent Communication & Behavioral Guidelines` | ≤3 behavioral bullets. MUST contain `### Never in this repository` (literal, case-sensitive) with ≥1 bullet grounded in CI/lint-enforced rules, `.ai/rules` entries, or seeded legacy guidance — never invented. |
 | 4 | `## 4. Setup, Troubleshooting and Tips` | Prereqs inline, setup commands in `sh` fences from `digest.readme_excerpt`/manifests, troubleshooting as Symptom \| Check table when known issues are documented. |
 | 5 | `## 5. References` | Doc \| Purpose table: README, CONTRIBUTING, `.ai/rules/index.md` when present, other real in-repo docs. Only files that exist. |
@@ -104,17 +104,29 @@ The third line is **conditional on `digest.team_rules.present`**, exactly like
 section 2 and section 5 are. Never point the reader at a directory this repo
 does not have.
 
-When `digest.team_rules.present` is true:
+When `digest.team_rules.present` is true and at least one rule file does not
+list `CLAUDE.md` in `mirrored_in`:
 
 ```
 <mktux-ai-context>
 Contexto do codigo implementado: [AGENTS.md](AGENTS.md) e `docs/agents/*.md`.
 Gerado por /mktux:ai-context a partir do codigo — descreve o que existe.
-Regras de convencao do time: `.ai/rules/`.
+Regras de convencao do time: `<diretorio real do digest, ex: .ai/rules/>`.
 </mktux-ai-context>
 ```
 
-When it is false, drop the third line entirely — unless the digest reports a
+When every rule file has `CLAUDE.md` in `mirrored_in`, the third line says the
+rules are already in this file instead of pointing at the directory:
+
+```
+<mktux-ai-context>
+Contexto do codigo implementado: [AGENTS.md](AGENTS.md) e `docs/agents/*.md`.
+Gerado por /mktux:ai-context a partir do codigo — descreve o que existe.
+Regras de convencao do time: ja copiadas neste arquivo (fonte: `<diretorio>`).
+</mktux-ai-context>
+```
+
+When `digest.team_rules.present` is false, drop the third line entirely — unless the digest reports a
 real convention file elsewhere, in which case cite that path verbatim instead:
 
 ```

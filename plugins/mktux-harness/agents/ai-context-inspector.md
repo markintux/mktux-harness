@@ -38,7 +38,10 @@ Inspect in this order, shallow-first. Prefer manifests and config over reading s
    conventional config files, `.editorconfig` and pre-commit hooks.
 6. **Tests** — runner, assertion and mock libraries, coverage tool, test
    directory layout, and whether factories/fixtures/seeders exist.
-7. **Team rules** — `.ai/rules/` when present: list `index.md` plus every rule file path and the globs each one claims. This is the team's recorded convention layer; the writers cite it instead of duplicating it.
+7. **Team rules** — `.ai/rules/` (or `.ai/guidelines/`) when present: list `index.md` plus every rule file path and the globs each one claims. This is the team's recorded convention layer; the writers cite it instead of duplicating it.
+   For each rule file, also record `mirrored_in`: the root instruction files (`AGENTS.md`, `CLAUDE.md`) that already carry its content verbatim — some framework tools copy the rule files into a block of those files. Measure it, never guess: with `<f>` the instruction file and `<r>` the rule file, run
+   `awk 'NR==FNR { gsub(/^[ \t]+|[ \t]+$/, ""); if (length($0) >= 4) have[$0] = 1; next } { gsub(/^[ \t]+|[ \t]+$/, ""); if (length($0) < 4) next; t++; if ($0 in have) h++ } END { print (t ? int(100 * h / t) : 0) }' <f> <r>`
+   and list `<f>` when it prints 90 or more. A rule file that is only cited (a link, a path) scores far below that.
 8. **Dependencies** — runtime deps and dev deps from the manifest, with the apparent purpose of each non-obvious one.
 9. **Entrypoints** — HTTP routes, CLI binaries, queue workers, scheduled jobs,
    container definitions. Follow `profile_guidance` when present.
@@ -92,7 +95,7 @@ commands:
   coverage: <verbatim | none found>
 lint_tools: [{name, config}]
 tests: {runner, assertions, mocks, coverage_tool, dirs, factories: <bool>}
-team_rules: {present: <bool>, index: <path | absent>, files: [{path, globs}]}
+team_rules: {present: <bool>, index: <path | absent>, files: [{path, globs, mirrored_in: [<AGENTS.md | CLAUDE.md>]}]}
 dependencies:
   runtime: [{name, version, purpose}]
   dev: [{name, version, purpose}]

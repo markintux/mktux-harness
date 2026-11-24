@@ -38,7 +38,7 @@ changed_tests=$(
 # Nenhum teste mudou -> só Pint, encerra (comportamento idêntico ao do Claude).
 [[ -z "$changed_tests" ]] && emit_continue
 
-# Monta filtro com os nomes-base dos testes alterados (PlanTest, MoneyTest, ...).
+# Monta filtro com os nomes-base dos testes alterados (FooTest, BarTest, ...).
 filters=()
 while IFS= read -r f; do
   [[ -z "$f" ]] && continue

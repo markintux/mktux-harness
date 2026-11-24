@@ -194,6 +194,34 @@
 
 set -euo pipefail
 
+# O run inteiro roda de uma copia do plugin tirada agora. Num run real o Codex
+# atualizou o plugin no meio do run (release publicado enquanto rodava) e apagou
+# a pasta da versao de onde o ralph tinha subido: o bash seguiu com o ralph.sh
+# aberto, mas telemetria, painel, libs e test-runner apontavam para arquivos que
+# nao existiam mais. A copia vale ate o fim do run e sai no EXIT. Os hooks que a
+# engine roda nas sessoes continuam vindo da instalacao dela: ver
+# session_hook_failures. RALPH_SNAPSHOT=0 roda direto da instalacao.
+if [ "${RALPH_SNAPSHOT:-1}" != "0" ] && [ -z "${RALPH_SNAPSHOT_DIR:-}" ]; then
+  snapshot_src="$(cd "$(dirname "$0")/.." 2> /dev/null && pwd)"
+  [ -f "$snapshot_src/scripts/lib/profile.sh" ] || snapshot_src="${MKTUX_HARNESS_ROOT:-}"
+  if [ -n "$snapshot_src" ] && [ -f "$snapshot_src/scripts/lib/profile.sh" ] \
+    && RALPH_SNAPSHOT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ralph-plugin.XXXXXX" 2> /dev/null); then
+    # $0 por cima: uma copia avulsa do ralph.sh (RALPH_BIN nos testes) roda ela
+    # mesma, com as libs do plugin.
+    if cp -R "$snapshot_src/." "$RALPH_SNAPSHOT_DIR/" 2> /dev/null \
+      && cp "$0" "$RALPH_SNAPSHOT_DIR/scripts/ralph.sh" 2> /dev/null; then
+      RALPH_HARNESS_REVISION="${RALPH_HARNESS_REVISION:-$(git -C "$snapshot_src" rev-parse HEAD 2> /dev/null || true)}"
+      export RALPH_HARNESS_REVISION RALPH_SNAPSHOT_DIR MKTUX_HARNESS_ROOT="$RALPH_SNAPSHOT_DIR"
+      exec bash "$RALPH_SNAPSHOT_DIR/scripts/ralph.sh" "$@"
+    fi
+    rm -rf "$RALPH_SNAPSHOT_DIR"
+  fi
+  unset RALPH_SNAPSHOT_DIR snapshot_src
+fi
+# Antes de qualquer trap do run (que chamam cleanup_run): saida cedo, no
+# preflight, tambem apaga a copia.
+trap '[ -z "${RALPH_SNAPSHOT_DIR:-}" ] || rm -rf "$RALPH_SNAPSHOT_DIR"' EXIT
+
 ENGINE="codex"
 INPUT_FILE=""
 FROM_PHASE=0
@@ -290,6 +318,25 @@ ENGINE_ISOLATION_ARGS=()
 # Settings filtrado do claude. Arquivo 0600 fora do repo, nao argv: o
 # settings.json pode ter segredo no bloco env, e argv aparece no `ps`.
 ISOLATION_SETTINGS_FILE=""
+# Instrucoes do projeto que a engine ja poe no contexto de cada sessao, uma por
+# linha: "<caminho>\t<via>" (via vazia = carregado pela engine; senao, o arquivo
+# carregado que contem este). Montado por resolve_instruction_docs.
+LOADED_DOCS=""
+# Instrucao que existe mas a engine nao carrega sozinha (o prompt manda ler uma vez).
+UNLOADED_DOCS=""
+# Bloqueios do reread-guard nas sessoes deste run (uma linha por bloqueio).
+REREAD_LOG=""
+REREAD_GUARD="${RALPH_REREAD_GUARD:-1}"
+REREAD_BLOCKED_TOTAL=0
+REREAD_SLIPPED_TOTAL=0
+# Hooks que a engine nao conseguiu rodar (codex: "hook: <evento> Failed").
+HOOK_FAIL_SESSIONS=0
+HOOK_FAIL_TOTAL=0
+# Gate 2 reaproveitado quando o codigo e o mesmo da ultima suite verde.
+GATE2_REUSE="${RALPH_GATE2_REUSE:-1}"
+GATE2_GREEN_SIG=""
+GATE2_GREEN_LOG=""
+GATE2_REUSED=0
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -334,7 +381,8 @@ telemetry_start() {
   local plugin_root version revision
   plugin_root=$(cd "$(dirname "$RALPH_LIB")/../.." && pwd)
   version=$(jq -r '.version' "$plugin_root/.codex-plugin/plugin.json")
-  revision=$(git -C "$plugin_root" rev-parse HEAD 2> /dev/null || true)
+  # Na copia do run nao ha git: a revisao vem da instalacao, gravada antes do exec.
+  revision=${RALPH_HARNESS_REVISION:-$(git -C "$plugin_root" rev-parse HEAD 2> /dev/null || true)}
   export RALPH_HARNESS_REVISION="$revision"
   if ! python3 "$TELEMETRY_BIN" init --run-id "$RALPH_RUN_ID" --root "$PWD" \
     --plan "$INPUT_FILE" --version "$version" --engine "$ENGINE" \
@@ -344,7 +392,7 @@ telemetry_start() {
     unset RALPH_RUN_ID
     return 0
   fi
-  trap 'cleanup_run; telemetry_finish' EXIT
+  trap 'cleanup_run; telemetry_finish; cleanup_snapshot' EXIT
 }
 
 format_duration() {
@@ -593,7 +641,7 @@ isolate_claude_hooks() {
   [ -n "$out" ] || return 0
 
   ISOLATION_SETTINGS_FILE=$(mktemp "${TMPDIR:-/tmp}/ralph-settings.XXXXXX")
-  trap 'cleanup_run' EXIT
+  trap 'cleanup_run; cleanup_snapshot' EXIT
   printf '%s\n' "$out" > "$ISOLATION_SETTINGS_FILE"
   ENGINE_ISOLATION_ARGS=(--setting-sources project,local --settings "$ISOLATION_SETTINGS_FILE")
   log "Hooks isolados das sessoes do ralph [$ISOLATE_LIST] ($settings_file)"
@@ -649,6 +697,12 @@ cleanup_run() {
   [ -z "$ISOLATION_SETTINGS_FILE" ] || rm -f "$ISOLATION_SETTINGS_FILE"
 }
 
+# Por ultimo em todo trap de EXIT: telemetry_finish ainda roda o telemetry.py
+# de dentro da copia.
+cleanup_snapshot() {
+  [ -z "${RALPH_SNAPSHOT_DIR:-}" ] || rm -rf "$RALPH_SNAPSHOT_DIR"
+}
+
 # Memoria nativa do codex (features.memories): com ela ligada na config do
 # usuario, cada sessao do ralph le o historico de sessoes anteriores — num run
 # real, as fases e o verificador faziam grep num MEMORY.md de 60 KB com o
@@ -658,6 +712,163 @@ cleanup_run() {
 resolve_engine_memory() {
   [[ "$ENGINE" == "codex" ]] || return 0
   ENGINE_ISOLATION_ARGS+=(-c features.memories=false)
+}
+
+# doc_containment <candidato> <arquivo>...: % das linhas do candidato (sem
+# espaco nas pontas, linhas com 4+ caracteres) que aparecem nos arquivos. Ha
+# ferramenta de framework que copia o diretorio de diretrizes do time inteiro
+# para dentro do AGENTS.md e do CLAUDE.md: num run real, 244 de 244 linhas. Arquivos so citados ficam abaixo de 45%.
+doc_containment() {
+  awk -v cand="$1" '
+    function norm(s) { gsub(/^[ \t]+|[ \t]+$/, "", s); gsub(/[ \t]+/, " ", s); return s }
+    FILENAME != cand { l = norm($0); if (length(l) >= 4) have[l] = 1; next }
+    { l = norm($0); if (length(l) < 4) next; total++; if (l in have) hit++ }
+    END { print (total ? int(100 * hit / total) : 0) }' "${@:2}" "$1" 2> /dev/null || echo 0
+}
+
+# Releitura de instrucoes: o problema que mais voltou. Primeiro foram os docs do
+# plano (o prompt mandava ler; resolvido com o recorte da fase). Depois, num run real,
+# o preambulo dizia "LEIA AGENTS.md", e 19 de 26 sessoes de implementacao leram o
+# arquivo que o Codex ja injeta em toda sessao, mais o .ai/guidelines que o
+# proprio AGENTS.md manda ler e que ja esta copiado dentro dele: 11,5% do input
+# do run. Aqui o ralph descobre o que ja esta no contexto, o prompt diz isso, o
+# reread-guard bloqueia a leitura e o relatorio conta o que escapou.
+#
+# O que cada engine carrega sozinha:
+#   codex:  AGENTS.md da raiz, ate project_doc_max_bytes (default 32 KiB). Acima
+#           disso o Codex corta o fim em silencio, so com um aviso no log; o
+#           ralph passa -c project_doc_max_bytes com folga para as sessoes dele.
+#   claude: CLAUDE.md (raiz e .claude/) e os arquivos que ele importa com @caminho.
+# Mais os arquivos citados neles cujo conteudo ja esta la dentro (doc_containment
+# >= 90%).
+resolve_instruction_docs() {
+  local loaded=() f imp base size budget need cand pct via other
+  LOADED_DOCS=""
+  UNLOADED_DOCS=""
+
+  if [[ "$ENGINE" == "codex" ]]; then
+    if [ -f AGENTS.md ]; then
+      loaded+=(AGENTS.md)
+      size=$(wc -c < AGENTS.md | tr -d ' ')
+      [ -f "${CODEX_HOME:-$HOME/.codex}/AGENTS.md" ] \
+        && size=$((size + $(wc -c < "${CODEX_HOME:-$HOME/.codex}/AGENTS.md" | tr -d ' ')))
+      budget=$(sed -nE 's/^project_doc_max_bytes[[:space:]]*=[[:space:]]*([0-9]+).*/\1/p' \
+        "${CODEX_HOME:-$HOME/.codex}/config.toml" 2> /dev/null | head -n 1 || true)
+      budget=${budget:-32768}
+      if [ "$size" -gt "$budget" ]; then
+        need=$(( (size / 4096 + 2) * 4096 ))
+        ENGINE_ISOLATION_ARGS+=(-c "project_doc_max_bytes=$need")
+        warn "AGENTS.md com $((size / 1024)) KiB passa do limite do Codex ($((budget / 1024)) KiB, project_doc_max_bytes): o Codex cortaria o fim do arquivo. As sessoes do ralph recebem project_doc_max_bytes=$need."
+      fi
+    fi
+    other=CLAUDE.md
+  else
+    for f in CLAUDE.md .claude/CLAUDE.md; do
+      [ -f "$f" ] && loaded+=("$f")
+    done
+    for f in ${loaded[@]+"${loaded[@]}"}; do
+      base=$(dirname "$f")
+      while IFS= read -r imp; do
+        [ -n "$imp" ] || continue
+        imp="$base/$imp"
+        imp="${imp#./}"
+        [ -f "$imp" ] && [[ " ${loaded[*]} " != *" $imp "* ]] && loaded+=("$imp")
+      done < <(grep -oE '(^|[[:space:]])@[A-Za-z0-9_][A-Za-z0-9_./-]*' "$f" 2> /dev/null \
+        | sed -E 's/^[[:space:]]*@//' | sort -u)
+    done
+    other=AGENTS.md
+  fi
+
+  for f in ${loaded[@]+"${loaded[@]}"}; do
+    LOADED_DOCS="${LOADED_DOCS}${f}"$'\t'$'\n'
+  done
+
+  if [ ${#loaded[@]} -eq 0 ]; then
+    [ -f "$other" ] && UNLOADED_DOCS="$other"
+    return 0
+  fi
+
+  via=$(printf '%s, ' "${loaded[@]}"); via="${via%, }"
+  while IFS= read -r cand; do
+    cand="${cand#./}"
+    [ -f "$cand" ] && [ -s "$cand" ] || continue
+    [[ " ${loaded[*]} " == *" $cand "* ]] && continue
+    case "$LOADED_DOCS" in *"$cand"$'\t'*) continue ;; esac
+    pct=$(doc_containment "$cand" "${loaded[@]}")
+    [ "$pct" -ge 90 ] && LOADED_DOCS="${LOADED_DOCS}${cand}"$'\t'"${via}"$'\n'
+  done < <({ grep -ohE '[A-Za-z0-9_.][A-Za-z0-9_./-]*\.(md|mdc|txt)' "${loaded[@]}" 2> /dev/null; echo "$other"; } \
+    | awk '!seen[$0]++' | head -n 200)
+
+  local summary
+  summary=$(printf '%s' "$LOADED_DOCS" | awk -F'\t' 'NF { printf "%s%s%s", (n++ ? ", " : ""), $1, ($2 != "" ? " (espelhado em " $2 ")" : "") }')
+  log "Instrucoes ja no contexto das sessoes ($ENGINE): $summary"
+
+  if [ "$REREAD_GUARD" != "0" ]; then
+    # Em logs/, nao em state/: o split de um plano novo apaga o state/.
+    mkdir -p "$LOG_DIR"
+    REREAD_LOG="$PWD/$LOG_DIR/reread-blocked.tsv"
+    : > "$REREAD_LOG"
+    export RALPH_LOADED_DOCS="$LOADED_DOCS" RALPH_REREAD_LOG="$REREAD_LOG"
+  fi
+}
+
+# Bloqueios do reread-guard gravados depois da linha <n> do log (uma sessao).
+reread_blocked_since() {
+  [ -n "$REREAD_LOG" ] && [ -f "$REREAD_LOG" ] || { echo 0; return; }
+  awk -v from="$1" 'NR > from' "$REREAD_LOG" | wc -l | tr -d ' '
+}
+
+reread_log_lines() {
+  [ -n "$REREAD_LOG" ] && [ -f "$REREAD_LOG" ] || { echo 0; return; }
+  wc -l < "$REREAD_LOG" | tr -d ' '
+}
+
+# Releituras que passaram (codex): blocos `exec` do transcript que leram um
+# arquivo de LOADED_DOCS e rodaram (" succeeded in"). Pega o que o reread-guard
+# nao viu — hook que falhou, comando que ele nao reconhece.
+session_slipped_rereads() {
+  local log_file="$1" alts
+  [[ "$ENGINE" == "codex" ]] && [ -n "$LOADED_DOCS" ] && [ -f "$log_file" ] || { echo 0; return; }
+  alts=$(printf '%s' "$LOADED_DOCS" | awk -F'\t' 'NF { p = $1; gsub(/[.]/, "[.]", p); printf "%s%s", (n++ ? "|" : ""), p }')
+  awk '
+    $0 == "exec" { inblk = 1; cmd = ""; next }
+    inblk && /^ (succeeded|exited|failed|declined)/ { if ($1 == "succeeded") print cmd; inblk = 0; next }
+    inblk { cmd = cmd " ; " $0 }' "$log_file" \
+    | grep -cE "(^|[;&|[:space:]'\"])(cat|bat|batcat|less|more|head|tail|nl|sed -n)[^;&|]*[[:space:]'\"/](\./)?(${alts})([[:space:]'\";]|$)" || true
+}
+
+# Hooks que o Codex nao rodou nesta sessao. O codex exec imprime "hook: <evento>
+# Failed" e nada mais: num run real, depois que o plugin foi atualizado no meio do
+# run, os hooks do mktux falharam em toda sessao das fases 7 a 11 (sem os
+# guards e o formatador do perfil, sem tokens) e ninguem viu.
+session_hook_failures() {
+  [[ "$ENGINE" == "codex" ]] && [ -f "$1" ] || { echo 0; return; }
+  grep -cE '^hook: [A-Za-z]+ Failed$' "$1" || true
+}
+
+hook_failure_advice() {
+  echo "      Sem os hooks do mktux a sessao roda sem a trava de releitura, sem os hooks do perfil (guards, formatador) e sem o registro de tokens."
+  echo "      Causa comum: o plugin foi atualizado ou instalado (o codex invalida a confianca nos hooks a cada versao, mesmo sem mudanca neles) e o codex exec nao roda hook sem confianca."
+  echo "      Abra o codex no terminal, revise e aprove os hooks (\"Trust all and continue\"), e rode de novo."
+}
+
+# Depois de cada sessao: hooks que falharam e releituras (bloqueadas e que passaram).
+session_health() {
+  local log_file="$1" mode="$2" reread_from="$3" n blocked slipped
+  n=$(session_hook_failures "$log_file")
+  if [ "$n" -gt 0 ]; then
+    HOOK_FAIL_SESSIONS=$((HOOK_FAIL_SESSIONS + 1))
+    HOOK_FAIL_TOTAL=$((HOOK_FAIL_TOTAL + n))
+    warn "$n hook(s) falharam nesta sessao ($mode): o $ENGINE nao os executou."
+    [ "$HOOK_FAIL_SESSIONS" -eq 1 ] && hook_failure_advice | while IFS= read -r l; do warn "$l"; done
+  fi
+  blocked=$(reread_blocked_since "$reread_from")
+  slipped=$(session_slipped_rereads "$log_file")
+  REREAD_BLOCKED_TOTAL=$((REREAD_BLOCKED_TOTAL + blocked))
+  REREAD_SLIPPED_TOTAL=$((REREAD_SLIPPED_TOTAL + slipped))
+  [ "$blocked" -gt 0 ] && log "reread-guard: $blocked releitura(s) de instrucoes bloqueada(s) nesta sessao ($mode)"
+  [ "$slipped" -gt 0 ] && warn "$slipped releitura(s) de instrucoes que ja estavam no contexto passaram nesta sessao ($mode)"
+  return 0
 }
 
 # Pagina da wiki por fase: ralph/<feature>/phase-NN.md. A feature e a pasta do
@@ -780,6 +991,17 @@ engine_smoke_test() {
     fail "$ENGINE nao aceitou o effort '$EFFORT' e cairia no default. Saida:"
     echo "$out" | grep -i 'unknown --effort value' | head -n 1 | sed 's/^/    /'
     exit 1
+  fi
+
+  # O smoke roda com os mesmos hooks das fases. Hook que falha aqui falha em
+  # toda sessao do run; melhor saber antes da fase 1 do que pelo relatorio.
+  local hook_fails=0
+  if [[ "$ENGINE" == "codex" ]]; then
+    hook_fails=$(printf '%s\n' "$out" | grep -cE '^hook: [A-Za-z]+ Failed$' || true)
+  fi
+  if [ "$hook_fails" -gt 0 ]; then
+    warn "Smoke test: $hook_fails hook(s) falharam na sessao de teste — o codex nao os executou, e vai ser assim em toda fase."
+    hook_failure_advice | while IFS= read -r l; do warn "$l"; done
   fi
 
   success "Smoke test OK"
@@ -941,6 +1163,7 @@ preflight_checks() {
   resolve_test_cmd
   resolve_hook_isolation
   resolve_engine_memory
+  resolve_instruction_docs
   resolve_memory
 
   success "Pre-checks OK (engine: $ENGINE, input: $INPUT_FILE, model: ${MODEL:-default}, effort: ${EFFORT:-default})"
@@ -1317,7 +1540,7 @@ start_dashboard() {
   bash "$watch" --embedded "$PWD" < /dev/tty > /dev/tty 2>&1 &
   DASHBOARD_PID=$!
 
-  trap 'stop_dashboard; cleanup_run; telemetry_finish' EXIT
+  trap 'stop_dashboard; cleanup_run; telemetry_finish; cleanup_snapshot' EXIT
   trap 'stop_dashboard; exit 130' INT
   trap 'stop_dashboard; exit 143' TERM
 }
@@ -1339,18 +1562,39 @@ stop_dashboard() {
 context_preamble() {
   local phase_file="$1"
 
+  # "LEIA AGENTS.md" aqui fez 19 de 26 sessoes de um run real relerem o arquivo que o
+  # Codex ja injeta (ver resolve_instruction_docs). O preambulo diz o que JA
+  # esta no contexto e so manda ler o que a engine nao carrega.
+  echo "## Descubra a stack e as convencoes antes de escrever codigo"
+  echo "Este projeto pode ser de qualquer linguagem ou framework. NAO assuma nenhuma"
+  echo "stack."
+  if [ -n "$LOADED_DOCS" ]; then
+    echo
+    echo "As instrucoes do projeto JA ESTAO no seu contexto: a engine carregou no"
+    echo "inicio desta sessao, inteiros,"
+    printf '%s' "$LOADED_DOCS" | awk -F'\t' 'NF { print "  - " $1 ($2 != "" ? " (o conteudo esta copiado dentro de " $2 ")" : "") }'
+    echo "Nao abra esses arquivos (cat, sed, head, Read): reler repete o mesmo texto em"
+    if [ "$REREAD_GUARD" != "0" ]; then
+      echo "todos os turnos seguintes, e o ralph bloqueia a leitura. Vale mesmo quando"
+    else
+      echo "todos os turnos seguintes. Vale mesmo quando"
+    fi
+    echo "um deles manda ler outro desta lista. Para achar um trecho especifico, use"
+    echo "rg -n '<termo>' <arquivo>."
+  elif [ -n "$UNLOADED_DOCS" ]; then
+    echo
+    echo "Leia uma vez, no inicio, $UNLOADED_DOCS — convencoes, comandos e regras do"
+    echo "projeto. A engine nao carrega esse arquivo sozinha."
+  fi
+  echo
+  echo "Parta tambem do contexto desta fase, recortado abaixo pelo ralph, se houver."
+  echo "Use os comandos de build, teste e execucao definidos pelas instrucoes do"
+  echo "projeto e pelo tooling ja presente no repositorio."
   cat <<'PREAMBLE'
-## Descubra a stack e as convencoes antes de escrever codigo
-Este projeto pode ser de qualquer linguagem ou framework. NAO assuma nenhuma
-stack. Antes de comecar, LEIA:
-1. AGENTS.md ou CLAUDE.md — convencoes, comandos e regras do projeto
-2. o contexto desta fase, recortado abaixo pelo ralph, se houver
-Use os comandos de build, teste e execucao definidos por esses documentos e pelo
-tooling ja presente no repositorio.
 
 Esta sessao e fria de proposito: nao consulte memoria de sessoes anteriores
 (ferramentas ou servidores de memoria, memorias da engine). O estado do projeto
-e o codigo, o git e os documentos acima.
+e o codigo, o git e as instrucoes acima.
 PREAMBLE
 
   # Os documentos de contexto vivem ao lado do plano de fases (ex:
@@ -1413,7 +1657,7 @@ PREAMBLE
     echo "- Se delegar testes, passe so raiz do projeto, comando resolvido, arquivo ou"
     echo "  filtro, notas do perfil e formato do resumo. Preserve as instrucoes locais"
     echo "  obrigatorias. Se a engine permitir, nao herde a conversa inteira nessa tarefa."
-    # Stdin fechado: nao ha humano na sessao. Na fase 9 de pub-email-alerts um
+    # Stdin fechado: nao ha humano na sessao. Num run real um
     # teste pediu confirmacao, o runner via container anexou o TTY da sessao, e
     # a sessao esperou a resposta por 2h.
     echo "- Rode testes e comandos do projeto com stdin fechado (\`<comando> < /dev/null\`)"
@@ -1428,7 +1672,7 @@ PREAMBLE
 }
 
 # Saida para plano errado. A sessao que achava a task errada nao tinha como
-# dizer. Na fase 9 de pub-email-alerts ela confirmou no config do CSS que o
+# dizer. Num run real ela confirmou no config do CSS que o
 # token pedido nao existia e usou o certo; o verificador, que le so a fase,
 # reprovou; o ciclo de correcao obedeceu e a borda saiu branca. Na fase 4 o
 # mesmo caminho tirou um filtro correto. Na fase 3 a sessao explicou o impasse
@@ -1544,7 +1788,7 @@ INTRO
       printf '%s\n' "$PHASE_CONTESTS"
     fi
     # Sem isto a sessao de correcao respeita a trava de novo, nao escreve nada e
-    # a fase para: foi assim nas fases 6 e 10 de social-proof, as duas com a
+    # a fase para: foi assim em duas fases de um run real, as duas com a
     # contestacao correta.
     if [ -n "$PHASE_UNLOCKS" ]; then
       echo
@@ -1738,12 +1982,12 @@ VERIFY
       echo "Caminhos que as tasks citam e o .gitignore exclui (fora do diff):"
       printf '%s\n' "$ignored" | head -n 40 | sed 's/^/  /'
     fi
-    # "Leia cada arquivo uma vez" sozinho virou "leia um trecho e pare": na fase 2
-    # de superadmin-email-digest o verificador leu as linhas 1-260 de um arquivo
+    # "Leia cada arquivo uma vez" sozinho virou "leia um trecho e pare": num run
+    # real o verificador leu as linhas 1-260 de um arquivo
     # de 397 e reprovou os metodos que ficavam depois, "o arquivo lido termina
     # antes desses metodos". A fase travou com o codigo certo.
-    # Lockfile proibido sem excecao travou a fase 1 de social-engine: a task
-    # "o lockfile lista typescript, vitest e @types/node" virou INCOMPLETE "nao
+    # Lockfile proibido sem excecao travou uma fase num run real: a task
+    # "o lockfile lista as dependencias novas" virou INCOMPLETE "nao
     # foi possivel confirmar porque o lockfile nao foi lido", no verificador e no
     # recurso, com a suite verde. Busca pelo nome confirma sem ler o arquivo.
     cat <<'VERIFY'
@@ -1888,7 +2132,7 @@ detect_usage_limit() {
 
 # Erro passageiro do provedor: modelo sem capacidade, sobrecarga, 5xx, stream
 # cortado. Nao e limite de uso (nao ha reset a esperar) nem falha da fase: a
-# mesma sessao, minutos depois, passa. Na fase 1 de superadmin-email-digest o
+# mesma sessao, minutos depois, passa. Num run real o
 # verificador morreu em 4s com "Selected model is at capacity", o ralph leu a
 # falta de veredito como fase incompleta, abriu uma correcao sem nada a corrigir
 # e o memo do gate 3 guardou a reprovacao — fase travada com o codigo certo.
@@ -1994,7 +2238,7 @@ kill_tree() {
 # run_logged <log_file> <stdin_file> <cmd...>
 #
 # A engine roda em background sob um watchdog: passou de RALPH_SESSION_TIMEOUT,
-# o ralph encerra a arvore inteira e devolve 124. Na fase 9 de pub-email-alerts
+# o ralph encerra a arvore inteira e devolve 124. Num run real
 # um teste pediu confirmacao a um TTY que nunca respondeu, e a sessao ficou 2h
 # "aguardando o codigo de saida" ate alguem matar na mao.
 #
@@ -2107,6 +2351,8 @@ run_engine() {
     fi
 
     state_log "$mode" "$log_file"
+    local reread_from
+    reread_from=$(reread_log_lines)
 
     # A mensagem final de uma tentativa anterior nao pode passar por esta: e
     # dela que saem o veredito do gate 3 e o sinal de sessao que falhou.
@@ -2167,6 +2413,8 @@ run_engine() {
           --output-format json || rc=$?
       fi
     fi
+
+    session_health "$log_file" "$mode" "$reread_from"
 
     # Stop pode nao disparar em erro, timeout ou Ctrl-C. Registre a tentativa e
     # reconcilie o transcript disponivel antes de decidir retry ou abort.
@@ -2281,7 +2529,7 @@ gate0_engine_finished() {
 }
 
 # Caminhos que as tasks julgadas da fase citam entre crases e que o .gitignore
-# exclui. Na fase 13 de social-engine toda a entrega ficava em projects/bargi/,
+# exclui. Num run real toda a entrega de uma fase ficava num diretorio ignorado,
 # privado por regra da feature: o ralph disse duas vezes "a sessao nao escreveu
 # nada" com os arquivos criados, e a trava de ciclo sem mudanca pararia a fase
 # se o gate 3 reprovasse. So o citado entra: o resto da arvore ignorada e cache
@@ -2373,13 +2621,51 @@ gate1_session_wrote() {
   [ "$(tree_signature)" != "$sig_before" ]
 }
 
+# Assinatura do CONTEUDO da arvore (rastreados + nao-rastreados fora do
+# .gitignore, mais os ignorados que a fase cita), sem olhar o commit: o mesmo
+# codigo antes e depois do commit_phase da a mesma assinatura. Usa uma copia do
+# index (o stat cache evita re-hashear o repo inteiro); o index real nao muda.
+content_signature() {
+  local idx real tree=""
+  real=$(git rev-parse --git-path index 2> /dev/null) || return 0
+  mkdir -p "$STATE_DIR"
+  idx="$STATE_DIR/gate2-signature.index"
+  rm -f "$idx"
+  [ -f "$real" ] && cp "$real" "$idx" 2> /dev/null
+  if GIT_INDEX_FILE="$idx" git add -A > /dev/null 2>&1; then
+    tree=$(GIT_INDEX_FILE="$idx" git write-tree 2> /dev/null || true)
+  fi
+  rm -f "$idx"
+  [ -n "$tree" ] || return 0
+  printf '%s-%s\n' "$tree" "$(cited_ignored_signature 2> /dev/null | sha256sum | cut -c1-16)"
+}
+
 # Gate 2 — a suite do projeto passa, rodada PELO ralph (fora da sessao do agente)?
+#
+# Codigo identico ao da ultima suite verde deste run: reaproveita o resultado.
+# Num run real o gate 2 levou 96 dos 167 minutos do run (15 execucoes de ~6,4 min),
+# e na fase 11 rodou duas vezes sobre o mesmo codigo da fase 10 — a fase so de
+# verificacao contra HEAD e, depois, a correcao que nao escreveu nada.
+# RALPH_GATE2_REUSE=0 roda sempre.
 gate2_tests_pass() {
-  local test_log="$1"
+  local test_log="$1" sig=""
 
   if [ -z "$TEST_CMD" ]; then
     state_gate 2 skip
     return 0
+  fi
+
+  if [ "$GATE2_REUSE" != "0" ]; then
+    sig=$(content_signature)
+    if [ -n "$sig" ] && [ "$sig" = "$GATE2_GREEN_SIG" ]; then
+      GATE2_REUSED=$((GATE2_REUSED + 1))
+      printf 'Gate 2 reaproveitado: o codigo (assinatura %s) e identico ao da suite verde em %s\n' \
+        "$sig" "$GATE2_GREEN_LOG" > "$test_log"
+      success "Gate 2 — suite verde reaproveitada: codigo identico ao da ultima execucao ($GATE2_GREEN_LOG)"
+      state_log test "$GATE2_GREEN_LOG"
+      state_gate 2 pass
+      return 0
+    fi
   fi
 
   log "Gate 2 — rodando a suite do projeto: $TEST_CMD"
@@ -2398,6 +2684,11 @@ gate2_tests_pass() {
 
   success "Gate 2 — suite verde"
   state_gate 2 pass
+  # A assinatura de ANTES da suite: e o codigo que ela testou.
+  if [ -n "$sig" ]; then
+    GATE2_GREEN_SIG="$sig"
+    GATE2_GREEN_LOG="$test_log"
+  fi
   return 0
 }
 
@@ -2570,7 +2861,7 @@ gate3_verify_uncached() {
   fi
 
   # Veredito sem leitura nao julgou o codigo: o prompt so traz a fase, e todo
-  # DONE ou INCOMPLETE sai de algum arquivo. Na fase 1 de social-engine,
+  # DONE ou INCOMPLETE sai de algum arquivo. Num run real, numa fase
   # revalidada contra HEAD, o verificador rodou zero comandos e devolveu 11/11
   # DONE em 8s. NOT-CODE nao depende de leitura e passa.
   local reads
@@ -2718,8 +3009,8 @@ phase_is_operational() {
 # Fase so de verificacao: `**Check-only phase**` numa linha sozinha. E a fase de
 # fechamento que so afirma estado ("nenhuma migration a mais", "o sw.js nao cita
 # storage"): o codigo ja esta em HEAD e nao ha o que escrever. O ralph roda os
-# gates 2 e 3 contra HEAD antes de abrir sessao; so abre se reprovar. Na fase 8
-# de pub-icon-and-logo a sessao nao escreveu nada e custou 2,4M tokens de input,
+# gates 2 e 3 contra HEAD antes de abrir sessao; so abre se reprovar. Num run
+# real a sessao nao escreveu nada e custou 2,4M tokens de input,
 # subagents inclusive, para chegar no mesmo veredito.
 #
 # Declarado, nao inferido, pelo mesmo motivo da fase operacional. Diferente
@@ -2731,7 +3022,7 @@ phase_is_check_only() {
 # Fase ja commitada neste branch com a mensagem que o ralph usa. Acontece quando
 # o run e retomado depois de uma fase fechada fora dele — alguem commitou a mao o
 # trabalho de uma fase que travou —, ou quando o plano mudou e zerou o
-# .progress. Na fase 3 de pub-email-alerts o commit manual estava la e o ralph
+# .progress. Num run real o commit manual estava la e o ralph
 # abriu uma sessao inteira para ela nao escrever nada. Os gates contra HEAD
 # decidem: a mensagem do commit so escolhe o caminho, nunca aprova.
 # Sem -q: com pipefail, o grep que sai no primeiro match mata o git log com
@@ -2745,7 +3036,7 @@ phase_committed() {
 # sem apagar uma reprovacao para os mesmos bytes que exige recurso.
 # Sem memo, um ciclo de correcao que nao escreveu nada paga OUTRA sessao de
 # verificacao para julgar exatamente os mesmos bytes — e verificador fraco muda
-# de ideia. Na fase 12 de admin-area-users tres NOT-CODE viraram dois DONE e um
+# de ideia. Num run real tres NOT-CODE viraram dois DONE e um
 # INCOMPLETE sem uma linha mudar, e esse INCOMPLETE reprovou a fase.
 gate3_independent_verify() {
   local phase_file="$1" cycle="$2" session_wrote="$3"
@@ -2817,7 +3108,7 @@ gate3_independent_verify() {
 # Recurso: a correcao leu a reprovacao, conferiu o codigo e nao mudou nada. Sao
 # duas leituras discordando, e o memo ficava com a do verificador barato. Se a
 # correcao trouxer nova contestacao, o recurso recebe essa evidencia atualizada.
-# Na fase 2 de superadmin-email-digest ele leu as linhas 1-260 de um arquivo de 397,
+# Num run real ele leu as linhas 1-260 de um arquivo de 397,
 # reprovou os metodos que nao chegou a ler, a correcao confirmou que estavam la,
 # e a fase travou com o codigo certo. O mesmo codigo vai uma vez por fase a uma
 # sessao verificadora nova, com o modelo e o effort de implementacao. Reprovar
@@ -2864,8 +3155,8 @@ gate3_appeal() {
 # Juiz das contestacoes com o gate 2 vermelho. O gate 3 so roda com a suite
 # verde, entao a contestacao "deixar a suite verde exige mexer no que a fase
 # protege" nunca era julgada: o ciclo de correcao respeitava a trava, nao
-# escrevia nada e o ralph encerrava o run com a fase travada. Nas fases 6 e 10 de
-# social-proof as duas contestacoes estavam certas, e a correcao feita a mao de
+# escrevia nada e o ralph encerrava o run com a fase travada. Em duas fases de
+# um run real as duas contestacoes estavam certas, e a correcao feita a mao de
 # manha foi exatamente a que a sessao descreveu.
 #
 # Mesma engine, modelo e travas de leitura do verificador. Cada contestacao e
@@ -3170,8 +3461,8 @@ archive_phase_logs() {
 
 # Logs de fase que o plano atual nao tem: phase-12.* de uma feature anterior com
 # mais fases. archive_phase_logs so move os da fase que vai rodar, entao estes
-# ficavam ao lado do run novo para sempre — no relevio, os de 11/09 junto com os
-# de 24/09.
+# ficavam ao lado do run novo para sempre — num projeto real, os de um run antigo junto com
+# os do novo.
 archive_orphan_logs() {
   local f base known dest moved=0
   known=$(manifest_entries | cut -d'|' -f1 | sed 's/\.md$//')
@@ -3203,7 +3494,7 @@ report_phase_failure() {
   fail "Phase $phase_num: $phase_title — FALHOU $how ($(format_duration "$phase_duration"))"
   fail "Ultima causa ($LAST_GATE):"
   printf '%s\n' "$GATE_CAUSE" | head -n 20 | sed 's/^/    /'
-  # A sessao costuma saber por que travou — na fase 3 de pub-email-alerts ela
+  # A sessao costuma saber por que travou — num run real ela
   # disse que o comando que quebrava era proibido nesta fase — e so o log
   # guardava isso.
   local final_msg=""
@@ -3419,7 +3710,7 @@ run_phase() {
       # Sessao que nao escreveu porque JULGOU e sessao que nao escreveu porque
       # MORREU pedem investigacao em lugares opostos. Culpar as tasks quando a
       # engine caiu por cota manda quem le auditar um plano que estava correto —
-      # foi o que aconteceu na fase 9 de admin-area-users.
+      # foi o que aconteceu num run real.
       case "$LAST_GATE" in
         "gate 0"*)
           GATE_CAUSE="A engine nao concluiu e nao deixou veredito nenhum. Isso quase sempre e falha de infra — cota estourada, rede, crash ou timeout — e nao um problema das tasks. Leia o fim do log da engine abaixo ANTES de suspeitar do plano."$'\n'"$GATE_CAUSE"
@@ -3594,6 +3885,28 @@ main() {
     echo ""
     warn "Travas liberadas pelo juiz (${#UNLOCK_NOTES[@]}) — a sessao mexeu no que a fase protegia; confira antes do PR:"
     for phase in "${UNLOCK_NOTES[@]}"; do printf '    %s\n' "$phase"; done
+  fi
+
+  if [ "$HOOK_FAIL_TOTAL" -gt 0 ]; then
+    echo ""
+    warn "Hooks que o $ENGINE nao executou: $HOOK_FAIL_TOTAL, em $HOOK_FAIL_SESSIONS sessao(oes) deste run."
+    hook_failure_advice | while IFS= read -r l; do warn "$l"; done
+  fi
+
+  if [ "$REREAD_BLOCKED_TOTAL" -gt 0 ] || [ "$REREAD_SLIPPED_TOTAL" -gt 0 ]; then
+    echo ""
+    log "Releitura de instrucoes que ja estavam no contexto: $REREAD_BLOCKED_TOTAL bloqueada(s) pelo reread-guard, $REREAD_SLIPPED_TOTAL passaram."
+    if [ -n "$REREAD_LOG" ] && [ -s "$REREAD_LOG" ]; then
+      awk -F'\t' '{ n[$4]++ } END { for (f in n) printf "    %dx %s\n", n[f], f }' "$REREAD_LOG" | sort -rn
+    fi
+    if [ "$REREAD_SLIPPED_TOTAL" -gt 0 ]; then
+      warn "    As que passaram estao nos transcripts das sessoes (blocos exec com cat/sed/head do arquivo)."
+    fi
+  fi
+
+  if [ "$GATE2_REUSED" -gt 0 ]; then
+    echo ""
+    log "Gate 2 reaproveitado $GATE2_REUSED vez(es): codigo identico ao da ultima suite verde."
   fi
 
   echo ""

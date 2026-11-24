@@ -222,6 +222,49 @@ SAIL
     HOOK_CALLS="$calls" CLAUDE_PROJECT_DIR="$hook_proj" \
     bash "$DISPATCH" claude-post-edit > /dev/null 2>&1 || true
   assert_contains "$calls" "bin pint" "sem modo: hook claude continua executando"
+
+  # reread-guard: so com RALPH_LOADED_DOCS (sessao do ralph). Bloqueia leitura
+  # de instrucao que a engine ja carregou; nao mexe em busca, edicao nem escrita.
+  rr="$TMP/reread-proj"
+  mkdir -p "$rr/.ai/guidelines" "$rr/src/sub" && git -C "$rr" init -q
+  touch "$rr/AGENTS.md" "$rr/.ai/guidelines/app.md" "$rr/src/a.txt"
+  RR_DOCS=$'AGENTS.md\t\n.ai/guidelines/app.md\tAGENTS.md'
+  rr_bash() { # rr_bash <cmd> [cwd] -> exit code do dispatcher (pre-bash)
+    RALPH_LOADED_DOCS="$RR_DOCS" RALPH_REREAD_LOG="$TMP/reread.log" RALPH_PHASE_NUM=3 \
+      RALPH_PHASE_ATTEMPT=2 RALPH_SESSION_MODE=impl pre_bash "${2:-$rr}" "$1"
+  }
+  rr_read() { # rr_read <file_path> [cwd] -> exit code do hook Read do Claude
+    local rc=0
+    jq -nc --arg f "$1" --arg cwd "${2:-$rr}" '{cwd: $cwd, tool_input: {file_path: $f}}' \
+      | RALPH_LOADED_DOCS="$RR_DOCS" bash "$PLUGIN/hooks/shared/reread-guard.sh" 2> "$TMP/guard.err" || rc=$?
+    echo "$rc"
+  }
+  : > "$TMP/reread.log"
+  assert_eq 0 "$(pre_bash "$rr" 'cat AGENTS.md')" "reread: fora do ralph -> passa"
+  assert_eq 2 "$(rr_bash 'cat AGENTS.md')" "reread: cat AGENTS.md -> bloqueia"
+  assert_contains "$TMP/guard.err" "BLOQUEADO pelo reread-guard do ralph: AGENTS.md ja esta no seu contexto" "reread: diz o motivo"
+  assert_contains "$TMP/guard.err" "rg -n '<termo>' AGENTS.md" "reread: sugere a busca pontual"
+  assert_eq 2 "$(rr_bash 'sed -n 1,120p ./AGENTS.md')" "reread: sed -n com ./ -> bloqueia"
+  assert_eq 2 "$(rr_bash "head -80 $rr/AGENTS.md")" "reread: caminho absoluto -> bloqueia"
+  assert_eq 2 "$(rr_bash $'git status --short\ncat src/a.txt .ai/guidelines/app.md')" "reread: leitura no meio de um script de varias linhas -> bloqueia"
+  assert_contains "$TMP/guard.err" "espelhado dentro de AGENTS.md" "reread: arquivo espelhado cita onde ja esta"
+  assert_eq 2 "$(rr_bash "bash -lc 'cat AGENTS.md'")" "reread: dentro de bash -lc -> bloqueia"
+  assert_eq 2 "$(rr_bash 'cat ../../AGENTS.md' "$rr/src/sub")" "reread: relativo a subpasta -> bloqueia"
+  assert_eq 0 "$(rr_bash 'cat ../../AGENTS.md.bak' "$rr/src/sub")" "reread: outro arquivo -> passa"
+  assert_eq 0 "$(rr_bash 'rg -n "regra" AGENTS.md')" "reread: rg pontual -> passa"
+  assert_eq 0 "$(rr_bash 'grep -n "cat AGENTS.md" notes.txt')" "reread: nome entre aspas de outro comando -> passa"
+  assert_eq 0 "$(rr_bash "sed -i 's/a/b/' AGENTS.md")" "reread: sed -i edita -> passa"
+  assert_eq 0 "$(rr_bash 'cat > AGENTS.md <<EOF')" "reread: escrita com cat > -> passa"
+  assert_eq 0 "$(rr_bash 'cat src/a.txt')" "reread: arquivo do codigo -> passa"
+  assert_eq "3	2	impl	AGENTS.md" "$(head -n 1 "$TMP/reread.log")" "reread: bloqueio vai para o log do ralph"
+  assert_eq 6 "$(wc -l < "$TMP/reread.log" | tr -d ' ')" "reread: um registro por bloqueio"
+  arr=$(jq -nc --arg cwd "$rr" '{cwd: $cwd, tool_input: {command: ["bash", "-lc", "cat AGENTS.md"]}}' \
+    | RALPH_LOADED_DOCS="$RR_DOCS" bash "$DISPATCH" pre-bash > /dev/null 2>&1; echo $?)
+  assert_eq 2 "$arr" "reread: comando em array (bash -lc) -> bloqueia"
+  assert_eq 2 "$(rr_read "$rr/AGENTS.md")" "reread: Read do Claude no AGENTS.md -> bloqueia"
+  assert_eq 2 "$(rr_read ".ai/guidelines/app.md")" "reread: Read relativo do arquivo espelhado -> bloqueia"
+  assert_eq 0 "$(rr_read "$rr/src/a.txt")" "reread: Read de codigo -> passa"
+  assert_eq 2 "$(RALPH_LOADED_DOCS="$RR_DOCS" pre_bash "$sail_proj" 'php artisan migrate')" "reread: guard do perfil segue depois da trava"
 fi
 
 # ---------------------------------------------------------------------------
@@ -701,7 +744,7 @@ assert_contains "$consistency" "assertions negativas nos testes" \
   "ausencia de uso ativo preserva assertions negativas"
 assert_contains "$consistency" "mesmo comando" \
   "fechamento nao repete o comando do Gate 2"
-assert_contains "$consistency" "weekly_monthly" \
+assert_contains "$consistency" "v1_summary" \
   "exemplo sintetico cobre a remocao de payload"
 assert_contains "$consistency" "## Phase 5: Remove deprecated digest fields" \
   "exemplo sintetico inclui fase de remocao com teste negativo"
@@ -784,6 +827,82 @@ assert_eq "Stop" "$(jq -r '.hook_event_name' "$line")" "arquivo novo so com o ev
 
 echo 'nao e json' | CLAUDE_PROJECT_DIR="$ev" bash "$PLUGIN/hooks/shared/log-event.sh"
 assert_eq 0 "$?" "payload invalido nao derruba o hook"
+
+# ---------------------------------------------------------------------------
+# 11. Sem nome de projeto real
+# ---------------------------------------------------------------------------
+header "11. sem nome de projeto real"
+# O repo e publico. Incidente de run real entra como "num run real", sem nome de
+# projeto, slug de feature, classe ou caminho copiado: em tres meses o repo
+# juntou 59 mencoes assim, nomes de SaaS no ar e uma classe com a assinatura
+# real, metade escrita por sessoes de agente. A lista de termos fica FORA do
+# que vai para o GitHub (.git/info/private-terms, um por linha, # comenta),
+# senao ela mesma publicaria os nomes. Sem a lista (clone novo, CI), pula.
+
+# private_term_leaks <raiz do repo> <lista> [base] -> "arquivo:linha:texto" de
+# cada termo nos arquivos do repo (rastreados e novos fora do .gitignore),
+# "commit <sha>: texto" nas mensagens depois de <base> (default: o upstream da
+# branch, senao origin/main) e "branch: <nome>". Palavra inteira, sem caixa:
+# "acme" pega "Acme's" e "projects/acme/", nao "acmeville".
+private_term_leaks() {
+  local root="$1" list="$2" base="${3:-}" pf sha branch
+  pf=$(mktemp)
+  grep -vE '^[[:space:]]*(#|$)' "$list" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' > "$pf"
+  if [ -s "$pf" ]; then
+    (cd "$root" && { git ls-files -z; git ls-files -z --others --exclude-standard; } \
+      | xargs -0 grep -snIiwF -f "$pf" -- 2> /dev/null) || true
+    if [ -z "$base" ]; then
+      base=$(git -C "$root" rev-parse --abbrev-ref --symbolic-full-name '@{upstream}' 2> /dev/null) || base=origin/main
+    fi
+    if git -C "$root" rev-parse -q --verify "$base^{commit}" > /dev/null 2>&1; then
+      while IFS= read -r sha; do
+        git -C "$root" log -1 --format=%B "$sha" | grep -iwF -f "$pf" | sed "s/^/commit ${sha:0:7}: /"
+      done < <(git -C "$root" rev-list "$base..HEAD")
+    fi
+    branch=$(git -C "$root" branch --show-current 2> /dev/null)
+    [ -n "$branch" ] && printf '%s\n' "$branch" | tr '/_' '  ' | grep -qiwF -f "$pf" && echo "branch: $branch"
+  fi
+  rm -f "$pf"
+  return 0
+}
+
+# O proprio guard, numa fixture: arquivo rastreado, arquivo novo, ignorado
+# (fica de fora), palavra maior que o termo (fica de fora), commit e branch.
+px="$TMP/private-terms-fixture"
+mkdir -p "$px" && git -C "$px" init -q && git -C "$px" config user.email t@t && git -C "$px" config user.name t
+printf 'ignorado.md\n' > "$px/.gitignore"
+printf 'linha neutra\nnum run real\n' > "$px/a.md"
+git -C "$px" add -A && git -C "$px" commit -qm "chore: base"
+pbase=$(git -C "$px" rev-parse HEAD)
+git -C "$px" checkout -qb feat/acme-export
+printf 'linha neutra\nrodou no Acme ontem\nacmeville e outra coisa\n' > "$px/a.md"
+git -C "$px" add -A && git -C "$px" commit -qm "fix: medido no projeto widgetco"
+printf 'um WIDGETCO aqui\n' > "$px/novo.md"
+printf 'acme no ignorado\n' > "$px/ignorado.md"
+printf '# comentario\n\nacme\n  widgetco  \n' > "$TMP/private-terms"
+assert_eq "a.md:2:rodou no Acme ontem
+novo.md:1:um WIDGETCO aqui
+commit $(git -C "$px" rev-parse --short=7 HEAD): fix: medido no projeto widgetco
+branch: feat/acme-export" "$(private_term_leaks "$px" "$TMP/private-terms" "$pbase")" \
+  "guard: acha termo em arquivo, arquivo novo, commit e branch; poupa ignorado e palavra maior"
+
+repo_root=$(git -C "$PLUGIN" rev-parse --show-toplevel 2> /dev/null || true)
+if [ -z "$repo_root" ]; then
+  echo "  (plugin fora de um clone git: checagem de nome de projeto pulada)"
+else
+  terms="${MKTUX_PRIVATE_TERMS:-$(cd "$repo_root" && cd "$(git rev-parse --git-common-dir)" && pwd)/info/private-terms}"
+  if [ ! -f "$terms" ]; then
+    echo "  (sem $terms: checagem de nome de projeto pulada — ver AGENTS.md)"
+  else
+    leaks=$(private_term_leaks "$repo_root" "$terms")
+    if [ -z "$leaks" ]; then
+      ok "nenhum termo de $terms no repo, nos commits novos ou na branch"
+    else
+      bad "termo da lista de projetos privados no que vai para o GitHub:"
+      printf '%s\n' "$leaks" | sed 's/^/         /'
+    fi
+  fi
+fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 if [ "$FAIL" -eq 0 ]; then

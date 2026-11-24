@@ -196,7 +196,10 @@ Depois da tabela:
   crie o arquivo nem altere qualquer outro byte.
 - **`.ai/rules` e read-only aqui** — regra de convencao o time grava na mao, nunca esta skill.
   Nem todo projeto tem esse diretorio: quando `team_rules.present` e falso, cite
-  somente um caminho real de convencao que o digest tenha encontrado.
+  somente um caminho real de convencao que o digest tenha encontrado. Regra que o
+  digest marca em `mirrored_in` ja esta dentro do AGENTS.md/CLAUDE.md: o texto
+  gerado diz isso e nunca manda abrir a origem (a engine carrega o arquivo
+  inteiro; reler so repete o mesmo texto em todo turno).
 - **Preserve bloco de marcador estrangeiro** — regiao `<tag>...</tag>` de terceiro em arquivo owned volta verbatim na regeneracao, nunca reescrita, nunca semeada; checagem de tamanho ignora ela.
 - **Sem escrita git** — nunca faca stage, commit ou reset; o dev commita na mao.
 - **Sem segredo** — `.env` nunca e lido; nome de variavel vem so de `.env.example`.

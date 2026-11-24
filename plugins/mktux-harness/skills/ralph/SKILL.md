@@ -134,7 +134,7 @@ proximo run o revalida sem sessao.
 
 **Veredito sem leitura tambem e sem veredito.** O prompt traz a fase, nao o
 codigo: `DONE` ou `INCOMPLETE` sem nenhuma leitura de arquivo nao julgou nada.
-Na revalidacao da fase 1 de social-engine o verificador rodou zero comandos e
+Num run real, na revalidacao de uma fase, o verificador rodou zero comandos e
 devolveu 11/11 DONE em 8s. Log com `TASK` mas sem leitura (zero `exec` no codex,
 `num_turns` 1 no claude) segue o caminho acima, com
 `Gate 3 — veredito emitido sem nenhuma leitura de arquivo; descartado`. Fase so
@@ -159,8 +159,8 @@ barato muda de ideia entre ciclos sobre codigo identico.
 
 **Recurso antes de travar.** A excecao ao memo e a reprovacao que a correcao nao
 aceitou: ela leu o veredito, conferiu o codigo e nao mudou nada. Ai sao duas
-leituras discordando, e o memo mantinha a do verificador barato — na fase 2 de
-superadmin-email-digest ele leu as linhas 1-260 de um arquivo de 397 e reprovou
+leituras discordando, e o memo mantinha a do verificador barato — num run
+real ele leu as linhas 1-260 de um arquivo de 397 e reprovou
 os metodos que nao chegou a ler; a fase travou com o codigo certo. Agora, uma vez
 por fase, o mesmo codigo vai a uma sessao verificadora nova com o **modelo e o
 esforco de implementacao** (`phase-NN.verify-M.log` do ciclo da correcao).
@@ -199,7 +199,7 @@ tinha feito certo. Agora a sessao de implementacao (ou de correcao) pode
 terminar a resposta com uma linha por task:
 
 ```
-RALPH-CONTEST: TASK 4 — border-border nao existe (tailwind.config.js:26)
+RALPH-CONTEST: TASK 4 — color-accent nao existe (styles/theme.css:26)
 ```
 
 O ralph le a mensagem final da sessao (codex: `-o` em `cycle-M.last.txt`;
@@ -222,8 +222,8 @@ nada mas trouxe evidencia nova e julgada de novo.
 **Juiz com a suite vermelha.** O gate 3 so roda com o gate 2 verde, e a
 contestacao "deixar a suite verde exige mexer no que a fase protege" deixa o
 gate 2 vermelho por definicao. Sem julgamento, o ciclo de correcao respeitava a
-trava, nao escrevia nada e a fase travava — nas fases 6 e 10 de social-proof,
-as duas com a contestacao certa. Agora, gate 2 vermelho com contestacao ainda
+trava, nao escrevia nada e a fase travava — em duas fases de um
+run real, as duas com a contestacao certa. Agora, gate 2 vermelho com contestacao ainda
 nao julgada abre um **juiz** (mesma engine, modelo e travas de leitura do
 verificador; log `phase-NN.judge-M.log`, prompt `phase-NN.judge-M.txt`). Ele
 recebe as contestacoes e o fim da saida da suite, e emite uma linha por task:
@@ -332,12 +332,30 @@ bash "$CLAUDE_PLUGIN_ROOT/scripts/mktux-profile.sh" test-cmd   # Codex: $PLUGIN_
 | `RALPH_MEMORY_BIN` | binario do ai-memory (default `ai-memory` no PATH) |
 | `RALPH_ISOLATE` | nomes tirados das sessoes do ralph, separados por espaco ou virgula (default `ai-memory`). Cada nome desliga os handlers de hook cujo comando o contem e o plugin `<nome>@<marketplace>`. A lista substitui o default |
 | `RALPH_HOOK_ISOLATION` | `0` deixa os hooks e plugins de `RALPH_ISOLATE` rodarem nas sessoes do ralph. Default `1`: isola, porque um SessionStart que injeta contexto (o do ai-memory consome handoffs) contamina a sessao fria e o gate 3 |
+| `RALPH_REREAD_GUARD` | `0` desliga o bloqueio de releitura das instrucoes que a engine ja carregou (ver abaixo). A contagem no relatorio continua |
+| `RALPH_GATE2_REUSE` | `0` roda a suite em todo gate 2. Default `1`: codigo identico ao da ultima suite verde do run (mesmo conteudo da arvore, commitado ou nao) reaproveita o resultado |
+| `RALPH_SNAPSHOT` | `0` roda direto da instalacao do plugin. Default `1`: o run inteiro roda de uma copia tirada no inicio, e um update do plugin no meio do run nao o quebra |
 | `RALPH_VERBOSE` | `1` espelha a saida da engine na tela |
 | `RALPH_DASHBOARD` | `1` liga o painel embutido |
 
 No codex, toda sessao do ralph (smoke, implementacao, gate 3) roda com
 `-c features.memories=false`: a memoria nativa traria o historico de sessoes
 anteriores para dentro da sessao fria.
+
+**Instrucoes ja carregadas.** O codex poe o `AGENTS.md` da raiz no contexto de
+toda sessao; o claude, o `CLAUDE.md` e o que ele importa com `@caminho`. O
+preflight lista esses arquivos e os que estao copiados inteiros dentro deles
+(diretrizes que uma ferramenta do framework espelha no `AGENTS.md`). O prompt
+diz que ja estao no contexto, e o hook `reread-guard` bloqueia `cat`, `sed`,
+`head` ou `Read` neles: reler repete o mesmo texto em todo turno seguinte. Busca
+pontual (`rg -n`) passa. O relatorio final soma as releituras bloqueadas e as
+que passaram (codex: lidas do transcript). Se o `AGENTS.md` passa do
+`project_doc_max_bytes` do codex (default 32 KiB), o codex cortaria o fim do
+arquivo: as sessoes do ralph recebem o limite com folga.
+
+**Copia do plugin.** Os hooks que a engine roda dentro das sessoes continuam
+vindo da instalacao dela, nao da copia. Depois de atualizar o plugin no codex,
+abra o `codex` no terminal e aprove os hooks antes do proximo run.
 
 ## Onde o run deixa rastro
 
@@ -402,6 +420,8 @@ sessao.
 | gate 2 sempre vermelho no primeiro run | ambiente do perfil incompleto. A causa de cada perfil esta em *Perfis de stack* |
 | o run reinicia da fase 1 depois de voce editar o plano | editar o `project-phases.md` invalida o stamp e zera `.progress`. Fase ja commitada como `feat(phase-N): <titulo>` e revalidada contra HEAD sem sessao; `--from N` pula de vez as anteriores |
 | preflight aborta com `Hooks a isolar (...) em ... sem jq` | hooks listados em `RALPH_ISOLATE` estao na config de usuario e o isolamento precisa do `jq`. Instale o `jq`; `RALPH_HOOK_ISOLATION=0` so se aceitar que as sessoes recebam o contexto deles (no ai-memory, consomem handoffs) |
+| `N hook(s) falharam nesta sessao` (ou no smoke test) | o codex nao executou os hooks do plugin: a sessao roda sem a trava de releitura, sem os hooks do perfil e sem registro de tokens. Quase sempre o plugin foi atualizado ou instalado ha pouco: o codex invalida a confianca nos hooks a cada versao do plugin, mesmo sem mudanca neles, e o `codex exec` nao roda hook sem confianca. Por isso, depois de todo update: abra o `codex` no terminal, revise e aprove os hooks, e rode de novo |
+| `releitura(s) de instrucoes ... passaram` | a sessao leu um arquivo que a engine ja tinha carregado e o `reread-guard` nao barrou: hook falhando (linha acima) ou leitura por um comando que ele nao reconhece. O bloco `exec` esta no `cycle-M.log` |
 | `Falha ao gravar a memoria da fase` | leia `.phases/logs/phase-NN.memory.log`. No ai-memory, servidor caiu no meio do run: `ai-memory status`; no Linux, `systemctl --user restart ai-memory.service`; no macOS, `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory`. Com `RALPH_MEMORY_CMD`, o log tem a saida do seu comando. A fase continua valida |
 
 Quando uma fase falhar, leia nesta ordem:
