@@ -3,7 +3,7 @@
 # Sourced pelo ralph.sh. So define funcoes.
 #
 # Mandar a sessao "ler os documentos de contexto" fazia ela ler TODOS, inteiros:
-# num run real (x-cleaner), 25 de 26 sessoes — correcao inclusive — abriram
+# num run real, 25 de 26 sessoes — correcao inclusive — abriram
 # feature-brief, feature-description, user-stories e database-schema (~76 KB,
 # ~19k tokens) e ainda trechos do project-phases.md, e esse texto fica no
 # contexto em todo turno seguinte. A fase ja diz o que precisa: a linha

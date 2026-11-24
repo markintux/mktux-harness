@@ -103,7 +103,7 @@ linha:
 
 ```
 TASK 1: DONE
-TASK 2: INCOMPLETE — CsvDocument has no render() method
+TASK 2: INCOMPLETE — CsvFile has no toString() method
 TASK 3: NOT-CODE — needs a human to run `sail npm run build`
 ```
 
@@ -150,9 +150,9 @@ dependências mudam a cada suite sem ser trabalho da fase.
 O verificador lê só a fase, então quando o plano erra ele cobra o erro. Num run
 real, a sessão conferiu o config do CSS, viu que o token que a task pedia não
 existia e usou o certo; o verificador reprovou, o ciclo de correção obedeceu e
-as bordas saíram brancas. Por isso a sessão pode **contestar** uma task que
+o estilo saiu quebrado. Por isso a sessão pode **contestar** uma task que
 confirmou estar errada, terminando a resposta com
-`RALPH-CONTEST: TASK 4 — border-border não existe (tailwind.config.js:26)`. O
+`RALPH-CONTEST: TASK 4 — color-accent não existe (styles/theme.css:26)`. O
 verificador recebe as contestações da fase e confere a evidência no código:
 procede, julga a task pelo objetivo e não pela letra; não procede, a task volta
 `INCOMPLETE — contestacao recusada` e o ciclo de correção recebe a recusa.
@@ -398,7 +398,7 @@ Invocando plan-feature-description: primeiro artefato ausente da cadeia.
 ```
 
 A skill lê o brief, **inspeciona o codebase** (models, rotas, policies, o
-`PlanConfig` que já existe) e escreve
+`PlanFeatures` que já existe) e escreve
 `docs/features/customer-export/feature-description.md` em inglês, com as seções
 `Scope`, `Business Rules` numeradas, `What exists and is reused`, `Data & Format
 Decisions` (encoding, separador, nome do arquivo), e `Out of Scope`.
@@ -491,7 +491,7 @@ total-spent calculation must behave exactly as before.
 
 **Tasks:**
 - [ ] Create `App\Actions\Customer\ExportCustomersAction` returning a
-      `CsvDocument`, reading through the existing `CustomerQuery`.
+      `CsvFile`, reading through the existing `CustomerQuery`.
   - accepts the same filter DTO the list screen already builds
   - never selects the `cpf` column
 - [ ] `App\Policies\CustomerPolicy` gains an `export` ability that returns false
@@ -549,7 +549,7 @@ Note seis coisas, todas deliberadas:
    que recebe uma cláusula cita a `BR-NN` e carrega task e cenário para ela. Num
    run real só a fase da action citou a regra: as duas fases passaram nos quatro
    gates, e o upload que falhava ainda chegava ao admin como erro 500. Regra
-   que nomeia vários artefatos ("aniversários, recordes e o top 5") tem várias
+   que nomeia vários artefatos ("lembretes, resumos semanais e o ranking") tem várias
    cláusulas, então uma faixa como `BR-10 through BR-16` só serve numa fase
    onde cada regra da faixa cai inteira. A auto-checagem do plano imprime o
    texto de cada regra embaixo das fases que a citam, para a lacuna aparecer.
@@ -744,6 +744,9 @@ que o ralph vai resolver num projeto sem rodar nada:
 | `RALPH_MEMORY_BIN` | binário do ai-memory (default `ai-memory` no PATH) |
 | `RALPH_ISOLATE` | nomes de hooks e plugins tirados das sessões do ralph, separados por espaço ou vírgula (default `ai-memory`) |
 | `RALPH_HOOK_ISOLATION` | `0` deixa os hooks e plugins de `RALPH_ISOLATE` rodarem nas sessões do ralph (default `1`: isola). Independente disso, toda sessão Codex que o ralph abre roda com `-c features.memories=false`, para a memória nativa do Codex nunca trazer sessões anteriores para dentro de uma sessão fria |
+| `RALPH_REREAD_GUARD` | `0` desliga o bloqueio de releitura dos arquivos de instrução que a engine já carregou (`AGENTS.md` no Codex, `CLAUDE.md` e seus `@imports` no Claude, e arquivos copiados inteiros dentro deles). O relatório final continua contando as releituras |
+| `RALPH_GATE2_REUSE` | `0` roda a suíte em todo gate 2 (default `1`: quando o conteúdo da árvore é o mesmo da última suíte verde do run, commitado ou não, o resultado é reaproveitado) |
+| `RALPH_SNAPSHOT` | `0` roda direto da instalação do plugin (default `1`: o run inteiro usa uma cópia tirada no início, e um update do plugin no meio do run não o quebra; os hooks dentro das sessões continuam vindo da instalação da engine) |
 | `RALPH_VERBOSE` | `1` espelha a saída da engine |
 | `RALPH_DASHBOARD` | `1` liga o painel embutido |
 | `MKTUX_SPEC_DIR` | raiz dos specs (default `docs/features`) |
@@ -1219,6 +1222,7 @@ Subagents (Claude Code): `test-runner`, `security-auditor`, `ai-context-inspecto
 | `ralph: command not found` | rode o passo 3 da instalação, e confira que `~/.local/bin` está no PATH |
 | `mktux-harness: não encontrei ralph.sh` | o plugin não está instalado nessa máquina, ou aponte `MKTUX_HARNESS_ROOT` para um clone |
 | preflight aborta com `Hooks a isolar (...) em ... sem jq` | hooks listados em `RALPH_ISOLATE` estão na config de usuário e o isolamento precisa do `jq`. Instale o `jq`. Use `RALPH_HOOK_ISOLATION=0` só se aceitar que as sessões recebam o contexto deles (no ai-memory, seus handoffs) |
+| `N hook(s) falharam nesta sessao` (ou no smoke test) | o Codex não executou os hooks do plugin: a sessão rodou sem a trava de releitura, sem os hooks do perfil e sem registro de tokens. Quase sempre o plugin foi atualizado ou instalado há pouco: o Codex invalida a confiança nos hooks a cada versão do plugin, mesmo sem mudança neles, e o `codex exec` não roda hook sem confiança. Por isso, depois de todo update: abra o `codex` no terminal, revise e aprove os hooks, e rode de novo |
 | `Falha ao gravar a memoria da fase` | leia `.phases/logs/phase-NN.memory.log`. No ai-memory, se o servidor caiu: `ai-memory status` e `systemctl --user restart ai-memory.service` (Linux) ou `launchctl kickstart -k gui/$(id -u)/com.github.akitaonrails.ai-memory` (macOS). Com `RALPH_MEMORY_CMD`, o log tem a saída do seu comando. A fase continua válida |
 
 Quando uma fase falhar, leia nesta ordem:

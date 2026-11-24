@@ -7,7 +7,7 @@
 # timestamp UTC e branch. Nunca falha o hook: sai 0 em qualquer cenario.
 #
 # O payload vai enxuto. Gravado inteiro, o tool_response de cada Read e de cada
-# suite rodada fez o events.jsonl do bargi chegar a 146 MB, com linhas de 500 KB,
+# suite rodada fez o events.jsonl de um projeto real chegar a 146 MB, com linhas de 500 KB,
 # e nada le esse conteudo. A saida da ferramenta vira so o tamanho
 # (tool_response_chars), toda string passa de 2000 caracteres cortada (o
 # content de um Write, um prompt colado), e o arquivo gira em 20 MB.

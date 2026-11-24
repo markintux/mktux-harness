@@ -18,7 +18,10 @@ Leia:
   invoque `plan-feature-brief` (passo 0), repassando o slug e qualquer ideia que
   o dev tenha dado. Ela entrevista e escreve o brief; depois disso voce volta.
   Nunca escreva o brief voce mesmo, e nunca siga sem ele.
-- O `CLAUDE.md` / `AGENTS.md` do projeto — convencoes, arquitetura, stack.
+- As instrucoes do projeto: o `CLAUDE.md` (Claude) ou o `AGENTS.md` (Codex) ja
+  esta no seu contexto, carregado pela engine — nao releia. Abra so o que ela
+  nao carrega: o `AGENTS.md` no Claude, quando o `CLAUDE.md` nao o importa com
+  `@AGENTS.md`. Dali vem convencoes, arquitetura e stack.
 - `docs/project-description.md`, se existir.
 
 Depois inspecione o codebase para entender o que ja existe:

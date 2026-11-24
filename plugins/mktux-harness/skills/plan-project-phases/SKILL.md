@@ -33,7 +33,10 @@ Leia:
 - `<dir>/feature-description.md`
 - `<dir>/user-stories.md`
 - `<dir>/database-schema.md`
-- O `CLAUDE.md` / `AGENTS.md` do projeto — stack, convencoes, comando de teste
+- As instrucoes do projeto: o `CLAUDE.md` (Claude) ou o `AGENTS.md` (Codex) ja
+  esta no seu contexto, carregado pela engine — nao releia. Abra so o que ela
+  nao carrega: o `AGENTS.md` no Claude, quando o `CLAUDE.md` nao o importa com
+  `@AGENTS.md`. Dali vem stack, convencoes e comando de teste.
 - `docs/project-description.md`, se existir
 
 Depois **inspecione o codebase** pra identificar o que ja esta implementado desta
@@ -70,8 +73,8 @@ codebase e as secoes abaixo para corrigir o plano, nao apenas para listar riscos
 
 Use estes casos sinteticos como revisao de resultado:
 
-- **Remocao de payload:** um rascunho que remove `flow`, `snapshots` e
-  `weekly_monthly` numa fase, protege os testes que ainda esperam essas chaves e
+- **Remocao de payload:** um rascunho que remove `legacy_totals`, `raw_events` e
+  `v1_summary` numa fase, protege os testes que ainda esperam essas chaves e
   so tenta atualiza-los no fechamento e contraditorio. A versao coerente coloca
   a mudanca de payload e a atualizacao desses testes na mesma fase (ou mantem a
   compatibilidade ate a fase que adapta todos os consumidores); testes da fase
@@ -86,9 +89,9 @@ Use estes casos sinteticos como revisao de resultado:
   **Do not touch in this phase:** Unrelated digest categories and their tests.
 
   **Tasks:**
-  - [ ] `src/digest/payload-builder` no longer emits `flow`, `snapshots` or `weekly_monthly`.
+  - [ ] `src/digest/payload-builder` no longer emits `legacy_totals`, `raw_events` or `v1_summary`.
   - [ ] `tests/digest-payload` (existing file; retain unrelated cases) asserts each retired field is absent from the serialized payload.
-    - serialized weekly/monthly digest → retired fields are absent (US-2.1)
+    - serialized v1 digest → retired fields are absent (US-2.1)
     - another digest category → existing payload stays unchanged (US-2.2)
 
   **Completion criteria:** Updated consumers and negative assertions pass the Gate 2 suite.
@@ -108,7 +111,7 @@ Use estes casos sinteticos como revisao de resultado:
   **Completion criteria:** Runtime references are absent; the tests still prove that the serialized payload omits the fields.
   ```
 - **Busca por ausencia:** um criterio como “nenhum arquivo, inclusive `tests/`,
-  menciona `weekly_monthly`” contradiz um teste negativo que precisa citar a
+  menciona `v1_summary`” contradiz um teste negativo que precisa citar a
   chave. A versao coerente limita a ausencia de referencias ativas aos
   diretorios de runtime e permite a mencao em assertions de `tests/` que provam
   que o payload nao e emitido.
@@ -227,9 +230,9 @@ Consequencia: sub-bullets que detalham uma task tem que ser `-` simples, **nunca
 `- [ ]`, ou inflam a contagem e o verificador emite um veredito para cada.
 
 ```
-- [ ] Create `App\Support\CsvDocument` with:
-  - `section(string $title, array $headers, array $rows): static` — appends …
-  - `render(): string` — returns the whole file …
+- [ ] Create `App\Support\CsvFile` with:
+  - `addSection(string $title, array $headers, array $rows): static` — appends …
+  - `toString(): string` — returns the whole file …
 ```
 
 Isso e **uma** task, nao tres.
@@ -543,14 +546,14 @@ Num run real, a escrita atomica ficou na fase da action, a fase do controller
 nao citou a BR, as duas passaram nos quatro gates, e a falha de geracao chegava
 ao admin como erro 500 — so a revisao humana pegou.
 
-Regra que nomeia mais de um artefato — *"applies to both birthday e-mails and
-to every record and top 5 computation"* — e de varias clausulas mesmo sendo uma
+Regra que nomeia mais de um artefato — *"applies to both reminder e-mails and
+to every weekly summary and ranking computation"* — e de varias clausulas mesmo sendo uma
 frase so: cada artefato nomeado e uma clausula, e a fase onde ele nasce cita a
 BR. Por isso a faixa `BR-10 through BR-16` so vale quando **cada** regra da faixa
 acontece inteira naquela fase: a faixa leva o texto para a sessao, mas diz a voce
 na auto-checagem que a regra esta coberta. Num run real, a BR que tirava os
-clientes anonimizados dos aniversarios, dos recordes e do top 5 entrou so numa
-faixa da fase dos aniversarios. A fase dos recordes nao a citou, o verificador
+usuarios inativos dos lembretes, dos resumos semanais e do ranking entrou so numa
+faixa da fase dos lembretes. A fase dos resumos nao a citou, o verificador
 reprovou duas vezes o filtro correto que a sessao tinha posto, e o ciclo de
 correcao o removeu.
 

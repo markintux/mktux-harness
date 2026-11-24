@@ -20,10 +20,21 @@ if [[ "${RALPH_SESSION_MODE:-}" == "verify" || "${RALPH_SESSION_MODE:-}" == "jud
   case "$event" in claude-post-edit|codex-stop) exit 0 ;; esac
 fi
 plugin="$(cd "$(dirname "$0")/../.." && pwd)"
+input="$(cat)"
+
+# Trava do core, antes de qualquer perfil (projeto sem perfil tambem tem
+# AGENTS.md). Vai por aqui, e nao por um handler proprio no codex-hooks.json:
+# o Codex grava a confianca de cada handler no config.toml (hooks.state), e um
+# handler novo sem trusted_hash nao roda no `codex exec` ate alguem revisar os
+# hooks no codex interativo.
+if [ "$event" = "pre-bash" ] && [ -n "${RALPH_LOADED_DOCS:-}" ]; then
+  guard_rc=0
+  printf '%s' "$input" | bash "$plugin/hooks/shared/reread-guard.sh" || guard_rc=$?
+  [ "$guard_rc" -eq 2 ] && exit 2
+fi
+
 # shellcheck disable=SC1091
 . "$plugin/scripts/lib/profile.sh" 2> /dev/null || exit 0
-
-input="$(cat)"
 
 # cwd do evento: o Claude manda no payload; o Codex nao manda no PreToolUse.
 dir=""

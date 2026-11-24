@@ -78,6 +78,12 @@ printf '%s\n' "${RALPH_TEST_CMD-<unset>}" >> "$state/session_test_cmd"
 # Fase, ciclo e modo: o log-tokens grava os tres em cada linha do tokens.jsonl.
 printf '%s %s %s\n' "${RALPH_PHASE_NUM-}" "${RALPH_PHASE_ATTEMPT-}" "${RALPH_SESSION_MODE-}" >> "$state/session_env"
 printf '%s\n' "${RALPH_RUN_ID-}" >> "$state/session_run_ids"
+# Instrucoes que o ralph diz que ja estao no contexto (reread-guard) e a copia
+# do plugin de onde o run roda.
+printf '%s' "${RALPH_LOADED_DOCS-<unset>}" > "$state/session_loaded_docs"
+snap_ok=0
+[ -n "${RALPH_SNAPSHOT_DIR:-}" ] && [ -f "${RALPH_SNAPSHOT_DIR}/scripts/ralph.sh" ] && snap_ok=1
+printf '%s %s\n' "$snap_ok" "${MKTUX_HARNESS_ROOT-}" >> "$state/session_snapshot"
 
 bump() {
   local f="$state/$1" n=0
@@ -151,6 +157,7 @@ else
           hooks.state=*) echo "$2" >> "$state/hook_overrides" ;;
           plugins=*) echo "$2" >> "$state/plugin_overrides" ;;
           features.memories=*) echo "$2" >> "$state/codex_memories" ;;
+          project_doc_max_bytes=*) echo "$2" >> "$state/project_doc_overrides" ;;
         esac
         shift 2 ;;
       *) shift ;;
@@ -167,6 +174,13 @@ if [ "$scenario" = "codex-model-unknown" ] && [ "$name" = "codex" ]; then
 fi
 
 grep -q '^RALPH_VERIFY' <<< "$prompt" && verify=1
+
+# Hooks do plugin que o codex nao conseguiu rodar: o que o codex exec imprime.
+if [ "$scenario" = "hook-failed" ] && [ "$name" = "codex" ]; then
+  echo "hook: PreToolUse Completed"
+  echo "hook: PreToolUse Failed"
+  echo "hook: Stop Failed"
+fi
 
 # --- juiz das contestacoes (gate 2 vermelho) --------------------------------
 # Procede nos cenarios contest-protected*: a fase proibe tocar no arquivo que a
@@ -298,10 +312,10 @@ verify_body() {
     elif { [ "$scenario" = "contest-verified" ] || [ "$scenario" = "contest-late" ]; } \
       && grep -q '^## Phase 1:' <<< "$prompt" && ! grep -q '^RALPH-CONTEST: TASK 1 ' <<< "$prompt"; then
       # Fase 1 sem a contestacao no prompt: cobra a letra da task.
-      echo "TASK 1: INCOMPLETE — usa outro token em vez de border-border"
+      echo "TASK 1: INCOMPLETE — usa outro token em vez de color-accent"
       for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
     elif [ "$scenario" = "contest-rejected" ] && [ "$n" -eq 1 ]; then
-      echo "TASK 1: INCOMPLETE — contestacao recusada: border-border esta definido em tailwind.config.js:30"
+      echo "TASK 1: INCOMPLETE — contestacao recusada: color-accent esta definido em styles/theme.css:30"
       for i in $(seq 2 "$tasks"); do echo "TASK $i: DONE"; done
     elif { [ "$scenario" = "verify-misread" ] || [ "$scenario" = "verify-appeal-new-evidence" ] \
       || [ "$scenario" = "verify-appeal-no-verdict" ]; } \
@@ -367,6 +381,34 @@ fi
 
 # --- sessao de implementacao -------------------------------------------------
 n=$(bump impl_calls)
+
+# reread: a sessao tenta reler o AGENTS.md. A engine passa a tool call pelo
+# hook do plugin instalado (MOCK_PLUGIN, nao a copia do run); bloqueada, a
+# leitura nao acontece. Sem bloqueio, o transcript do codex mostra o exec.
+if [ "$scenario" = "reread" ]; then
+  guard_rc=0
+  if [ "$name" = "claude" ]; then
+    jq -nc --arg f "$PWD/AGENTS.md" --arg cwd "$PWD" '{cwd: $cwd, tool_input: {file_path: $f}}' \
+      | bash "${MOCK_PLUGIN:?}/hooks/shared/reread-guard.sh" 2>> "$state/guard_err" || guard_rc=$?
+  else
+    jq -nc --arg cmd 'cat AGENTS.md .ai/guidelines/app.md' '{tool_input: {command: $cmd}}' \
+      | bash "${MOCK_PLUGIN:?}/hooks/shared/profile-hook.sh" pre-bash 2>> "$state/guard_err" || guard_rc=$?
+  fi
+  echo "$guard_rc" >> "$state/guard_rc"
+  if [ "$guard_rc" -ne 2 ] && [ "$name" = "codex" ]; then
+    echo "exec"
+    echo "/bin/bash -lc 'cat AGENTS.md"
+    echo "cat .ai/guidelines/app.md' in $PWD"
+    echo " succeeded in 0ms:"
+    echo "# AGENTS.md"
+  fi
+fi
+
+# delete-plugin: na 1a sessao a engine se atualiza e apaga a pasta do plugin
+# de onde o ralph subiu (o Codex troca a pasta da versao).
+if [ "$scenario" = "delete-plugin" ] && [ "$n" -eq 1 ]; then
+  rm -rf "${MOCK_DELETE_DIR:?}"
+fi
 # Quem roda a engine: o teste de sinal manda SIGTERM para esse processo.
 echo "$PPID" > "$state/engine_ppid"
 
@@ -464,10 +506,10 @@ final="implementado"
 case "$scenario" in
   contest-verified|contest-rejected)
     [ "$n" -eq 1 ] && final="$final
-RALPH-CONTEST: TASK 1 — o token border-border nao existe (tailwind.config.js:26)" ;;
+RALPH-CONTEST: TASK 1 — o token color-accent nao existe (styles/theme.css:26)" ;;
   contest-late)
     [ "$n" -eq 2 ] && final="$final
-RALPH-CONTEST: TASK 1 — o token border-border nao existe (tailwind.config.js:26)" ;;
+RALPH-CONTEST: TASK 1 — o token color-accent nao existe (styles/theme.css:26)" ;;
   verify-misread)
     [ "$n" -le 2 ] && final="$final
 RALPH-CONTEST: TASK 1 — o arquivo lido contem o metodo (src/impl-1.txt:1)" ;;
@@ -484,7 +526,7 @@ RALPH-CONTEST: TASK 2 — BR-13 exige o filtro que a task nao cita (feature-desc
     [ "$n" -eq 1 ] && final="$final
 RALPH-CONTEST: TASK 2 — BR-13 exige o filtro que a task nao cita (feature-description.md:149)" ;;
   empty-diff)
-    final="Travado: SendPubReportsTest so passa tocando o comando, proibido nesta fase" ;;
+    final="Travado: ReportMailerTest so passa tocando o comando, proibido nesta fase" ;;
   contest-protected|contest-protected-rejected)
     [ "$protected_phase" -eq 1 ] && [ "$unlocked" -eq 0 ] && final="$final
 RALPH-CONTEST: TASK 1 — src/protected.txt:3 tipa o argumento errado e a fase proibe tocar nele" ;;
@@ -680,6 +722,7 @@ run_ralph() {
     MOCK_MEMORY_WRITE="${CASE_MEMORY_WRITE:-0}" \
     MOCK_CODEX_NO_LAST="${CASE_CODEX_NO_LAST:-0}" \
     MOCK_HARNESS="${CASE_HARNESS:-0}" \
+    MOCK_PLUGIN="$MKTUX_HARNESS_ROOT" \
     CLAUDE_CONFIG_DIR="$dir/claude-home" \
     CODEX_HOME="$dir/codex-home" \
       bash "$RALPH" "$@" > "$dir/out.log" 2>&1
@@ -1867,7 +1910,7 @@ if case_enabled verify-prompt; then
   assert_contains "$vp" "NAO rode build, testes, typecheck nem lint" "proibe rodar build e teste"
   assert_contains "$vp" "node_modules" "proibe ler dependencias de terceiros"
   # Lockfile proibido sem excecao: task sobre o lockfile virava INCOMPLETE
-  # "nao foi lido" com o codigo certo (fase 1 de social-engine).
+  # "nao foi lido" com o codigo certo (num run real).
   assert_contains "$vp" "Lockfile so quando uma task ou contestacao o citar" "lockfile: liberado quando a task o cita"
   assert_contains "$vp" "e nunca inteiro: busque" "lockfile: busca pelo nome, sem ler inteiro"
   # Task de teste: lista de cenarios fechada. Sem isso o verificador inventa a
@@ -1885,8 +1928,8 @@ if case_enabled verify-prompt; then
   assert_contains "$d/repo/.phases/prompts/phase-01.verify-1.txt" "Nenhum arquivo alterado nesta fase" "sem diff: aponta para HEAD"
 
   # O awk do macOS conta bytes: a task cortada no meio de um acento deixava o
-  # prompt com UTF-8 invalido, o codex recusava o stdin inteiro e a fase 5 de
-  # product-import parou "sem veredito" com a suite verde.
+  # prompt com UTF-8 invalido, o codex recusava o stdin inteiro e uma fase de
+  # um run real parou "sem veredito" com a suite verde.
   d=$(new_case verify-prompt-utf8)
   prefix='**Task:** cria o arquivo A '
   # A implementacao corta em 120 depois de tirar os "**"; o verificador, em 300 sem tirar.
@@ -2081,8 +2124,8 @@ fi
 
 # ---------------------------------------------------------------------------
 # 49. Sessao travada: o watchdog encerra no RALPH_SESSION_TIMEOUT, o gate 0
-#     reprova com a causa e o ciclo de correcao segue. Na fase 9 de
-#     pub-email-alerts a sessao esperou 2h por um prompt de confirmacao.
+#     reprova com a causa e o ciclo de correcao segue. Num run real
+#     a sessao esperou 2h por um prompt de confirmacao.
 # ---------------------------------------------------------------------------
 if case_enabled session-timeout; then
   header "49. sessao travada -> encerrada no timeout, ciclo de correcao"
@@ -2127,8 +2170,8 @@ fi
 
 # ---------------------------------------------------------------------------
 # 51. RALPH-CONTEST: a sessao contesta a task e o verificador confere a
-#     evidencia. Nada para o run — o ralph roda a noite sem contato humano. Na
-#     fase 9 de pub-email-alerts o verificador, sem a contestacao, cobrou um
+#     evidencia. Nada para o run — o ralph roda a noite sem contato humano. Num
+#     run real o verificador, sem a contestacao, cobrou um
 #     token de CSS que nao existia e o ciclo de correcao obedeceu.
 # ---------------------------------------------------------------------------
 if case_enabled contest; then
@@ -2140,9 +2183,9 @@ if case_enabled contest; then
     assert_eq 2 "$(cat "$d/state/impl_calls")" "$engine: uma sessao por fase, sem ciclo de correcao"
     vp="$d/repo/.phases/prompts/phase-01.verify-1.txt"
     assert_contains "$vp" "## Contestacoes da sessao de implementacao" "$engine: verificador recebe a contestacao"
-    assert_contains "$vp" "RALPH-CONTEST: TASK 1 — o token border-border nao existe (tailwind.config.js:26)" "$engine: com a evidencia"
+    assert_contains "$vp" "RALPH-CONTEST: TASK 1 — o token color-accent nao existe (styles/theme.css:26)" "$engine: com a evidencia"
     assert_contains "$d/out.log" "Contestacoes aceitas pelo verificador (1)" "$engine: aceita vai para o relatorio"
-    assert_contains "$d/out.log" "Phase 1: TASK 1 — o token border-border nao existe" "$engine: com a fase e o texto"
+    assert_contains "$d/out.log" "Phase 1: TASK 1 — o token color-accent nao existe" "$engine: com a fase e o texto"
     assert_eq 3 "$(commits "$d")" "$engine: as 2 fases commitadas"
   done
   assert_contains "$d/state/impl_last_path" ".cycle-1.last.txt" "codex: sessao de implementacao grava a mensagem final com -o"
@@ -2161,7 +2204,7 @@ if case_enabled contest; then
   assert_eq 0 "$rc" "recusada: exit 0 depois da correcao"
   assert_eq 3 "$(cat "$d/state/impl_calls")" "recusada: ciclo de correcao aberto"
   fp="$d/repo/.phases/prompts/phase-01.cycle-2.txt"
-  assert_contains "$fp" "contestacao recusada: border-border esta definido" "correcao recebe a recusa"
+  assert_contains "$fp" "contestacao recusada: color-accent esta definido" "correcao recebe a recusa"
   assert_contains "$fp" "## Contestacoes de sessoes anteriores desta fase" "correcao sabe o que foi contestado"
   assert_contains "$fp" "conteste em vez de obedecer" "correcao lembra que o verificador le so a fase"
 
@@ -2183,8 +2226,8 @@ if case_enabled contest; then
 fi
 
 # ---------------------------------------------------------------------------
-# 52. Fase que falha mostra a ultima mensagem da sessao: na fase 3 de
-#     pub-email-alerts ela dizia por que travou, e so o log guardava.
+# 52. Fase que falha mostra a ultima mensagem da sessao: num run real
+#     ela dizia por que travou, e so o log guardava.
 # ---------------------------------------------------------------------------
 if case_enabled last-message; then
   header "52. fase que falha mostra a ultima mensagem da sessao"
@@ -2193,13 +2236,13 @@ if case_enabled last-message; then
     rc=$(run_ralph "$d" empty-diff --engine "$engine" --test-cmd "$d/test.sh" --max-cycles 2)
     assert_eq 1 "$rc" "$engine: exit 1"
     assert_contains "$d/out.log" "Ultima mensagem da sessao (fim):" "$engine: bloco da mensagem final"
-    assert_contains "$d/out.log" "SendPubReportsTest so passa tocando o comando" "$engine: com o texto da sessao"
+    assert_contains "$d/out.log" "ReportMailerTest so passa tocando o comando" "$engine: com o texto da sessao"
   done
 fi
 
 # ---------------------------------------------------------------------------
 # 53. Fase ja commitada no branch (feat(phase-N): <titulo>) -> gates contra HEAD
-#     sem sessao. Na fase 3 de pub-email-alerts o trabalho foi commitado a mao
+#     sem sessao. Num run real o trabalho foi commitado a mao
 #     depois de travar, e a retomada abriu uma sessao inteira que nao escreveu
 #     nada.
 # ---------------------------------------------------------------------------
@@ -2273,7 +2316,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # 55. Contestacao com o gate 2 vermelho vai para um juiz. O gate 3 so roda com a
-#     suite verde: nas fases 6 e 10 de social-proof a contestacao estava certa,
+#     suite verde: em duas fases de um run real a contestacao estava certa,
 #     o ciclo de correcao respeitou a trava, nao escreveu nada e o run parou.
 # ---------------------------------------------------------------------------
 if case_enabled contest-judge; then
@@ -2423,7 +2466,7 @@ fi
 
 # ---------------------------------------------------------------------------
 # 56. Verificador cai com "model at capacity" -> a MESMA sessao de novo, sem
-#     ciclo de correcao. Na fase 1 de superadmin-email-digest a falta de
+#     ciclo de correcao. Num run real a falta de
 #     veredito virou INCOMPLETE, a correcao nao tinha o que corrigir, o memo
 #     guardou a reprovacao e a fase travou com o codigo certo.
 # ---------------------------------------------------------------------------
@@ -2547,7 +2590,7 @@ fi
 # ---------------------------------------------------------------------------
 # 62. Verificador barato reprova o que nao leu, a correcao confere e nao muda
 #     nada, repetindo a mesma contestacao -> recurso com modelo/effort de impl.
-#     fase 2 de superadmin-email-digest o memo guardava a reprovacao e a fase
+#     Num run real o memo guardava a reprovacao e a fase
 #     travava com o codigo certo.
 # ---------------------------------------------------------------------------
 if case_enabled verify-appeal; then
@@ -2632,8 +2675,8 @@ if case_enabled verify-appeal-no-verdict; then
 fi
 
 # ---------------------------------------------------------------------------
-# 66. Veredito sem nenhuma leitura nao julgou o codigo. Na fase 1 de
-#     social-engine, revalidada contra HEAD, o verificador rodou zero comandos
+# 66. Veredito sem nenhuma leitura nao julgou o codigo. Num run real,
+#     numa fase revalidada contra HEAD, o verificador rodou zero comandos
 #     e devolveu 11/11 DONE em 8s. Vira "sem veredito": nova sessao com o
 #     modelo de implementacao; persistente, a fase encerra sem ciclo de
 #     correcao. NOT-CODE e log sem o sinal passam.
@@ -2686,8 +2729,8 @@ if case_enabled verify-no-reads; then
 fi
 
 # ---------------------------------------------------------------------------
-# 67. Entrega em caminho que o .gitignore exclui. Na fase 13 de social-engine
-#     tudo ficava em projects/<nome>/, privado por regra da feature: o ralph
+# 67. Entrega em caminho que o .gitignore exclui. Num run real
+#     a entrega de uma fase ficava num diretorio ignorado, privado por regra da feature: o ralph
 #     disse "a sessao nao escreveu nada" duas vezes, e a trava de ciclo sem
 #     mudanca pararia a fase se o gate 3 reprovasse. A assinatura conta o que
 #     as tasks julgadas citam; .harness/, task (manual) e diretorio grande
@@ -2898,7 +2941,7 @@ if case_enabled big-prompt; then
 fi
 
 # ---------------------------------------------------------------------------
-# 71. Smoke test do codex sugere o ID do modelo. No Bargi o --model GPT-6.2-Sol
+# 71. Smoke test do codex sugere o ID do modelo. Num run real o --model GPT-6.2-Sol
 #     (nome de exibicao) caiu em "not supported when using Codex with a ChatGPT
 #     account", a mesma mensagem de um modelo que a versao do codex nao recebe.
 #     O models_cache.json do CODEX_HOME separa os dois casos.
@@ -2959,6 +3002,238 @@ JSON
   assert_not_contains "$d/out.log" "Dica:" "modelo certo: nenhuma dica"
 
   CASE_SMOKE=0
+fi
+
+# ---------------------------------------------------------------------------
+# 72. Releitura de instrucoes: o prompt diz o que JA esta no contexto, o
+#     reread-guard bloqueia a leitura e o relatorio conta. Num run real, "LEIA
+#     AGENTS.md" fez 19 de 26 sessoes relerem o arquivo que o Codex injeta.
+# ---------------------------------------------------------------------------
+# Fixture: AGENTS.md com as diretrizes do time copiadas dentro (como o Laravel
+# Boost faz), um doc so citado e, opcionalmente, o CLAUDE.md que importa o AGENTS.md.
+make_instruction_docs() {
+  local repo="$1" claude="${2:-0}"
+  mkdir -p "$repo/.ai/guidelines" "$repo/docs"
+  cat > "$repo/.ai/guidelines/app.md" <<'MD'
+# Diretrizes do app
+- Valide toda entrada na borda, antes da regra de negocio.
+- Toda query de listagem pagina com cursor, nunca com offset.
+- Nomes de rota em kebab-case, agrupados por modulo.
+MD
+  cat > "$repo/docs/arquitetura.md" <<'MD'
+# Arquitetura
+Este doc so e citado pelo AGENTS.md; o conteudo nao esta la.
+Camadas: entrada fina, regra num modulo proprio, persistencia sem regra.
+MD
+  {
+    echo "# AGENTS.md"
+    echo
+    echo "Regras do time moram em .ai/guidelines/app.md — leia antes de editar."
+    echo "Arquitetura: docs/arquitetura.md."
+    echo
+    echo "=== diretrizes espelhadas ==="
+    cat "$repo/.ai/guidelines/app.md"
+  } > "$repo/AGENTS.md"
+  [ "$claude" = "1" ] && printf '# CLAUDE.md\n\n@AGENTS.md\n' > "$repo/CLAUDE.md"
+  git -C "$repo" add -A && git -C "$repo" commit -q -m "docs: instrucoes"
+}
+
+if case_enabled reread-guard; then
+  header "72. releitura de instrucoes ja carregadas: prompt, trava e contagem"
+
+  d=$(new_case reread-codex)
+  make_instruction_docs "$d/repo"
+  rc=$(run_ralph "$d" reread --engine codex --test-cmd "$d/test.sh")
+  p="$d/repo/.phases/prompts/phase-01.cycle-1.txt"
+  assert_eq 0 "$rc" "codex: run segue"
+  assert_not_contains "$p" "LEIA:" "prompt nao manda mais ler AGENTS.md"
+  assert_contains "$p" "JA ESTAO no seu contexto" "prompt diz que as instrucoes ja estao no contexto"
+  assert_contains "$p" "  - AGENTS.md" "prompt lista o AGENTS.md"
+  assert_contains "$p" "  - .ai/guidelines/app.md (o conteudo esta copiado dentro de AGENTS.md)" "prompt lista a diretriz espelhada"
+  assert_not_contains "$p" "docs/arquitetura.md (o conteudo" "doc so citado nao entra na lista"
+  assert_contains "$p" "o ralph bloqueia a leitura" "prompt avisa do bloqueio"
+  assert_contains "$d/state/session_loaded_docs" ".ai/guidelines/app.md" "RALPH_LOADED_DOCS chega na sessao"
+  assert_eq 2 "$(sort -u "$d/state/guard_rc")" "a leitura foi bloqueada em toda sessao de implementacao"
+  assert_contains "$d/state/guard_err" "BLOQUEADO pelo reread-guard do ralph: AGENTS.md" "o agente recebe o motivo"
+  assert_contains "$d/out.log" "reread-guard: 1 releitura(s) de instrucoes bloqueada(s) nesta sessao (impl)" "log por sessao"
+  assert_contains "$d/out.log" "Releitura de instrucoes que ja estavam no contexto: 2 bloqueada(s) pelo reread-guard, 0 passaram." "relatorio soma as releituras"
+  assert_contains "$d/out.log" "    2x AGENTS.md" "relatorio agrupa por arquivo"
+  assert_contains "$d/out.log" "Instrucoes ja no contexto das sessoes (codex): AGENTS.md, .ai/guidelines/app.md (espelhado em AGENTS.md)" "preflight mostra o que esta carregado"
+
+  # Sem a trava (ou com o hook quebrado), o transcript do codex mostra a leitura.
+  d=$(new_case reread-codex-off)
+  make_instruction_docs "$d/repo"
+  rc=$(RALPH_REREAD_GUARD=0 run_ralph "$d" reread --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "trava desligada: run segue"
+  assert_eq "<unset>" "$(cat "$d/state/session_loaded_docs")" "trava desligada: nada exportado"
+  assert_eq 0 "$(sort -u "$d/state/guard_rc")" "trava desligada: leitura passa"
+  assert_contains "$d/out.log" "1 releitura(s) de instrucoes que ja estavam no contexto passaram nesta sessao (impl)" "transcript: releitura que passou e contada"
+  assert_contains "$d/out.log" "0 bloqueada(s) pelo reread-guard, 2 passaram." "relatorio mostra as que passaram"
+  assert_not_contains "$d/repo/.phases/prompts/phase-01.cycle-1.txt" "o ralph bloqueia a leitura" "trava desligada: prompt nao promete bloqueio"
+
+  # Claude: carrega o CLAUDE.md e o que ele importa com @.
+  d=$(new_case reread-claude)
+  make_instruction_docs "$d/repo" 1
+  rc=$(run_ralph "$d" reread --engine claude --test-cmd "$d/test.sh")
+  p="$d/repo/.phases/prompts/phase-01.cycle-1.txt"
+  assert_eq 0 "$rc" "claude: run segue"
+  assert_contains "$p" "  - CLAUDE.md" "claude: lista o CLAUDE.md"
+  assert_contains "$p" "  - AGENTS.md" "claude: lista o AGENTS.md importado com @"
+  assert_contains "$p" ".ai/guidelines/app.md (o conteudo esta copiado dentro de CLAUDE.md, AGENTS.md)" "claude: diretriz espelhada no import"
+  assert_eq 2 "$(sort -u "$d/state/guard_rc")" "claude: Read do AGENTS.md bloqueado"
+
+  # Claude sem CLAUDE.md: o AGENTS.md nao e carregado, o prompt manda ler uma vez.
+  d=$(new_case reread-claude-unloaded)
+  make_instruction_docs "$d/repo"
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  p="$d/repo/.phases/prompts/phase-01.cycle-1.txt"
+  assert_eq 0 "$rc" "claude sem CLAUDE.md: run segue"
+  assert_contains "$p" "Leia uma vez, no inicio, AGENTS.md" "claude sem CLAUDE.md: manda ler o AGENTS.md uma vez"
+  assert_not_contains "$p" "JA ESTAO no seu contexto" "claude sem CLAUDE.md: nao diz que esta carregado"
+  assert_eq "<unset>" "$(cat "$d/state/session_loaded_docs")" "claude sem CLAUDE.md: trava inativa"
+fi
+
+# ---------------------------------------------------------------------------
+# 73. Hook que a engine nao rodou: o codex so imprime "hook: X Failed". Num run
+#     real os hooks do mktux falharam em toda sessao depois do update do plugin.
+# ---------------------------------------------------------------------------
+if case_enabled hook-failures; then
+  header "73. hooks que falharam na sessao e no smoke viram aviso"
+  CASE_SMOKE=1
+  d=$(new_case hook-failed)
+  rc=$(run_ralph "$d" hook-failed --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "hook falhando nao derruba o run"
+  assert_contains "$d/out.log" "Smoke test: 2 hook(s) falharam na sessao de teste" "smoke avisa antes da fase 1"
+  assert_contains "$d/out.log" "revise e aprove os hooks" "aviso diz o que fazer"
+  assert_contains "$d/out.log" "2 hook(s) falharam nesta sessao (impl)" "sessao de implementacao avisa"
+  assert_contains "$d/out.log" "2 hook(s) falharam nesta sessao (verify)" "sessao de verificacao avisa"
+  assert_contains "$d/out.log" "Hooks que o codex nao executou: 8, em 4 sessao(oes) deste run." "relatorio soma"
+
+  d=$(new_case hook-ok)
+  rc=$(run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "hooks ok: run segue"
+  assert_not_contains "$d/out.log" "hook(s) falharam" "hooks ok: nenhum aviso"
+  CASE_SMOKE=0
+fi
+
+# ---------------------------------------------------------------------------
+# 74. Gate 2 sobre o mesmo codigo da ultima suite verde: reaproveita. Num run
+#     real a suite levou 96 dos 167 minutos, e rodou de novo sobre codigo identico.
+# ---------------------------------------------------------------------------
+if case_enabled gate2-reuse; then
+  header "74. gate 2 reaproveita a suite verde quando o codigo nao mudou"
+  d=$(new_case gate2-reuse)
+  mkdir -p "$d/repo/src"
+  echo "impl previo" > "$d/repo/src/impl-1.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat: trabalho da run anterior"
+  rc=$(run_ralph "$d" already-done --engine claude --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq 1 "$(cat "$d/state/test_calls")" "a suite rodou 1x para as 2 fases sobre o mesmo codigo"
+  assert_contains "$d/out.log" "Gate 2 — suite verde reaproveitada" "log diz que reaproveitou"
+  assert_contains "$d/out.log" "Gate 2 reaproveitado 1 vez(es)" "relatorio conta"
+  assert_contains "$d/repo/.phases/logs/phase-02.test-1.log" "Gate 2 reaproveitado" "log de teste da fase explica"
+
+  d=$(new_case gate2-reuse-off)
+  mkdir -p "$d/repo/src"
+  echo "impl previo" > "$d/repo/src/impl-1.txt"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "feat: trabalho da run anterior"
+  rc=$(RALPH_GATE2_REUSE=0 run_ralph "$d" already-done --engine claude --test-cmd "$d/test.sh" --max-cycles 1)
+  assert_eq 0 "$rc" "RALPH_GATE2_REUSE=0: exit 0"
+  assert_eq 2 "$(cat "$d/state/test_calls")" "RALPH_GATE2_REUSE=0: a suite roda toda vez"
+
+  # Codigo mudou (cada fase escreve): nada reaproveitado.
+  d=$(new_case gate2-changed)
+  rc=$(run_ralph "$d" ok --engine claude --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "codigo mudando: exit 0"
+  assert_eq 2 "$(cat "$d/state/test_calls")" "codigo mudando: a suite roda em cada fase"
+  assert_not_contains "$d/out.log" "reaproveitada" "codigo mudando: nada reaproveitado"
+
+  # Arquivo nao rastreado novo tambem muda a assinatura.
+  d=$(new_case gate2-untracked)
+  sig_of() { (cd "$1" && bash -c '. "$0"; content_signature' "$2"); }
+  extract=$d/sig.sh
+  {
+    echo 'STATE_DIR=.phases/state'
+    sed -n '/^cited_ignored_signature() {/,/^}/p;/^content_signature() {/,/^}/p' "$RALPH"
+    echo 'cited_ignored_paths() { :; }'
+  } > "$extract"
+  s1=$(sig_of "$d/repo" "$extract")
+  echo novo > "$d/repo/novo.txt"
+  s2=$(sig_of "$d/repo" "$extract")
+  rm "$d/repo/novo.txt"
+  s3=$(sig_of "$d/repo" "$extract")
+  assert_eq 1 "$([ -n "$s1" ] && [ "$s1" != "$s2" ] && echo 1)" "arquivo novo muda a assinatura"
+  assert_eq "$s1" "$s3" "mesmo conteudo, mesma assinatura"
+  assert_eq "" "$(git -C "$d/repo" status --porcelain)" "a assinatura nao mexe no index real"
+fi
+
+# ---------------------------------------------------------------------------
+# 75. AGENTS.md maior que o project_doc_max_bytes do codex: as sessoes recebem
+#     o limite com folga em vez de um AGENTS.md cortado no fim.
+# ---------------------------------------------------------------------------
+if case_enabled agents-md-size; then
+  header "75. AGENTS.md acima do limite do codex"
+  d=$(new_case agents-big)
+  { echo "# AGENTS.md"; for i in $(seq 1 900); do echo "regra $i: linha de convencao com texto suficiente"; done; } > "$d/repo/AGENTS.md"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "docs: agents grande"
+  size=$(wc -c < "$d/repo/AGENTS.md" | tr -d ' ')
+  rc=$(run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  assert_contains "$d/out.log" "passa do limite do Codex (32 KiB" "avisa do corte"
+  need=$(( (size / 4096 + 2) * 4096 ))
+  assert_eq "project_doc_max_bytes=$need" "$(sort -u "$d/state/project_doc_overrides")" "toda sessao recebe o limite com folga"
+
+  d=$(new_case agents-big-configured)
+  cp "$TMP/agents-big/repo/AGENTS.md" "$d/repo/AGENTS.md"
+  git -C "$d/repo" add -A && git -C "$d/repo" commit -q -m "docs: agents grande"
+  echo 'project_doc_max_bytes = 65536' > "$d/codex-home/config.toml"
+  rc=$(run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "limite configurado: exit 0"
+  assert_not_contains "$d/out.log" "passa do limite" "limite do config.toml cobre: sem aviso"
+  assert_eq 0 "$([ -f "$d/state/project_doc_overrides" ] && echo 1 || echo 0)" "limite do config.toml cobre: sem override"
+fi
+
+# ---------------------------------------------------------------------------
+# 76. O run roda de uma copia do plugin. Num run real o Codex atualizou o plugin no
+#     meio do run e apagou a pasta da versao de onde o ralph tinha subido.
+# ---------------------------------------------------------------------------
+if case_enabled plugin-snapshot; then
+  header "76. o run sobrevive ao plugin apagado no meio"
+  d=$(new_case snapshot-ok)
+  rc=$(run_ralph "$d" ok --engine codex --test-cmd "$d/test.sh")
+  assert_eq 0 "$rc" "exit 0"
+  assert_eq "1" "$(cut -d' ' -f1 "$d/state/session_snapshot" | sort -u)" "toda sessao roda com a copia de pe"
+  snap=$(cut -d' ' -f2 "$d/state/session_snapshot" | sort -u)
+  assert_eq 1 "$(case "$snap" in */ralph-plugin.*) echo 1 ;; esac)" "MKTUX_HARNESS_ROOT aponta para a copia"
+  assert_eq 0 "$([ -e "$snap" ] && echo 1 || echo 0)" "a copia sai no fim do run"
+  rev=$(git -C "$SCRIPTS" rev-parse HEAD 2> /dev/null || true)
+  if [ -n "$rev" ]; then
+    assert_eq "$rev" "$(jq -r '.harness_revision' "$d"/repo/.harness/runs/*.json)" "telemetria guarda a revisao da instalacao, nao da copia"
+  fi
+  assert_eq "finished" "$(jq -r '.status' "$d"/repo/.harness/runs/*.json)" "telemetria fecha o run (telemetry.py da copia ainda existe no EXIT)"
+
+  # A pasta de onde o ralph subiu some na 1a sessao (o Codex trocou a versao).
+  run_deleted() { # run_deleted <dir> [VAR=valor...]
+    local dd="$1"; shift
+    cp -R "$MKTUX_HARNESS_ROOT" "$dd/plugin"
+    (
+      RALPH="$dd/plugin/scripts/ralph.sh"
+      export MOCK_DELETE_DIR="$dd/plugin" MKTUX_HARNESS_ROOT="$dd/plugin" "$@"
+      run_ralph "$dd" delete-plugin --engine codex --test-cmd "$dd/test.sh"
+    )
+  }
+  d=$(new_case snapshot-deleted)
+  rc=$(run_deleted "$d")
+  assert_eq 0 "$rc" "plugin apagado no meio: exit 0"
+  assert_eq 0 "$([ -e "$d/plugin" ] && echo 1 || echo 0)" "o mock apagou mesmo a pasta do plugin"
+  assert_eq "finished" "$(jq -r '.status' "$d"/repo/.harness/runs/*.json)" "plugin apagado: telemetria fecha o run"
+  assert_eq 4 "$(jq '.attempts | length' "$d"/repo/.harness/runs/*.json)" "plugin apagado: as 4 sessoes do run sao registradas"
+
+  # Sem a copia (RALPH_SNAPSHOT=0), o mesmo cenario perde a telemetria do resto
+  # do run: e o que aconteceu num run real.
+  d=$(new_case snapshot-off-deleted)
+  rc=$(run_deleted "$d" RALPH_SNAPSHOT=0)
+  assert_eq "running" "$(jq -r '.status' "$d"/repo/.harness/runs/*.json)" "RALPH_SNAPSHOT=0: run nunca fecha (prova do problema)"
 fi
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

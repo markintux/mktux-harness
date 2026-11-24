@@ -54,9 +54,9 @@ Policies/Middleware, Sail, and PHPUnit.
 
 **ATTENTION**
 
-1. `POST /admin/plans` — `admin.plans.store`
+1. `POST /admin/coupons` — `admin.coupons.store`
    - issue: Controller uses `$request->all()` for mass assignment.
-   - location: `app/Http/Controllers/Admin/Plan/StorePlanController.php:27`
+   - location: `app/Http/Controllers/Admin/Coupon/StoreCouponController.php:27`
    - impact: Unexpected request fields may be persisted.
    - recommendation: Use a dedicated FormRequest and pass only validated data.
 

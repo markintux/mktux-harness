@@ -47,7 +47,10 @@ conta, e o `/mktux:plan` avisa. Por isso ele e arquivo, e nao conversa.
 
 Nao pergunte o que da pra detectar. Antes da primeira pergunta, leia:
 
-- `CLAUDE.md` / `AGENTS.md` do projeto — convencoes, arquitetura, stack.
+- As instrucoes do projeto: o `CLAUDE.md` (Claude) ou o `AGENTS.md` (Codex) ja
+  esta no seu contexto, carregado pela engine — nao releia. Abra so o que ela
+  nao carrega: o `AGENTS.md` no Claude, quando o `CLAUDE.md` nao o importa com
+  `@AGENTS.md`. Dali vem convencoes, arquitetura e stack.
 - `docs/agents/*.md`, se existir — o que o codigo ja faz.
 - Atores e fronteiras de acesso: declaracoes de papel, armazenamento de
   identidade, verificacoes de autorizacao e guards. Voce vai propor a lista de
