@@ -699,6 +699,54 @@ resolve_memory() {
   log "Memoria por fase: ai-memory, paginas ralph/$(memory_feature_slug)/phase-NN.md"
 }
 
+# Dica para quando o codex recusa o modelo no smoke test. A mensagem dele
+# engana: "not supported when using Codex with a ChatGPT account" aparece tanto
+# para o nome de exibicao (GPT-6.2-Sol) no lugar do ID (gpt-6.2-sol) quanto para
+# um modelo que a versao instalada do codex ainda nao recebe (o servidor so
+# lista modelo novo para cliente novo). O models_cache.json gravado pelo proprio
+# codex mostra qual dos dois e: tem os IDs, os nomes de exibicao e a versao do
+# cliente que buscou a lista.
+# A comparacao e por tokens ("gpt-sol-6.2", "GPT 6.2 Sol" -> 2 6 gpt sol): pega
+# caixa, espaco e ordem trocada sem confundir gpt-6-sol com gpt-6.2-sol.
+codex_model_hint() {
+  local out="$1" asked cache match listed cache_ver cli_ver fix
+  asked=$(printf '%s\n' "$out" | sed -n 's/.*Model metadata for `\([^`]*\)` not found.*/\1/p' | head -n 1)
+  if [ -z "$asked" ]; then
+    printf '%s\n' "$out" | grep -q 'model is not supported' || return 0
+    asked="$MODEL"
+  fi
+  [ -n "$asked" ] || return 0
+
+  cache="${CODEX_HOME:-$HOME/.codex}/models_cache.json"
+  if ! command -v jq > /dev/null 2>&1 || [ ! -r "$cache" ]; then
+    warn "Dica: o codex nao reconheceu o modelo '$asked'. O --model espera o ID (minusculo, com hifens), nao o nome de exibicao; os IDs aparecem no /model do codex."
+    return 0
+  fi
+
+  match=$(jq -r --arg m "$asked" '
+    def toks: ascii_downcase | [scan("[a-z]+|[0-9]+")] | sort;
+    ($m | toks) as $want
+    | [.models[]? | select(((.slug // "") | toks) == $want
+        or ((.display_name // "") | toks) == $want) | .slug][0] // empty' "$cache" 2> /dev/null) || match=""
+  listed=$(jq -r '[.models[]? | select(.visibility == "list") | .slug] | join(", ")' "$cache" 2> /dev/null) || listed=""
+  cache_ver=$(jq -r '.client_version // empty' "$cache" 2> /dev/null) || cache_ver=""
+  cli_ver=$(codex --version < /dev/null 2> /dev/null | awk 'NR == 1 { print $NF }') || cli_ver=""
+
+  if [ -n "$MODEL" ]; then fix="Rode de novo com --model $match."; else fix="Ajuste o model no config.toml do codex para \"$match\"."; fi
+
+  if [ -n "$match" ] && [ "$match" != "$asked" ]; then
+    warn "Dica: o ID do modelo e '$match' ('$asked' nao e um ID que o codex aceite). $fix"
+  elif [ -n "$match" ]; then
+    warn "Dica: '$asked' esta na lista de modelos do codex, mas foi recusado: confira se o plano da conta da acesso a ele."
+    if [ -n "$cache_ver" ] && [ -n "$cli_ver" ] && [ "$cache_ver" != "$cli_ver" ]; then
+      warn "      A lista em $cache foi buscada pelo codex $cache_ver; o instalado e o $cli_ver."
+    fi
+  else
+    warn "Dica: '$asked' nao esta entre os modelos que esta conta recebe no codex ${cache_ver:-instalado}: ${listed:-lista vazia}."
+    warn "      Modelo lancado depois dessa versao so aparece atualizando o codex${cli_ver:+ (instalado: $cli_ver)}."
+  fi
+}
+
 # Chama a engine uma vez com as flags reais e um prompt trivial, antes do loop.
 # Pega o que a validacao estatica nao pega: modelo inexistente, effort nao
 # suportado POR AQUELE modelo, auth expirada, quota zerada. Sem isso o erro so
@@ -722,6 +770,7 @@ engine_smoke_test() {
   if [ $rc -ne 0 ]; then
     fail "$ENGINE rejeitou o comando (exit $rc). Nada foi executado. Saida:"
     echo "$out" | tail -n 15 | sed 's/^/    /'
+    [[ "$ENGINE" == "codex" ]] && codex_model_hint "$out"
     exit 1
   fi
 
